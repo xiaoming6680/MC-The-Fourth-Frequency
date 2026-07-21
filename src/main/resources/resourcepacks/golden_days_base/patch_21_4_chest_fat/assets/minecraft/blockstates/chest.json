@@ -1,0 +1,52 @@
+{
+  "variants": {
+    "facing=north,type=single": {"model": "golden_days:block/chest"},
+    "facing=east,type=single": {
+      "model": "golden_days:block/chest",
+      "uvlock": true,
+      "y": 90
+    },
+    "facing=south,type=single": {
+      "model": "golden_days:block/chest",
+      "uvlock": true,
+      "y": 180
+    },
+    "facing=west,type=single": {
+      "model": "golden_days:block/chest",
+      "uvlock": true,
+      "y": 270
+    },
+    "facing=north,type=right": {"model": "golden_days:block/chest_right"},
+    "facing=east,type=right": {
+      "model": "golden_days:block/chest_right",
+      "uvlock": true,
+      "y": 90
+    },
+    "facing=south,type=right": {
+      "model": "golden_days:block/chest_right",
+      "uvlock": true,
+      "y": 180
+    },
+    "facing=west,type=right": {
+      "model": "golden_days:block/chest_right",
+      "uvlock": true,
+      "y": 270
+    },
+    "facing=north,type=left": {"model": "golden_days:block/chest_left"},
+    "facing=east,type=left": {
+      "model": "golden_days:block/chest_left",
+      "uvlock": true,
+      "y": 90
+    },
+    "facing=south,type=left": {
+      "model": "golden_days:block/chest_left",
+      "uvlock": true,
+      "y": 180
+    },
+    "facing=west,type=left": {
+      "model": "golden_days:block/chest_left",
+      "uvlock": true,
+      "y": 270
+    }
+  }
+}

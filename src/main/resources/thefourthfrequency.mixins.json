@@ -1,0 +1,38 @@
+{
+  "required": true,
+  "package": "com.xm.thefourthfrequency.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+	"BoundTerminalContainerMixin",
+	"EndDragonFightAccessor",
+	"EnderEyeItemMixin",
+    "PlayerDropMixin",
+    "ResultSlotMixin"
+  ],
+  "client": [
+	"TextureDecayMixin",
+	"OptionsAnomalyMixin",
+	"OptionInstanceRenderDistanceMixin",
+	"BlockRenderDispatcherAnomalyMixin",
+    "FogRendererAnomalyMixin",
+    "AvatarRendererAnomalyMixin",
+    "KeyboardInputAnomalyMixin",
+    "GuiGraphicsAnomalyMixin",
+    "ItemStackAnomalyMixin",
+    "ItemInHandRendererAnomalyMixin",
+    "LevelRendererAnomalyMixin",
+	"LevelLoadingScreenCorruptionMixin",
+	"LoadingOverlaySuppressionMixin",
+    "LocalPlayerAnomalyMixin",
+	"MinecraftAlphaStartupMixin",
+	"MinecraftTitleRetentionMixin",
+	"PackSelectionModelHiddenPacksMixin",
+    "RenderSectionRegionAnomalyMixin",
+    "SkyRendererAnomalyMixin",
+    "TitleScreenErosionMixin",
+    "PauseScreenErosionMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

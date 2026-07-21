@@ -1,0 +1,12 @@
+{
+  "id": "witness_termination_note",
+  "version": 1,
+  "contentHash": "TFF-WF-01-A91C",
+  "lineKeys": [
+    "text.thefourthfrequency.archive.line.identity",
+    "text.thefourthfrequency.archive.line.output_boundary",
+    "text.thefourthfrequency.archive.line.fracture",
+    "text.thefourthfrequency.archive.line.material",
+    "text.thefourthfrequency.archive.line.warning"
+  ]
+}

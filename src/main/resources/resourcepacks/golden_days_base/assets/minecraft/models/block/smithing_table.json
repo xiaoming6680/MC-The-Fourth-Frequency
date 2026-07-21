@@ -1,0 +1,9 @@
+{
+  "parent": "block/template_table",
+  "textures": {
+    "top": "block/iron_block",
+    "front": "block/smithing_table_front",
+    "side": "block/smithing_table_side",
+    "bottom": "block/oak_planks"
+  }
+}

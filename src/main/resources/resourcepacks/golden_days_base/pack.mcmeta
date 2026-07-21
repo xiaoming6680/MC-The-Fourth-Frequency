@@ -1,0 +1,320 @@
+{
+  "pack": {
+    "description": "§6Golden Days §8- §2Base §7(Beta)\n§8by PoeticRainbow",
+    "pack_format": 15,
+    "supported_formats": [15, 420],
+    "min_format": 15,
+    "max_format": 420
+  },
+  "sodium": {
+    "ignored_shaders": [
+      "fog.glsl",
+      "lightmap.fsh",
+      "rendertype_clouds.fsh",
+      "sky.fsh",
+      "terrain.fsh"
+    ]
+  },
+  "overlays": {
+    "entries": [
+      {"directory": "old_lightmaps", "formats": [15, 35]},
+      {
+        "directory": "patch_20_2_neoforge",
+        "formats": [18, 420],
+        "min_format": 18,
+        "max_format": 420
+      },
+      {
+        "directory": "patch_20_3_bat_update",
+        "formats": [20, 420],
+        "min_format": 20,
+        "max_format": 420
+      },
+      {
+        "directory": "patch_21_4_item_definitions",
+        "formats": [45, 420],
+        "min_format": 45,
+        "max_format": 420
+      },
+      {
+        "directory": "patch_21_5_custom_names",
+        "formats": [55, 420],
+        "min_format": 55,
+        "max_format": 420
+      },
+      {
+        "directory": "patch_21_4_chest_fat",
+        "formats": [45, 420],
+        "min_format": 45,
+        "max_format": 420
+      },
+      {
+        "directory": "patch_21_6_no_rotation_snap",
+        "formats": [57, 420],
+        "min_format": 57,
+        "max_format": 420
+      },
+      {
+        "directory": "patch_21_9",
+        "formats": [69, 420],
+        "min_format": 69,
+        "max_format": 420
+      },
+      {
+        "directory": "patch_21_11",
+        "formats": [75, 420],
+        "min_format": 75,
+        "max_format": 420
+      },
+      {
+        "directory": "patch_26_1",
+        "formats": [83, 420],
+        "min_format": 83,
+        "max_format": 420
+      },
+      {
+        "directory": "patch_26_2",
+        "formats": [86, 420],
+        "min_format": 86,
+        "max_format": 420
+      },
+      {
+        "directory": "shaders_core_21_9",
+        "polytone_condition": "modOn('minecraft', '[1.21.9, 26.3)') && config('golden_days:use_shaders') && !(modOn('sodium') || modOn('embeddium'))",
+        "formats": [69, 420],
+        "min_format": 69,
+        "max_format": 420
+      },
+      {
+        "directory": "shaders_core_21_11",
+        "polytone_condition": "modOn('minecraft', '[1.21.11, 26.3)') && config('golden_days:use_shaders') && !(modOn('sodium') || modOn('embeddium'))",
+        "formats": [75, 420],
+        "min_format": 75,
+        "max_format": 420
+      },
+      {
+        "directory": "shaders_core_26_2",
+        "polytone_condition": "modOn('minecraft', '[26.2, 26.3)') && config('golden_days:use_shaders') && !(modOn('sodium') || modOn('embeddium'))",
+        "formats": [88, 420],
+        "min_format": 88,
+        "max_format": 420
+      },
+      {
+        "directory": "shaders_light_21_9",
+        "polytone_condition": {
+          "override": false,
+          "require_config": "golden_days:beta_lighting"
+        },
+        "formats": [69, 75],
+        "min_format": 69,
+        "max_format": 75
+      },
+      {
+        "directory": "shaders_light_26_1",
+        "polytone_condition": {
+          "override": false,
+          "require_config": "golden_days:beta_lighting"
+        },
+        "formats": [76, 420],
+        "min_format": 76,
+        "max_format": 420
+      },
+      {
+        "directory": "mod_polytone",
+        "polytone_condition": "true",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "mod_continuity_option_overlay_ctm",
+        "polytone_condition": "config('golden_days:use_overlay_ctm') != 'disabled'",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "mod_continuity_option_no_grass_tint",
+        "polytone_condition": "config('golden_days:use_overlay_ctm') == 'no_tint'",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_disable_flat_items",
+        "polytone_condition": "config('golden_days:disable_flat_items')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "mod_emf_option_chest_use_cem",
+        "polytone_condition": "config('golden_days:chest_model') != 'beta'",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "mod_emf_option_chest_fat_animated",
+        "polytone_condition": "config('golden_days:chest_model') == 'hybrid' && modOn('entity_model_features')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_bamboo_planks_consistent",
+        "polytone_condition": "config('golden_days:bamboo_planks_style') == 'consistent'",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_bamboo_planks_smooth",
+        "polytone_condition": "config('golden_days:bamboo_planks_style') == 'smooth'",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_bricks_modern",
+        "polytone_condition": "config('golden_days:bricks') == 'modern'",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_cobblestone_modern",
+        "polytone_condition": "config('golden_days:cobblestone') == 'modern'",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_cobblestone_hybrid",
+        "polytone_condition": "config('golden_days:cobblestone') == 'hybrid'",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_cuboid_bamboo",
+        "polytone_condition": "config('golden_days:cuboid_bamboo')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_fast_grass",
+        "polytone_condition": "config('golden_days:fast_grass')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_flat_candles",
+        "polytone_condition": "config('golden_days:flat_candles')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "mod_emf_option_flatten_skin_layers",
+        "polytone_condition": "config('golden_days:flatten_skin_layers')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_hide_xp_bar",
+        "polytone_condition": "config('golden_days:xp_bar_style') == 'hidden' && !modOn('retrotweaks')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_modern_bow_holding",
+        "polytone_condition": "config('golden_days:modern_bow_holding')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_modern_xp_bar",
+        "polytone_condition": "config('golden_days:xp_bar_style') == 'modern'",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_shadowed_leaves",
+        "polytone_condition": "config('golden_days:shadowed_leaves') || modOn('retrotweaks')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_silent_chests",
+        "polytone_condition": "config('golden_days:silent_chests')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_solid_items",
+        "polytone_condition": "config('golden_days:solid_items')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_matching_coals",
+        "polytone_condition": "config('golden_days:matching_coals')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_oak_log_tops",
+        "polytone_condition": "config('golden_days:oak_log_tops')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_bushy_leaves",
+        "polytone_condition": "config('golden_days:bushy_leaves') && !config('golden_days:shadowed_leaves')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_bushy_leaves_shadowed",
+        "polytone_condition": "config('golden_days:bushy_leaves') && config('golden_days:shadowed_leaves')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_end_modern",
+        "polytone_condition": "config('golden_days:end_style') == 'modern'",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_end_custom",
+        "polytone_condition": "config('golden_days:end_style') == 'custom'",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      },
+      {
+        "directory": "option_picture_perfect",
+        "polytone_condition": "config('golden_days:picture_perfect')",
+        "formats": [0, 0],
+        "min_format": 0,
+        "max_format": 0
+      }
+    ]
+  }
+}

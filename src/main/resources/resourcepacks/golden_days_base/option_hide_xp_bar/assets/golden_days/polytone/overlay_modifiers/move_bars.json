@@ -1,0 +1,4 @@
+{
+  "texture": "minecraft:hud/(jump|locator)_bar.*",
+  "y_inc": -19
+}

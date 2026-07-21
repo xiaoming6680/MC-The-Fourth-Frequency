@@ -1,0 +1,50 @@
+# Gradle
+.gradle/
+build/
+**/build/
+
+# Fabric Loom and local Minecraft runtime
+run/
+remappedSrc/
+src/main/generated/
+logs/
+crash-reports/
+*.log
+
+# Java
+out/
+bin/
+*.class
+hs_err_pid*
+replay_pid*
+/tmp/
+
+# IDEs and editors
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.classpath
+.project
+.settings/
+
+# Local environment and signing material
+.env
+.env.*
+!.env.example
+local.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local planning notes (public documentation lives in docs/)
+/task_plan.md
+/findings.md
+/progress.md

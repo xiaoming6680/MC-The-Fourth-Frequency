@@ -1,0 +1,4 @@
+{
+  "texture": "minecraft:hud/(air|armor|food|heart/).*",
+  "y_inc": 7
+}

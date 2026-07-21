@@ -1,0 +1,4 @@
+{
+  "parent": "block/template_log_horizontal",
+  "textures": {"top": "block/spruce_log_top", "side": "block/spruce_log"}
+}

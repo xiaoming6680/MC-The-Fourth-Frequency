@@ -1,0 +1,20 @@
+{
+  "variants": {
+    "facing=north": {"model": "golden_days:block/ender_chest"},
+    "facing=east": {
+      "model": "golden_days:block/ender_chest",
+      "uvlock": true,
+      "y": 90
+    },
+    "facing=south": {
+      "model": "golden_days:block/ender_chest",
+      "uvlock": true,
+      "y": 180
+    },
+    "facing=west": {
+      "model": "golden_days:block/ender_chest",
+      "uvlock": true,
+      "y": 270
+    }
+  }
+}

@@ -1,0 +1,975 @@
+package com.xm.thefourthfrequency;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import org.junit.jupiter.api.Test;
+
+import javax.imageio.ImageIO;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.zip.GZIPInputStream;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+final class ResourceContractTest {
+	private static final Path ASSETS = Path.of("src/main/resources/assets/thefourthfrequency");
+
+	@Test
+	void bootSplashCatalogRemainsPopulatedAndUsesVanillaYellow() throws Exception {
+		String state = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/MenuErosionState.java"),
+				StandardCharsets.UTF_8);
+		String titleMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/TitleScreenErosionMixin.java"),
+				StandardCharsets.UTF_8);
+		int catalogStart = state.indexOf("BOOT_SPLASHES = List.of(");
+		int catalogEnd = state.indexOf(");", catalogStart);
+		assertTrue(catalogStart >= 0, "Boot splash catalog must remain declared");
+		assertTrue(catalogEnd > catalogStart, "Boot splash catalog must remain well formed");
+		String catalog = state.substring(catalogStart, catalogEnd);
+		long entryCount = catalog.lines().map(String::strip)
+				.filter(line -> line.startsWith("\"")).count();
+		assertTrue(entryCount >= 4, "Boot splash catalog must retain at least four choices");
+		assertFalse(catalog.contains("\"\""), "Boot splash catalog must not contain blank entries");
+		assertTrue(titleMixin.contains("splash = new SplashRenderer"));
+		assertTrue(titleMixin.contains("VANILLA_SPLASH_YELLOW = 0xFFFF00"));
+		assertTrue(titleMixin.contains("withColor(VANILLA_SPLASH_YELLOW)"));
+	}
+
+	@Test
+	void sixItemIconsAndThreePanelsHaveExactPixelDimensions() throws Exception {
+		for (int index = 0; index < 6; index++) {
+			var image = ImageIO.read(ASSETS.resolve("textures/item/old_terminal_" + index + ".png").toFile());
+			assertEquals(32, image.getWidth());
+			assertEquals(32, image.getHeight());
+			assertTrue(image.getColorModel().hasAlpha());
+			for (int y = 0; y < image.getHeight(); y++) for (int x = 0; x < image.getWidth(); x++) {
+				int alpha = image.getRGB(x, y) >>> 24;
+				assertTrue(alpha == 0 || alpha == 255, "non-binary icon alpha at " + index + ":" + x + "," + y);
+			}
+		}
+		for (int stage = 0; stage < 3; stage++) {
+			byte[] normal = Files.readAllBytes(ASSETS.resolve("textures/item/old_terminal_" + stage + ".png"));
+			byte[] unread = Files.readAllBytes(ASSETS.resolve("textures/item/old_terminal_" + (stage + 3) + ".png"));
+			assertNotEquals(java.util.Arrays.hashCode(normal), java.util.Arrays.hashCode(unread));
+		}
+		for (int stage = 0; stage < 3; stage++) {
+			var image = ImageIO.read(ASSETS.resolve("textures/gui/terminal/panel_" + stage + ".png").toFile());
+			assertEquals(512, image.getWidth());
+			assertEquals(256, image.getHeight());
+		}
+		var misread = ImageIO.read(ASSETS.resolve("textures/entity/misread_body.png").toFile());
+		assertEquals(128, misread.getWidth());
+		assertEquals(128, misread.getHeight());
+	}
+
+	@Test
+	void reworkBodyUsesFiveDistinctOpaqueBasesAndTwoSparseEmissiveMasks() throws Exception {
+		Path entityTextures = ASSETS.resolve("textures/entity");
+		Set<Integer> baseHashes = new HashSet<>();
+		for (int stage = 1; stage <= 5; stage++) {
+			Path path = entityTextures.resolve("rework_body_stage_" + stage + ".png");
+			assertTrue(Files.isRegularFile(path), path.toString());
+			var image = ImageIO.read(path.toFile());
+			assertEquals(256, image.getWidth());
+			assertEquals(256, image.getHeight());
+			for (int y = 0; y < image.getHeight(); y++) for (int x = 0; x < image.getWidth(); x++) {
+				assertEquals(255, image.getRGB(x, y) >>> 24,
+						"base texture must be opaque at stage " + stage + ":" + x + "," + y);
+			}
+			assertTrue(baseHashes.add(java.util.Arrays.hashCode(Files.readAllBytes(path))),
+					"duplicate base texture at stage " + stage);
+		}
+		assertEquals(5, baseHashes.size());
+
+		Set<Integer> emissiveHashes = new HashSet<>();
+		for (int stage = 4; stage <= 5; stage++) {
+			Path path = entityTextures.resolve("rework_body_stage_" + stage + "_emissive.png");
+			assertTrue(Files.isRegularFile(path), path.toString());
+			var image = ImageIO.read(path.toFile());
+			assertEquals(256, image.getWidth());
+			assertEquals(256, image.getHeight());
+			assertTrue(image.getColorModel().hasAlpha());
+			int transparent = 0;
+			int visible = 0;
+			int maxAlpha = 0;
+			for (int y = 0; y < image.getHeight(); y++) for (int x = 0; x < image.getWidth(); x++) {
+				int alpha = image.getRGB(x, y) >>> 24;
+				if (alpha == 0) {
+					transparent++;
+					continue;
+				}
+				visible++;
+				maxAlpha = Math.max(maxAlpha, alpha);
+				boolean faceOrMouth = x >= 140 && x < 246 && y >= 0 && y < 66;
+				boolean torsoCrack = stage == 5 && x >= 0 && x < 54 && y >= 0 && y < 48;
+				boolean exposedSpine = stage == 5 && x >= 198 && x < 252 && y >= 128 && y < 202;
+				assertTrue(faceOrMouth || torsoCrack || exposedSpine,
+						"emissive escaped approved UV islands at stage " + stage + ":" + x + "," + y);
+			}
+			assertTrue(transparent > 64_000, "emissive background must remain overwhelmingly transparent");
+			assertTrue(visible > 0 && visible < 1_500, "emissive coverage must remain sparse");
+			assertTrue(maxAlpha >= 64 && maxAlpha <= 128, "emissive alpha must remain dim");
+			assertTrue(emissiveHashes.add(java.util.Arrays.hashCode(Files.readAllBytes(path))),
+					"duplicate emissive texture at stage " + stage);
+		}
+		assertEquals(2, emissiveHashes.size());
+		assertFalse(Files.exists(entityTextures.resolve("rework_body.png")),
+				"legacy single-form texture must not remain in the runtime pack");
+	}
+
+	@Test
+	void customModelDispatchCoversEveryProjectionValue() throws Exception {
+		JsonObject root = JsonParser.parseString(Files.readString(ASSETS.resolve("items/old_terminal.json"),
+				StandardCharsets.UTF_8)).getAsJsonObject();
+		var entries = root.getAsJsonObject("model").getAsJsonArray("entries");
+		assertEquals(5, entries.size());
+		for (int index = 0; index < 5; index++) {
+			assertEquals(index + 1.0F, entries.get(index).getAsJsonObject().get("threshold").getAsFloat());
+			assertTrue(Files.isRegularFile(ASSETS.resolve("models/item/old_terminal_" + (index + 1) + ".json")));
+		}
+	}
+
+	@Test
+	void everyTerminalSoundIsAProjectOwnedOgg() throws Exception {
+		JsonObject sounds = JsonParser.parseString(Files.readString(ASSETS.resolve("sounds.json"),
+				StandardCharsets.UTF_8)).getAsJsonObject();
+		for (String event : new String[]{"terminal_click", "terminal_tune", "terminal_lock",
+				"terminal_password", "terminal_anomaly"}) {
+			assertTrue(sounds.has(event), event);
+		}
+		for (Path path : Files.walk(ASSETS.resolve("sounds/device/terminal")).filter(Files::isRegularFile).toList()) {
+			byte[] header = Files.readAllBytes(path);
+			assertTrue(header.length > 4 && header[0] == 'O' && header[1] == 'g' && header[2] == 'g' && header[3] == 'S', path.toString());
+		}
+		for (String event : new String[]{"terminal_click", "terminal_tune", "terminal_lock",
+				"terminal_fault", "terminal_password", "terminal_anomaly"}) {
+			for (var sound : sounds.getAsJsonObject(event).getAsJsonArray("sounds")) {
+				String name = sound.isJsonPrimitive() ? sound.getAsString()
+						: sound.getAsJsonObject().get("name").getAsString();
+				String localName = name.substring(name.indexOf(':') + 1);
+				assertTrue(Files.isRegularFile(ASSETS.resolve("sounds/" + localName + ".ogg")), name);
+			}
+		}
+	}
+
+	@Test
+	void allJsonParsesAndLanguageKeySetsMatch() throws Exception {
+		for (Path path : Files.walk(Path.of("src/main/resources")).filter(value -> value.toString().endsWith(".json")).toList()) {
+			JsonParser.parseString(Files.readString(path, StandardCharsets.UTF_8));
+		}
+		JsonObject en = JsonParser.parseString(Files.readString(ASSETS.resolve("lang/en_us.json"),
+				StandardCharsets.UTF_8)).getAsJsonObject();
+		JsonObject zh = JsonParser.parseString(Files.readString(ASSETS.resolve("lang/zh_cn.json"),
+				StandardCharsets.UTF_8)).getAsJsonObject();
+		assertEquals(new HashSet<>(en.keySet()), new HashSet<>(zh.keySet()));
+		JsonObject terminologyCopy = zh.deepCopy();
+		terminologyCopy.remove("screen.thefourthfrequency.first_run_notice.body.control");
+		assertFalse(terminologyCopy.toString().contains("异常"),
+				"Chinese gameplay terminology must consistently use 异象; the preserved computer-safety copy is ordinary prose");
+		assertFalse(zh.toString().contains("缓存"), "The player-facing FILES system must not retain the old cache wording");
+		assertEquals("接收到新文件：%s",
+				zh.get("message.thefourthfrequency.file.discovered").getAsString());
+		assertEquals("接收到来自【%s】共享的文件：《前人留下的文件 / 碎片%s》",
+				zh.get("message.thefourthfrequency.fragment.received").getAsString());
+		assertEquals("近场接收器",
+				zh.get("terminal.thefourthfrequency.receiver.label").getAsString());
+		assertEquals("待机",
+				zh.get("terminal.thefourthfrequency.receiver.standby").getAsString());
+		assertEquals("终端记下了你带回的资源。",
+				zh.get("message.thefourthfrequency.guidance.accepted").getAsString());
+		for (String retired : List.of("terminal.thefourthfrequency.band.weather",
+				"terminal.thefourthfrequency.band.mining", "terminal.thefourthfrequency.band.public",
+				"terminal.thefourthfrequency.band.unknown", "terminal.thefourthfrequency.objective.calibrate",
+				"terminal.thefourthfrequency.tuning.auto", "terminal.thefourthfrequency.tuning.manual")) {
+			assertFalse(zh.has(retired), "Retired fixed-band copy must stay absent: " + retired);
+		}
+		assertEquals("·· 未记录",
+				zh.get("terminal.thefourthfrequency.signal.marker.unrecorded").getAsString());
+		assertEquals("选取文件来查看",
+				zh.get("terminal.thefourthfrequency.file.select_prompt").getAsString());
+		for (var entry : zh.entrySet()) {
+			if (!entry.getKey().startsWith("terminal.thefourthfrequency.signal.card.")) continue;
+			assertFalse(entry.getValue().getAsString().contains("碎片"),
+					"SIGNAL card copy must not expose fragment labels: " + entry.getKey());
+		}
+		for (String abstractTerm : new String[]{"经历连续性", "身份连续性", "身体映射", "关系异常",
+				"跨维度连续性", "关系证据", "关系层", "连续性样本", "关系触点",
+				"身体生成", "环境连续性", "结构修订", "防线层数", "权限层级"}) {
+			assertFalse(zh.entrySet().stream().anyMatch(entry -> entry.getValue().isJsonPrimitive()
+					&& entry.getValue().getAsString().contains(abstractTerm)), abstractTerm);
+		}
+		for (var entry : zh.entrySet()) {
+			if (!entry.getKey().startsWith("terminal.thefourthfrequency.file.")
+					|| !entry.getKey().endsWith(".title")) continue;
+			assertTrue(entry.getValue().getAsString().codePointCount(0, entry.getValue().getAsString().length()) <= 8,
+					() -> "File title is too long: " + entry.getKey() + "=" + entry.getValue().getAsString());
+		}
+		assertEquals("我已了解",
+				zh.get("button.thefourthfrequency.first_run_notice.acknowledge").getAsString());
+		assertEquals("正在校验信号",
+				zh.get("screen.thefourthfrequency.first_run_notice.status.checking").getAsString());
+		assertEquals("信号已稳定",
+				zh.get("screen.thefourthfrequency.first_run_notice.status.stable").getAsString());
+		String noticeCopy = zh.get("screen.thefourthfrequency.first_run_notice.body.control").getAsString()
+				+ zh.get("screen.thefourthfrequency.first_run_notice.body.safety").getAsString()
+				+ zh.get("screen.thefourthfrequency.first_run_notice.body.f8").getAsString();
+		assertTrue(noticeCopy.contains("不是病毒"));
+		assertTrue(noticeCopy.contains("不会破坏你的电脑、系统或个人文件"));
+		for (String undisclosedOperation : new String[]{"窗口", "记事本", "摄像头", "壁纸", "视频"})
+			assertFalse(noticeCopy.contains(undisclosedOperation), undisclosedOperation);
+		assertTrue(zh.get("screen.thefourthfrequency.first_run_notice.body.f8").getAsString().contains("F8"));
+		for (var entry : zh.entrySet()) {
+			if (entry.getKey().startsWith("terminal.thefourthfrequency.file.")
+					|| entry.getKey().startsWith("terminal.thefourthfrequency.cache.")
+					|| entry.getKey().startsWith("text.thefourthfrequency.archive.line.")) {
+				assertFalse(entry.getValue().getAsString().stripLeading().startsWith("|"),
+						() -> "File prose retained a left-side pipe: " + entry.getKey());
+			}
+		}
+	}
+
+	@Test
+	void terminalReworkKeepsFourClientPagesAndIndependentFileScrollState() throws Exception {
+		String screen = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/TerminalScreen.java"), StandardCharsets.UTF_8);
+		String page = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/terminal/TerminalPage.java"), StandardCharsets.UTF_8);
+		String tool = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/terminal/TerminalTool.java"), StandardCharsets.UTF_8);
+		for (String name : new String[]{"HOME", "TOOLS", "RECORDS", "FILES"}) assertTrue(page.contains(name));
+		for (String name : new String[]{"HOME", "MINERALS", "PORTAL", "WEATHER", "NAVIGATION", "STRONGHOLD"}) {
+			assertTrue(tool.contains(name));
+		}
+		assertTrue(screen.contains("switch (page)"));
+		assertTrue(screen.contains("fileListScroll"));
+		assertTrue(screen.contains("fileContentScroll"));
+		assertTrue(screen.contains("recordsScrollRow"));
+		assertFalse(screen.contains("automaticTuning"));
+		assertTrue(screen.contains("updateTools(TerminalToolSnapshotPayload"));
+		assertFalse(screen.contains("TerminalControlPayload.SET_AUTO_TUNING"));
+		assertTrue(screen.contains("receiverMechanicalInteractive()"));
+		assertTrue(screen.contains("receiverGameplayActive()"));
+		assertTrue(screen.contains("TerminalUiLayout.RECEIVER_SLIDER"));
+		assertTrue(screen.contains("displayedObjectiveFraction"));
+		assertTrue(screen.contains("recommendedPrimaryTool()"));
+		assertTrue(screen.contains("HOME_TOOL_DETAIL"));
+		assertTrue(screen.contains("navigationOptionBounds"));
+		assertTrue(screen.contains("TerminalControlPayload.MARK_RECORDS_READ"));
+		assertFalse(screen.contains("advanceAutomaticTuning"));
+		assertTrue(screen.contains("TerminalUiLayout.FILE_LIST.contains"));
+		assertTrue(screen.contains("TerminalUiLayout.FILE_CONTENT.contains"));
+		assertFalse(screen.contains("FILE_GRID_COLUMNS"));
+	}
+
+	@Test
+	void toolProtocolIsIndependentAndAllToolControlsAreServerValidated() throws Exception {
+		String snapshot = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/networking/TerminalSnapshotPayload.java"), StandardCharsets.UTF_8);
+		String navigation = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/networking/TerminalNavigationPayload.java"), StandardCharsets.UTF_8);
+		String toolSnapshot = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/networking/TerminalToolSnapshotPayload.java"), StandardCharsets.UTF_8);
+		String control = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/networking/TerminalControlPayload.java"), StandardCharsets.UTF_8);
+		String runtime = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/terminal/TerminalRuntimeService.java"), StandardCharsets.UTF_8);
+		assertTrue(snapshot.contains("CURRENT_PROTOCOL_VERSION = 5"));
+		assertTrue(navigation.contains("CURRENT_PROTOCOL_VERSION = 5"));
+		assertTrue(toolSnapshot.contains("CURRENT_PROTOCOL_VERSION = 3"));
+		for (String action : List.of("SELECT_TOOL", "START_GUIDANCE", "STOP_GUIDANCE", "SELECT_RESOURCE",
+				"REQUEST_RESCAN", "SET_HOME", "MARK_RECORDS_READ", "SELECT_STRUCTURE_TARGET",
+				"SELECT_NEAREST_UNSTABLE")) {
+			assertTrue(control.contains(action));
+			assertTrue(runtime.contains("TerminalControlPayload." + action));
+		}
+		assertTrue(control.contains("SET_AUTO_TUNING"), "Wire id 11 remains reserved for old clients");
+		assertFalse(runtime.contains("TerminalControlPayload.SET_AUTO_TUNING"));
+		assertTrue(runtime.contains("TerminalControlPolicy.validMode(value)"));
+		assertTrue(runtime.contains("TerminalControlPolicy.validTuning(value)"));
+	}
+
+	@Test
+	void strongholdAltarEntersTheEndAndHandsCombatToTheDynamicBoss() throws Exception {
+		String encounter = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/ending/EndBossEncounterService.java"),
+				StandardCharsets.UTF_8);
+		String difficulty = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/ending/EndBossDifficulty.java"),
+				StandardCharsets.UTF_8);
+		String mixins = Files.readString(Path.of("src/main/resources/thefourthfrequency.mixins.json"),
+				StandardCharsets.UTF_8);
+		assertTrue(encounter.contains("Level.END"));
+		assertTrue(encounter.contains("EndCrystal"));
+		assertTrue(encounter.contains("participantScale"));
+		assertTrue(encounter.contains("lockEndBossFailure"));
+		assertTrue(encounter.contains("completeVanillaDragonFight"));
+		assertTrue(difficulty.contains("0.035F"));
+		assertFalse(mixins.contains("\"EndPortalBlockMixin\""));
+		assertTrue(mixins.contains("EndDragonFightAccessor"));
+	}
+
+	@Test
+	void firstRunNoticeUsesClientLocalAtomicAcknowledgementAndCannotBeBypassed() throws Exception {
+		String controller = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/FirstRunNoticeController.java"),
+				StandardCharsets.UTF_8);
+		String configManager = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/config/ConfigManager.java"),
+				StandardCharsets.UTF_8);
+		String config = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/config/ModConfig.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(controller.contains("ConfigManager.loadClientState()"));
+		assertTrue(controller.contains("ConfigManager.updateClientState"));
+		assertFalse(controller.contains("thefourthfrequency-client-state.json"));
+		assertTrue(controller.contains("ClientTickEvents.END_CLIENT_TICK"));
+		assertTrue(controller.contains("client.screen instanceof TitleScreen"));
+		assertTrue(controller.contains("new FirstRunNoticeScreen(titleScreen)"));
+		assertFalse(controller.contains("ClientPlayConnectionEvents.JOIN"));
+		assertTrue(configManager.contains("thefourthfrequency.json"));
+		assertTrue(configManager.contains("StandardCopyOption.ATOMIC_MOVE"));
+		assertTrue(config.contains("safetyNoticeAcknowledged"));
+		assertFalse(controller.contains("TerminalData"));
+		String screen = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/FirstRunNoticeScreen.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(screen.contains("shouldCloseOnEsc() { return false; }"));
+		assertTrue(screen.contains("isPauseScreen() { return true; }"));
+		assertTrue(screen.contains("button.thefourthfrequency.first_run_notice.acknowledge"));
+		assertTrue(screen.contains("graphics.fill(0, 0, width, height, 0xFF080D0A)"));
+		assertFalse(screen.contains("renderBlurredBackground"));
+		assertFalse(screen.contains("drawBackdropWaveform"));
+		assertFalse(screen.contains("drawRollingBeam"));
+		assertFalse(screen.contains("drawEdgeGlitches"));
+		assertFalse(screen.contains("drawDesyncedScanRows"));
+		assertFalse(screen.contains("renderTransientTextGhosts"));
+		assertTrue(screen.contains("enum EntrancePhase"));
+		assertTrue(screen.contains("LOCK_TICK = 24"));
+		assertTrue(screen.contains("TerminalClientAudio.noticeOpening()"));
+		assertTrue(screen.contains("TerminalClientAudio.noticeStable()"));
+		assertTrue(screen.contains("acknowledgementButton.active = isSignalLocked()"));
+		assertTrue(screen.contains("FirstRunNoticePalette"));
+		assertTrue(screen.contains("LATIN_BASELINE_Y_OFFSET = 1"));
+		assertTrue(screen.contains("drawBaselineAlignedString"));
+		assertTrue(screen.contains("usesLatinPixelBaseline"));
+		assertTrue(screen.contains("allTextInsideGlassForTesting"));
+		assertTrue(screen.contains("GLASS_SAFE_BOTTOM_ASSET"));
+		assertFalse(screen.contains("TerminalVisualTheme"));
+		assertTrue(screen.contains("renderGeneratedNoticeUi"));
+		assertTrue(screen.contains("textures/gui/notice/first_run_notice_terminal_shell.png"));
+		assertFalse(screen.contains("first_run_notice_background.png"));
+		assertFalse(screen.contains("panel_0.png"));
+		assertFalse(screen.contains("panel_1.png"));
+		assertFalse(screen.contains("panel_2.png"));
+		assertFalse(screen.contains("SAFETY_FILL"));
+		assertFalse(screen.contains("BUTTON_FILL"));
+		assertFalse(screen.contains("SCOPE_FILL"));
+		assertTrue(screen.contains("one continuous CRT glass grid"));
+		assertTrue(screen.contains("class NoticeButton extends Button"));
+		var noticeUi = ImageIO.read(ASSETS.resolve(
+				"textures/gui/notice/first_run_notice_terminal_shell.png").toFile());
+		assertEquals(1620, noticeUi.getWidth());
+		assertEquals(971, noticeUi.getHeight());
+		assertFalse(Files.exists(ASSETS.resolve("textures/gui/notice/first_run_notice_background.png")));
+		String noticePalette = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/FirstRunNoticePalette.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(noticePalette.contains("without importing terminal screen assets or constants"));
+
+		String theme = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/TerminalVisualTheme.java"),
+				StandardCharsets.UTF_8);
+		String terminal = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/TerminalScreen.java"),
+				StandardCharsets.UTF_8);
+		for (String color : new String[]{"GREEN", "CYAN", "DIM", "AMBER", "HOT", "GLASS",
+				"LCD_BACKGROUND", "LCD_BORDER", "DARK_BORDER"}) {
+			assertTrue(theme.contains(" " + color + " ="), color);
+			assertTrue(terminal.contains("TerminalVisualTheme." + color), color);
+		}
+	}
+
+	@Test
+	void everyFacilityOwnsTwoValidCompressedStructureVariants() throws Exception {
+		Path definitionsPath = Path.of("src/main/resources/data/thefourthfrequency/facilities/facilities.json");
+		var definitions = JsonParser.parseString(Files.readString(definitionsPath, StandardCharsets.UTF_8)).getAsJsonArray();
+		Set<String> templates = new HashSet<>();
+		for (var element : definitions) {
+			var variants = element.getAsJsonObject().getAsJsonArray("templates");
+			assertEquals(2, variants.size());
+			for (var variant : variants) {
+				String name = variant.getAsString();
+				assertTrue(templates.add(name), name);
+				Path path = Path.of("src/main/resources/data/thefourthfrequency/structure")
+						.resolve(name + ".nbt");
+				assertTrue(Files.isRegularFile(path), path.toString());
+				try (var stream = new GZIPInputStream(Files.newInputStream(path))) {
+					byte[] rootHeader = stream.readNBytes(3);
+					assertTrue(rootHeader.length == 3 && rootHeader[0] == 10 && rootHeader[1] == 0 && rootHeader[2] == 0,
+							path.toString());
+				}
+			}
+		}
+		assertEquals(10, templates.size());
+	}
+
+	@Test
+	void currentFragmentMainlineUsesVanillaStructuresWithoutAllocatingFacilities() throws Exception {
+		String fragments = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/world/FragmentInvestigationService.java"),
+				StandardCharsets.UTF_8);
+		for (String structure : new String[]{"MINESHAFT", "SHIPWRECK", "TRAIL_RUINS", "STRONGHOLD",
+				"WOODLAND_MANSION", "DESERT_PYRAMID", "IGLOO", "TRIAL_CHAMBERS",
+				"PILLAGER_OUTPOST", "JUNGLE_TEMPLE", "OCEAN_MONUMENT", "ANCIENT_CITY",
+				"OCEAN_RUIN_COLD", "RUINED_PORTAL"})
+			assertTrue(fragments.contains("BuiltinStructures." + structure), structure);
+		assertTrue(fragments.contains("findNearestMapStructure"));
+		assertTrue(fragments.contains("getStructureWithPieceAt"));
+		String terminalScreen = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/TerminalScreen.java"),
+				StandardCharsets.UTF_8);
+		assertFalse(terminalScreen.contains("0x0700FF70"),
+				"The terminal display must not restore the persistent green scanline overlay");
+		assertFalse(terminalScreen.contains("log.top() + 19"),
+				"The signal header must not restore a full-width horizontal divider");
+		assertFalse(terminalScreen.contains("y + ROW_HEIGHT - 1, 0x551C3A25"),
+				"Signal selection must use text color instead of a full-row horizontal band");
+		assertFalse(terminalScreen.contains("footer.top() + 1, DARK_BORDER"),
+				"The footer must not restore a full-width horizontal divider");
+		assertFalse(terminalScreen.contains("drawFragmentPulse"),
+				"Private fragment state must not restore moving horizontal glitch lines");
+		assertFalse(terminalScreen.contains("signal.objective_prefix"),
+				"Hidden story gates must not be rendered as a persistent task checklist");
+		assertTrue(terminalScreen.contains("expanded ? \"  －\" : \"  ＋\""),
+				"Folded signal cards use right-side plus/minus symbols");
+		assertTrue(terminalScreen.contains("String key = \"candidates:\" + fragment"),
+				"Anonymous candidate groups remain separately expandable instead of becoming one oversized card");
+		assertTrue(terminalScreen.contains("SIGNAL_ROW_HEIGHT = 12"),
+				"Expanded signal details retain readable vertical spacing");
+		assertTrue(terminalScreen.contains("Component.literal(\"    · \")"),
+				"Expanded signal details use a quiet indented list instead of dense tree branches");
+		assertTrue(terminalScreen.contains("markerFragment(entry.type())"),
+				"Position-free unrecorded markers remain distinct from expandable coordinate cards");
+
+		String fragmentInvestigation = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/world/FragmentInvestigationService.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(fragmentInvestigation.contains("SignalBand.WEATHER, SignalBand.MINING, SignalBand.PUBLIC, SignalBand.UNKNOWN"),
+				"Legacy log wire ids remain stable while the client aggregates every fragment event");
+		assertTrue(fragmentInvestigation.contains("if (record.getIntOr(TerminalData.BAND_STAGE, 0) == 0) return false;"),
+				"Structure coordinates stay out of the signal log before the investigation gate");
+
+		String facilities = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/facility/FacilityService.java"),
+				StandardCharsets.UTF_8);
+		String updateBody = facilities.substring(facilities.indexOf("public static void updateServer"),
+				facilities.indexOf("public static void unlockArchiveFromFragments"));
+		assertFalse(updateBody.contains("ensureAllocated("),
+				"New worlds must not allocate the five legacy facilities");
+	}
+
+	@Test
+	void everyStaticTranslatableKeyExistsAndCoreClientScreensContainNoHardcodedChinese() throws Exception {
+		JsonObject en = JsonParser.parseString(Files.readString(ASSETS.resolve("lang/en_us.json"),
+				StandardCharsets.UTF_8)).getAsJsonObject();
+		Set<String> keys = new HashSet<>(en.keySet());
+		Pattern translatable = Pattern.compile("Component\\.translatable\\(\\s*\"([^\"]+)\"\\s*(?:,|\\))");
+		for (Path root : new Path[]{Path.of("src/main/java"), Path.of("src/client/java")}) {
+			for (Path path : Files.walk(root).filter(value -> value.toString().endsWith(".java")).toList()) {
+				Matcher matcher = translatable.matcher(Files.readString(path, StandardCharsets.UTF_8));
+				while (matcher.find()) assertTrue(keys.contains(matcher.group(1)), path + " -> " + matcher.group(1));
+			}
+		}
+		Pattern chineseLiteral = Pattern.compile("\"[^\"\\r\\n]*[\\x{3400}-\\x{9FFF}][^\"\\r\\n]*\"");
+		for (String relative : new String[]{
+				"src/client/java/com/xm/thefourthfrequency/client_ui/TerminalScreen.java",
+				"src/client/java/com/xm/thefourthfrequency/client_ui/WorldDecayClient.java"}) {
+			String source = Files.readString(Path.of(relative), StandardCharsets.UTF_8);
+			assertFalse(chineseLiteral.matcher(source).find(), relative);
+		}
+	}
+
+	@Test
+	void terminalSoundsNeverBranchOnSubtitlePreference() throws Exception {
+		String source = Files.readString(Path.of("src/client/java/com/xm/thefourthfrequency/client_ui/TerminalClientAudio.java"),
+				StandardCharsets.UTF_8);
+		assertFalse(source.contains("subtitlesEnabled"));
+		assertTrue(source.contains("TERMINAL_ANOMALY"));
+		assertTrue(source.contains("void noticeOpening()"));
+		assertTrue(source.contains("void noticeStable()"));
+		assertTrue(source.contains("noticeOpeningPlaysForTesting()"));
+		assertTrue(source.contains("noticeStablePlaysForTesting()"));
+	}
+
+	@Test
+	void debugPanelUsesMAndContainsFourSectionsAndScrollableAnomalies() throws Exception {
+		String client = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/DebugPanelClient.java"), StandardCharsets.UTF_8);
+		String screen = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/DebugPanelScreen.java"), StandardCharsets.UTF_8);
+		assertTrue(client.contains("GLFW.GLFW_KEY_M"));
+		assertFalse(client.contains("GLFW.GLFW_KEY_F7"));
+		for (String section : new String[]{"总览", "主线", "异象", "终局"})
+			assertTrue(screen.contains(section), section);
+		for (String removed : new String[]{"local_file_prev", "local_facility_prev", "local_anomaly_prev",
+				"完成生存节点", "显示设施坐标", "解锁当前文件"})
+			assertFalse(screen.contains(removed), removed);
+		for (String internalTerm : new String[]{"停止/恢复租约", "满复合", "恢复异象导演", "BOSS：", "造身：",
+				"最终实体", "肉身映射", "剧情上限"})
+			assertFalse(screen.contains(internalTerm), internalTerm);
+		assertTrue(screen.contains("AnomalyCatalog.definitions()"));
+		assertTrue(screen.contains("sectionCountForTesting()"));
+		assertTrue(screen.contains("mouseScrolled"));
+	}
+
+	@Test
+	void semanticAnomalySoundsHaveMatchingSubtitles() throws Exception {
+		JsonObject sounds = JsonParser.parseString(Files.readString(ASSETS.resolve("sounds.json"),
+				StandardCharsets.UTF_8)).getAsJsonObject();
+		for (String event : new String[]{"anomaly_echo", "window_glitch", "door_cascade", "rule_collapse"}) {
+			assertTrue(sounds.has(event), event);
+			assertTrue(sounds.getAsJsonObject(event).has("subtitle"), event);
+		}
+		assertFalse(sounds.has("hostile_echo"));
+		assertFalse(sounds.has("composite_breach"));
+		for (String event : new String[]{"rework_joint", "misread_body", "misread_adaptation"}) {
+			var definition = sounds.getAsJsonObject(event);
+			assertTrue(definition.has("subtitle"), event);
+			for (var sound : definition.getAsJsonArray("sounds")) {
+				String name = sound.getAsString();
+				assertTrue(name.startsWith("thefourthfrequency:entity/"), name);
+				Path ogg = ASSETS.resolve("sounds/" + name.substring(name.indexOf(':') + 1) + ".ogg");
+				assertTrue(Files.isRegularFile(ogg), ogg.toString());
+				byte[] header = Files.readAllBytes(ogg);
+				assertTrue(header.length > 4 && header[0] == 'O' && header[1] == 'g'
+						&& header[2] == 'g' && header[3] == 'S', ogg.toString());
+			}
+		}
+	}
+
+	@Test
+	void anomalyArtHasRequiredDimensionsAlphaAndSourceMasters() throws Exception {
+		var hand = ImageIO.read(ASSETS.resolve("textures/gui/anomaly/peripheral_hand.png").toFile());
+		assertEquals(512, hand.getWidth());
+		assertEquals(256, hand.getHeight());
+		assertTrue(hand.getColorModel().hasAlpha());
+		boolean transparent = false;
+		boolean opaque = false;
+		for (int y = 0; y < hand.getHeight(); y += 8) for (int x = 0; x < hand.getWidth(); x += 8) {
+			int alpha = hand.getRGB(x, y) >>> 24;
+			transparent |= alpha == 0;
+			opaque |= alpha > 220;
+		}
+		assertTrue(transparent && opaque, "Single hand texture must contain transparent background and visible hand");
+		var eye = ImageIO.read(ASSETS.resolve("textures/gui/anomaly/eye_item.png").toFile());
+		assertEquals(128, eye.getWidth());
+		assertEquals(128, eye.getHeight());
+		assertTrue(eye.getColorModel().hasAlpha());
+		assertEquals(0, eye.getRGB(0, 0) >>> 24);
+		assertEquals(0, eye.getRGB(eye.getWidth() - 1, eye.getHeight() - 1) >>> 24);
+		var windowEye = ImageIO.read(ASSETS.resolve("textures/gui/anomaly/eye_window.png").toFile());
+		assertEquals(64, windowEye.getWidth());
+		assertTrue(windowEye.getColorModel().hasAlpha());
+		assertEquals(0, windowEye.getRGB(0, 0) >>> 24);
+		Path watcherPath = ASSETS.resolve("textures/entity/watcher.png");
+		Path watcherEmissivePath = ASSETS.resolve("textures/entity/watcher_emissive.png");
+		assertTrue(Files.isRegularFile(watcherPath));
+		assertTrue(Files.isRegularFile(watcherEmissivePath));
+		var watcher = ImageIO.read(watcherPath.toFile());
+		var watcherEmissive = ImageIO.read(watcherEmissivePath.toFile());
+		assertEquals(256, watcher.getWidth()); assertEquals(256, watcher.getHeight());
+		assertEquals(256, watcherEmissive.getWidth()); assertEquals(256, watcherEmissive.getHeight());
+		assertTrue(watcher.getColorModel().hasAlpha());
+		assertTrue(watcherEmissive.getColorModel().hasAlpha());
+		int nonTransparent = 0;
+		int maximumAlpha = 0;
+		for (int y = 0; y < 256; y++) for (int x = 0; x < 256; x++) {
+			assertEquals(255, watcher.getRGB(x, y) >>> 24, "base alpha at " + x + "," + y);
+			int alpha = watcherEmissive.getRGB(x, y) >>> 24;
+			if (alpha == 0) continue;
+			nonTransparent++;
+			maximumAlpha = Math.max(maximumAlpha, alpha);
+			assertTrue(x >= 160 && x < 240 && y < 16,
+					"emissive pixel escaped the eye UV at " + x + "," + y);
+		}
+		assertTrue(nonTransparent > 0 && nonTransparent <= 256 * 256 * 0.08,
+				"emissive coverage=" + nonTransparent);
+		assertTrue(maximumAlpha >= 112 && maximumAlpha <= 120, "emissive max alpha=" + maximumAlpha);
+		assertNotEquals(java.util.Arrays.hashCode(Files.readAllBytes(watcherPath)),
+				java.util.Arrays.hashCode(Files.readAllBytes(watcherEmissivePath)));
+		assertFalse(Files.exists(ASSETS.resolve("textures/entity/watcher_eyes.png")));
+		assertFalse(Files.exists(ASSETS.resolve("textures/entity/orbiter.png")));
+		assertEquals(32, ImageIO.read(ASSETS.resolve("textures/block/missing_texture.png").toFile()).getWidth());
+		assertTrue(Files.isRegularFile(Path.of("tools/assets/anomaly/eye_master.png")));
+		assertTrue(Files.isRegularFile(Path.of("tools/assets/anomaly/hand_palm_long_master.png")));
+		assertFalse(Files.exists(Path.of("tools/assets/anomaly/peripheral_hands.gif")));
+	}
+
+	@Test
+	void anomalyPresentationUsesV3ControllerWithoutPotionOrPromptDependencies() throws Exception {
+		String networking = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/networking/TerminalNetworking.java"), StandardCharsets.UTF_8);
+		assertTrue(networking.contains("AnomalyStartS2C.TYPE"));
+		assertTrue(networking.contains("AnomalyPhaseS2C.TYPE"));
+		assertTrue(networking.contains("AnomalyCompleteC2S.TYPE"));
+		assertFalse(networking.contains("AmbientAnomalyPayload"));
+		String controller = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/AnomalyPresentationController.java"),
+				StandardCharsets.UTF_8);
+		for (String forbidden : new String[]{"MobEffect", "MobEffects", "displayClientMessage",
+				"setOverlayMessage", "setActionBarText"}) assertFalse(controller.contains(forbidden), forbidden);
+		String runtime = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/terminal/AnomalyRuntimeService.java"), StandardCharsets.UTF_8);
+		assertTrue(runtime.contains("ACTIVE.containsKey(player)"));
+		assertTrue(runtime.contains("earliestCompletionTick"));
+		assertTrue(runtime.contains("recordCompleted"));
+	}
+
+	@Test
+	void desktopPresenceTypesIntoOwnedForegroundVerifiedNotepad() throws Exception {
+		String source = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/meta_windows/WindowsAnomalyController.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(source.contains("meta/desktop_presence.txt"));
+		assertTrue(source.contains("Files.createTempDirectory"));
+		assertTrue(source.contains("Files.createFile"));
+		assertFalse(source.contains("Files.copy"));
+		assertTrue(source.contains("GetForegroundWindow"));
+		assertTrue(source.contains("GetWindowThreadProcessId"));
+		assertTrue(source.contains("AttachThreadInput"));
+		assertTrue(source.contains("SendInput"));
+		assertTrue(source.contains("MOUSEINPUT"));
+		assertTrue(source.contains("powershell.exe"));
+		assertTrue(source.contains("OwnedTree"));
+		assertTrue(source.contains("ZoomToMaximum"));
+		assertTrue(source.contains("VK_OEM_PLUS"));
+		assertTrue(source.contains("step < 64"));
+		assertTrue(source.contains("descendants()"));
+		assertTrue(source.contains("notepad.exe"));
+		assertTrue(Files.isRegularFile(ASSETS.resolve("meta/desktop_presence.txt")));
+	}
+
+	@Test
+	void revisedAnomaliesUseTransparentWatcherDenseFogAndFixedTriggerView() throws Exception {
+		String controller = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/AnomalyPresentationController.java"),
+				StandardCharsets.UTF_8);
+		String watcher = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_render/WatcherRenderer.java"),
+				StandardCharsets.UTF_8);
+		String watcherModel = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_render/WatcherModel.java"),
+				StandardCharsets.UTF_8);
+		String watcherState = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_render/WatcherRenderState.java"),
+				StandardCharsets.UTF_8);
+		String clientInitializer = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/TheFourthFrequencyClient.java"),
+				StandardCharsets.UTF_8);
+		String skyMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/SkyRendererAnomalyMixin.java"),
+				StandardCharsets.UTF_8);
+		String fogMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/FogRendererAnomalyMixin.java"),
+				StandardCharsets.UTF_8);
+		String optionsMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/OptionsAnomalyMixin.java"),
+				StandardCharsets.UTF_8);
+		String renderDistanceOptionMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/OptionInstanceRenderDistanceMixin.java"),
+				StandardCharsets.UTF_8);
+		String inputMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/KeyboardInputAnomalyMixin.java"),
+				StandardCharsets.UTF_8);
+		String handMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/ItemInHandRendererAnomalyMixin.java"),
+				StandardCharsets.UTF_8);
+		String entityRendererMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/AvatarRendererAnomalyMixin.java"),
+				StandardCharsets.UTF_8);
+		String renderRegionMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/RenderSectionRegionAnomalyMixin.java"),
+				StandardCharsets.UTF_8);
+		String levelRendererMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/LevelRendererAnomalyMixin.java"),
+				StandardCharsets.UTF_8);
+		String itemNameMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/ItemStackAnomalyMixin.java"),
+				StandardCharsets.UTF_8);
+		String localPlayerMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/LocalPlayerAnomalyMixin.java"),
+				StandardCharsets.UTF_8);
+		String mixinConfig = Files.readString(Path.of("src/main/resources/thefourthfrequency.mixins.json"),
+				StandardCharsets.UTF_8);
+		String channel = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/ChannelOverrideScreen.java"),
+				StandardCharsets.UTF_8);
+		assertFalse(controller.contains("ModEntities.ORBITER"));
+		assertTrue(controller.contains("redSkyShaderColor"));
+		assertTrue(controller.contains("-HAND_TEXTURE_WIDTH"));
+		assertFalse(controller.contains("scale(-1.0F"));
+		assertFalse(controller.contains("alpha << 24 | 0x00A01018"));
+		assertTrue(controller.contains("CameraType.FIRST_PERSON"));
+		assertTrue(controller.contains("trigger_view_camera_fixed"));
+		assertTrue(controller.contains("SECOND_PERSON_BODY_ID"));
+		assertTrue(controller.contains("second_person_body_proxy"));
+		assertTrue(controller.contains("secondPersonBody.noPhysics = true"));
+		assertTrue(controller.contains("cameraAnchor.noPhysics = true"));
+		assertTrue(controller.contains("shouldControlSeparatedPlayer"));
+		assertTrue(controller.contains("action_echo_animation"));
+		assertTrue(controller.contains("levelRenderer.allChanged()"));
+		assertTrue(controller.contains("PERIPHERAL_HAND_ENTER_FRACTION = 0.42F"));
+		assertTrue(controller.contains("width * 0.58F"));
+		assertTrue(controller.contains("width * 0.36F"));
+		assertTrue(controller.contains("-LIGHT_DROPOUT_SCAN_RADIUS, -LIGHT_DROPOUT_SCAN_RADIUS"));
+		assertTrue(controller.contains("LIGHT_DROPOUT_DARK_RADIUS = LIGHT_DROPOUT_SCAN_RADIUS + 15"));
+		assertTrue(controller.contains("lightDropoutCenter"));
+		assertFalse(controller.contains("lightVisibleFrom"));
+		assertTrue(controller.contains("missing_texture_proxies_rendered"));
+		assertTrue(controller.contains("isInViewCone"));
+		String itemMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/GuiGraphicsAnomalyMixin.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(itemMixin.contains("ItemStack;III)V"));
+		assertTrue(itemMixin.contains("LivingEntity;Lnet/minecraft/world/item/ItemStack;III)V"));
+		assertTrue(watcher.contains("extends MobRenderer<WatcherEntity, WatcherRenderState, WatcherModel>"));
+		assertFalse(watcher.contains("submitCustomGeometry"));
+		assertFalse(watcher.contains("RenderTypes.eyes"));
+		assertFalse(watcher.contains("textures/gui/anomaly/eye_item.png"));
+		assertFalse(watcher.contains("getBlockLightLevel"));
+		assertTrue(watcher.contains("textures/entity/watcher.png"));
+		assertTrue(watcher.contains("textures/entity/watcher_emissive.png"));
+		assertTrue(watcher.contains("entityTranslucentEmissive"));
+		assertTrue(watcher.contains("0.22F"));
+		assertTrue(watcher.contains("shadowStrength = 0.25F"));
+		assertTrue(watcher.contains("physical.minX - 0.35D"));
+		assertTrue(watcher.contains("physical.minY - 0.15D"));
+		assertTrue(watcher.contains("onWatcherVisible"));
+		assertTrue(watcherModel.contains("extends EntityModel<WatcherRenderState>"));
+		for (String part : new String[]{"torso", "neck", "head", "left_arm", "right_arm", "left_leg",
+				"right_leg", "hand", "spine", "left_scapula", "right_scapula", "eye", "iris", "pupil"}) {
+			assertTrue(watcherModel.contains("\"" + part + "\""), part);
+		}
+		assertTrue(watcherModel.contains("LayerDefinition.create(mesh, 128, 128)"));
+		assertTrue(watcherModel.contains("FULL_TURN / 120.0F"));
+		assertTrue(watcherModel.contains("Mth.sin(irisPhase) * 0.03F"));
+		assertTrue(watcherModel.contains("iris.xScale = irisScale"));
+		assertFalse(watcherModel.toLowerCase(java.util.Locale.ROOT).contains("eyelid"));
+		assertTrue(watcherState.contains("extends LivingEntityRenderState"));
+		assertTrue(clientInitializer.contains("registerModelLayer(WatcherRenderer.MODEL_LAYER"));
+		assertTrue(skyMixin.contains("state.skyColor"));
+		assertTrue(skyMixin.contains("state.sunriseAndSunsetColor"));
+		assertTrue(fogMixin.contains("setupFog"));
+		assertTrue(fogMixin.contains("index = 5"));
+		assertTrue(fogMixin.contains("index = 6"));
+		assertTrue(fogMixin.contains("28.0F"));
+		assertTrue(fogMixin.contains("AtmosphericFogProfile.sample"));
+		assertTrue(fogMixin.contains("clampRenderStart"));
+		assertTrue(fogMixin.contains("clampRenderEnd"));
+		assertTrue(optionsMixin.contains("FIXED_RENDER_DISTANCE_CHUNKS"));
+		assertTrue(optionsMixin.contains("Math.min(callback.getReturnValue()"));
+		assertFalse(optionsMixin.contains("setReturnValue(2)"));
+		assertTrue(renderDistanceOptionMixin.contains("widget.active = false"));
+		assertTrue(renderDistanceOptionMixin.contains("rejectRenderDistanceChanges"));
+		assertTrue(renderDistanceOptionMixin.contains("@ModifyVariable"));
+		assertTrue(renderDistanceOptionMixin.contains("render_distance_locked"));
+		assertTrue(mixinConfig.contains("OptionInstanceRenderDistanceMixin"));
+		assertTrue(inputMixin.contains("keyPresses = Input.EMPTY"));
+		assertTrue(handMixin.contains("renderHandsWithItems"));
+		assertTrue(entityRendererMixin.contains("isAnonymousProxy"));
+		assertTrue(renderRegionMixin.contains("visualReplacement"));
+		assertTrue(renderRegionMixin.contains("markTraceRendered"));
+		assertTrue(renderRegionMixin.contains("isLightSourceHidden"));
+		assertTrue(renderRegionMixin.contains("Blocks.AIR.defaultBlockState()"));
+		assertTrue(levelRendererMixin.contains("LevelRenderer$BrightnessGetter"));
+		assertTrue(levelRendererMixin.contains("removeCompiledHiddenBlockLight"));
+		assertTrue(itemNameMixin.contains("getHoverName"));
+		assertTrue(itemNameMixin.contains("I SEE YOU...."));
+		assertTrue(localPlayerMixin.contains("isControlledCamera"));
+		assertTrue(localPlayerMixin.contains("shouldControlSeparatedPlayer"));
+		assertTrue(mixinConfig.contains("ItemStackAnomalyMixin"));
+		assertTrue(mixinConfig.contains("LocalPlayerAnomalyMixin"));
+		assertTrue(channel.contains("extends ChatScreen"));
+		assertTrue(channel.contains("input.setEditable(false)"));
+	}
+
+	@Test
+	void alphaSessionEmbedsAndHidesThreeOrderedBasePacks() throws Exception {
+		Path packs = Path.of("src/main/resources/resourcepacks");
+		Path alpha = packs.resolve("golden_days_alpha");
+		Path base = packs.resolve("golden_days_base");
+		for (Path pack : List.of(alpha, base)) {
+			assertTrue(Files.isRegularFile(pack.resolve("pack.mcmeta")), pack.toString());
+			assertTrue(Files.isRegularFile(pack.resolve("pack.png")), pack.toString());
+			JsonObject metadata = JsonParser.parseString(Files.readString(pack.resolve("pack.mcmeta"),
+					StandardCharsets.UTF_8)).getAsJsonObject();
+			assertTrue(metadata.has("pack"));
+			assertTrue(Files.isDirectory(pack.resolve("assets/minecraft")));
+		}
+		assertTrue(Files.isDirectory(base.resolve("patch_21_11")));
+		assertTrue(Files.isRegularFile(base.resolve("credits.txt")));
+		assertTrue(Files.walk(alpha).filter(Files::isRegularFile).count() > 500);
+		assertTrue(Files.walk(base).filter(Files::isRegularFile).count() > 4_000);
+
+		String controller = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/AlphaLoadSessionController.java"),
+				StandardCharsets.UTF_8);
+		String configManager = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/config/ConfigManager.java"),
+				StandardCharsets.UTF_8);
+		String config = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/config/ModConfig.java"),
+				StandardCharsets.UTF_8);
+		String plan = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/client_ui/AlphaResourcePackPlan.java"),
+				StandardCharsets.UTF_8);
+		String packMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/PackSelectionModelHiddenPacksMixin.java"),
+				StandardCharsets.UTF_8);
+		String loadingMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/LevelLoadingScreenCorruptionMixin.java"),
+				StandardCharsets.UTF_8);
+		String overlayMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/LoadingOverlaySuppressionMixin.java"),
+				StandardCharsets.UTF_8);
+		String persistentLoadingStyle = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/PersistentAlphaLoadingStyle.java"),
+				StandardCharsets.UTF_8);
+		String titleMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/TitleScreenErosionMixin.java"),
+				StandardCharsets.UTF_8);
+		String worldDecay = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/WorldDecayClient.java"),
+				StandardCharsets.UTF_8);
+		String mixinConfig = Files.readString(Path.of("src/main/resources/thefourthfrequency.mixins.json"),
+				StandardCharsets.UTF_8);
+		String startupMixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/MinecraftAlphaStartupMixin.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(controller.contains("PackActivationType.NORMAL"));
+		assertTrue(controller.contains("ClientPlayConnectionEvents.INIT"));
+		assertTrue(controller.contains("repository.setSelected(activePackOrder)"));
+		assertFalse(controller.contains("repository.setSelected(restore)"));
+		assertFalse(controller.contains("originalPackOrder"));
+		assertTrue(controller.contains("setTitle("));
+		assertFalse(controller.contains("updateTitle("));
+		assertTrue(controller.contains("AlphaLoadTimeline.versionStage(screenTicks)"));
+		assertTrue(controller.contains("claimInitialCorruptionScreen"));
+		assertTrue(controller.contains("corruptionEverPlayed"));
+		assertTrue(controller.contains("applyJavaIcon"));
+		assertTrue(controller.contains("screenTicks >= AlphaLoadTimeline.GLITCH_START_TICK"));
+		assertTrue(controller.contains("retainFinalWindowTitle"));
+		assertTrue(controller.contains("MENU_VERSION_TEXT = \"Minecraft 1.0.0\""));
+		assertTrue(controller.contains("MENU_WINDOW_TITLE = \"Minecraft Alpha 1.0.0\""));
+		assertTrue(controller.contains("ConfigManager.loadClientState().alphaDowngradeComplete()"));
+		assertTrue(controller.contains("ConfigManager.updateClientState"));
+		assertTrue(controller.contains("client.screen instanceof TitleScreen"));
+		assertTrue(controller.contains("client.getOverlay() != null"));
+		assertTrue(controller.contains("ensureAlphaResourceStack(client, false)"));
+		assertTrue(controller.contains("preparePersistentPackSelectionBeforeInitialReload"));
+		assertTrue(controller.contains("primePersistentIdentity(client)"));
+		assertTrue(controller.contains("client.options.resourcePacks.addAll"));
+		assertFalse(controller.contains("client.options.save()"));
+		assertTrue(controller.contains("containsOrderedAlphaBases"));
+		assertTrue(controller.contains("shouldUsePersistentAlphaLoadingStyle"));
+		assertTrue(controller.contains("AlphaLoadingPresentationPolicy.usePersistentLegacyPresentation"));
+		assertTrue(controller.contains("recordPersistentAlphaLoadingOverlayCreated"));
+		assertTrue(controller.contains("recordPersistentAlphaLoadingFirstFrame"));
+		assertTrue(startupMixin.contains("Minecraft;options:Lnet/minecraft/client/Options;"));
+		assertTrue(startupMixin.contains("shift = At.Shift.AFTER"));
+		assertFalse(controller.contains("thefourthfrequency-alpha-state.json"));
+		assertTrue(config.contains("alphaDowngradeComplete"));
+		assertTrue(configManager.contains("StandardCopyOption.ATOMIC_MOVE"));
+		assertFalse(configManager.contains("TerminalData"));
+		assertTrue(titleMixin.contains("AlphaLoadSessionController.menuVersionText"));
+		assertFalse(worldDecay.contains("setTitle("));
+		assertFalse(worldDecay.contains("applyCorruptedIcon"));
+		assertFalse(worldDecay.contains("setIcon("));
+		assertTrue(mixinConfig.contains("MinecraftTitleRetentionMixin"));
+		assertTrue(mixinConfig.contains("MinecraftAlphaStartupMixin"));
+		var javaIcon = ImageIO.read(ASSETS.resolve("textures/gui/alpha_java_icon.png").toFile());
+		assertEquals(32, javaIcon.getWidth());
+		assertEquals(32, javaIcon.getHeight());
+		assertFalse(controller.contains("Downloads"));
+		assertTrue(plan.indexOf("PROGRAMMER_ART_PACK_ID") < plan.indexOf("GOLDEN_DAYS_BASE_PACK_ID"));
+		assertTrue(plan.indexOf("GOLDEN_DAYS_BASE_PACK_ID") < plan.indexOf("GOLDEN_DAYS_ALPHA_PACK_ID"));
+		assertTrue(packMixin.contains("selected.removeIf"));
+		assertTrue(packMixin.contains("unselected.removeIf"));
+		assertTrue(loadingMixin.contains("SimpleSoundInstance.forUI(ModSounds.TERMINAL_FAULT"));
+		assertTrue(loadingMixin.contains("AlphaLoadTimeline.copiedFailureLines"));
+		assertTrue(loadingMixin.contains("reason == LevelLoadingScreen.Reason.OTHER"));
+		assertTrue(loadingMixin.contains("AlphaLoadTimeline.smallFailureCopies"));
+		assertTrue(loadingMixin.contains("AlphaLoadTimeline.largeFailureCopies"));
+		assertTrue(loadingMixin.contains("AlphaLoadTimeline.failureMotionTick"));
+		assertTrue(loadingMixin.contains("AlphaLoadTimeline.legacyRecoveryFrame"));
+		assertTrue(loadingMixin.contains("AlphaLoadTimeline.initialNormalFrame"));
+		assertTrue(loadingMixin.contains("AlphaLoadTimeline.initialNormalProgress"));
+		assertTrue(loadingMixin.contains("holdVanillaProgressAtHalf"));
+		assertTrue(loadingMixin.contains("renderFailureOverVanillaPage"));
+		assertTrue(loadingMixin.contains("smoothedProgress = AlphaLoadTimeline.initialNormalFrame"));
+		assertTrue(loadingMixin.contains("expose the world, not a legacy flash"));
+		assertTrue(loadingMixin.contains("thefourthfrequency$chaos"));
+		assertFalse(loadingMixin.contains("columnSpacing"));
+		assertFalse(loadingMixin.contains("rowSpacing"));
+		assertFalse(loadingMixin.contains("driftX"));
+		assertFalse(loadingMixin.contains("originX"));
+		assertTrue(loadingMixin.contains("translate(targetX, targetY)"));
+		assertTrue(loadingMixin.contains("graphics.pose().scale(scale, scale)"));
+		assertFalse(loadingMixin.contains("+ growth"));
+		assertFalse(loadingMixin.contains("barLeft - 1"));
+		assertTrue(loadingMixin.contains("isModLoaded(\"thefourthfrequency-test\")"));
+		assertTrue(loadingMixin.contains("alpha-loading-corruption.png"));
+		assertTrue(loadingMixin.contains("legacy-loading-normal.png"));
+		assertTrue(loadingMixin.contains("Component.literal(\"生成世界中\")"));
+		assertTrue(loadingMixin.contains("Component.literal(\"生成地形中\")"));
+		assertTrue(loadingMixin.contains("textures/block/dirt.png"));
+		assertTrue(loadingMixin.contains("shouldRenderLegacyLoadingScreen"));
+		assertTrue(loadingMixin.contains("hideVanillaLoadingText"));
+		assertFalse(loadingMixin.contains("0xE0080507"));
+		assertTrue(overlayMixin.contains("consumeResourceReloadAnimationSuppression"));
+		assertTrue(overlayMixin.contains("screen.render(graphics"));
+		assertTrue(overlayMixin.contains("graphics.enableScissor(0, 0, 0, 0)"));
+		assertTrue(overlayMixin.contains("graphics.disableScissor()"));
+		assertTrue(overlayMixin.contains("keepUnderlyingScreen"));
+		assertFalse(overlayMixin.contains("method = \"render\", at = @At(\"HEAD\"), cancellable = true"));
+		assertTrue(overlayMixin.contains("registerPersistentAlphaLogo"));
+		assertTrue(overlayMixin.contains("usePersistentAlphaBackground"));
+		assertTrue(overlayMixin.contains("usePersistentAlphaLogo"));
+		assertTrue(overlayMixin.contains("drawPersistentAlphaProgress"));
+		assertTrue(overlayMixin.contains("persistentAlphaFirstFrameRecorded"));
+		assertTrue(persistentLoadingStyle.contains("registerAndLoad"));
+		assertTrue(persistentLoadingStyle.contains(
+				"/resourcepacks/golden_days_base/assets/minecraft/textures/gui/title/mojangstudios.png"));
+		assertTrue(persistentLoadingStyle.contains("BACKGROUND_COLOR = 0xFF373363"));
+		assertTrue(persistentLoadingStyle.contains("PROGRESS_COLOR = 0xFF8E84FF"));
+		assertTrue(Files.isRegularFile(base.resolve(
+				"assets/minecraft/textures/gui/title/mojangstudios.png")));
+		assertTrue(mixinConfig.contains("LevelLoadingScreenCorruptionMixin"));
+		assertTrue(mixinConfig.contains("LoadingOverlaySuppressionMixin"));
+		assertTrue(mixinConfig.contains("PackSelectionModelHiddenPacksMixin"));
+	}
+
+	@Test
+	void experienceGapUsesContinuousCollisionMovementWithoutTeleport() throws Exception {
+		String serverEffects = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/terminal/AnomalyServerEffects.java"),
+				StandardCharsets.UTF_8);
+		int start = serverEffects.indexOf("private static final class MovementTask");
+		int end = serverEffects.indexOf("public static boolean protectedPosition", start);
+		String movement = serverEffects.substring(start, end);
+		assertTrue(movement.contains("player.setDeltaMovement"));
+		assertTrue(movement.contains("player.hurtMarked = true"));
+		assertFalse(movement.contains("teleportTo"));
+		assertTrue(serverEffects.contains("distance <= 24"));
+	}
+}

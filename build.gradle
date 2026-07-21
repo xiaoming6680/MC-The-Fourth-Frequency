@@ -1,0 +1,177 @@
+plugins {
+	id "net.fabricmc.fabric-loom-remap" version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+loom {
+	splitEnvironmentSourceSets()
+
+	mods {
+		"thefourthfrequency" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+
+	runs {
+		client {
+			client()
+			name = "The Fourth Frequency Client"
+			runDir = "run/client"
+		}
+		server {
+			server()
+			name = "The Fourth Frequency Dedicated Server"
+			runDir = "run/server"
+			programArg "--nogui"
+		}
+	}
+}
+
+tasks.named("runServer") {
+	standardInput = System.in
+}
+
+fabricApi {
+	configureDataGeneration {
+		client = true
+	}
+
+	configureTests {
+		createSourceSet = true
+		modId = "thefourthfrequency-test"
+		enableGameTests = true
+		enableClientGameTests = true
+		eula = true
+	}
+}
+
+sourceSets {
+	main {
+		resources {
+			srcDir "src/main/generated"
+		}
+	}
+	test {
+		compileClasspath += sourceSets.gametest.output
+		runtimeClasspath += sourceSets.gametest.output
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+configurations {
+	unitTestRuntime {
+		canBeConsumed = false
+		canBeResolved = true
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	mappings loom.officialMojangMappings()
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	testCompileOnly platform("org.junit:junit-bom:${project.junit_version}")
+	testCompileOnly "org.junit.jupiter:junit-jupiter-api"
+
+	unitTestRuntime "org.junit.platform:junit-platform-console-standalone:1.10.0"
+	unitTestRuntime "com.google.code.gson:gson:2.13.2"
+}
+
+processResources {
+	inputs.property "version", project.version
+	filesMatching("fabric.mod.json") {
+		expand "version": inputs.properties.version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.release = 21
+	options.encoding = "UTF-8"
+}
+
+tasks.withType(Jar).configureEach {
+	from(rootProject.file("LICENSE")) {
+		into "META-INF"
+	}
+}
+
+def unitTest = tasks.register("unitTest", JavaExec) {
+	group = "verification"
+	description = "Runs pure unit tests with the JUnit Console Launcher and writes XML reports."
+	dependsOn tasks.named("testClasses")
+	javaLauncher = javaToolchains.launcherFor {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+	classpath = files(sourceSets.main.output, sourceSets.gametest.output, sourceSets.test.output,
+			configurations.unitTestRuntime)
+	mainClass = "org.junit.platform.console.ConsoleLauncher"
+	args "execute",
+			"--scan-class-path",
+			"--fail-if-no-tests",
+			"--disable-ansi-colors",
+			"--details=summary",
+			"--reports-dir=${layout.buildDirectory.dir('test-results/unit').get().asFile.absolutePath}"
+}
+
+tasks.named("compileTestJava") {
+	dependsOn tasks.named("compileGametestJava")
+}
+
+tasks.named("test", Test) {
+	enabled = false
+	dependsOn unitTest
+}
+
+tasks.named("check") {
+	dependsOn unitTest
+}
+
+def clientTestSuite = providers.gradleProperty("tffClientTestSuite").orElse("all")
+def clientAnomaly = providers.gradleProperty("tffAnomaly").orElse("")
+
+tasks.named("runClientGameTest") {
+	doFirst {
+		def suite = clientTestSuite.get().trim().toLowerCase(Locale.ROOT)
+		def allowed = ["all", "default", "mainline", "alpha-relaunch", "anomalies", "anomaly-meta-smoke", "rework-forms", "watcher-model"]
+		if (!allowed.contains(suite)) throw new GradleException("Unknown -PtffClientTestSuite=${suite}")
+		def anomaly = clientAnomaly.get().trim()
+		if (!anomaly.isEmpty() && suite != "anomalies")
+			throw new GradleException("-PtffAnomaly requires -PtffClientTestSuite=anomalies")
+	}
+	jvmArgs "-Dthefourthfrequency.clientTestSuite=${clientTestSuite.get()}",
+			"-Dthefourthfrequency.anomaly=${clientAnomaly.get()}",
+			"-Dthefourthfrequency.projectDir=${project.projectDir.absolutePath}"
+	if (["rework-forms", "watcher-model"].contains(clientTestSuite.get().trim().toLowerCase(Locale.ROOT))) {
+		jvmArgs "-Dfabric.client.gametest.disableNetworkSynchronizer=true"
+	}
+}
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+	withSourcesJar()
+}
+
+tasks.register("printTestRuntimeClasspath") {
+	group = "verification"
+	description = "Prints unit-test outputs and runtime classpath for reproducible diagnostics."
+	doLast {
+		Test testTask = tasks.named("test", Test).get()
+		println "testClassesDirs:"
+		testTask.testClassesDirs.files.sort().each { println "  ${it}" }
+		println "testClasspath:"
+		testTask.classpath.files.sort().each { println "  ${it}" }
+	}
+}

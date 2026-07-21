@@ -1,0 +1,4 @@
+{
+  "parent": "block/template_log_horizontal",
+  "textures": {"top": "block/cherry_log_top", "side": "block/cherry_log"}
+}

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "thefourthfrequency",
+  "version": "${version}",
+  "name": "The Fourth Frequency",
+  "description": "A survival horror narrative where trust itself becomes construction.",
+  "authors": [
+    "XIAOMING6680"
+  ],
+  "contact": {},
+  "license": "All-Rights-Reserved",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.xm.thefourthfrequency.bootstrap.TheFourthFrequency"
+    ],
+    "client": [
+      "com.xm.thefourthfrequency.client_ui.TheFourthFrequencyClient"
+    ],
+    "fabric-datagen": [
+      "com.xm.thefourthfrequency.data.TheFourthFrequencyDataGenerator"
+    ]
+  },
+  "mixins": [
+    "thefourthfrequency.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": ">=0.141.4"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "trend_sample_interval_ticks": 20,
+  "trend_sample_budget": 24,
+  "index_refresh_budget": 8,
+  "trend_search_radius": 48,
+  "animal_stop_distance": 6,
+  "villager_stop_distance": 10,
+  "hostile_stop_distance": 14,
+  "rework_search_radius": 64,
+  "rework_contact_ticks": 80,
+  "rework_spawn_interval_ticks": 1200,
+  "empty_segment_min_interval_ticks": 72000,
+  "excavation_blocks": [
+    "minecraft:cobblestone",
+    "minecraft:stone",
+    "minecraft:deepslate",
+    "minecraft:dirt",
+    "minecraft:gravel"
+  ]
+}

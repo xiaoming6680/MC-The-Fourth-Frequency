@@ -1,0 +1,14 @@
+[
+  {"id":"maintenance_handoff","titleKey":"terminal.thefourthfrequency.file.maintenance_handoff.title","lineKeys":[]},
+  {"id":"recovered_fragment","titleKey":"terminal.thefourthfrequency.file.recovered_fragment.title","lineKeys":[]},
+  {"id":"surface_shelter_record","titleKey":"terminal.thefourthfrequency.file.surface_shelter_record.title","lineKeys":["terminal.thefourthfrequency.file.surface_shelter_record.1","terminal.thefourthfrequency.file.surface_shelter_record.2","terminal.thefourthfrequency.file.surface_shelter_record.3"]},
+  {"id":"field_observation_record","titleKey":"terminal.thefourthfrequency.file.field_observation_record.title","lineKeys":["terminal.thefourthfrequency.file.field_observation_record.1","terminal.thefourthfrequency.file.field_observation_record.2","terminal.thefourthfrequency.file.field_observation_record.3"]},
+  {"id":"underground_mine_record","titleKey":"terminal.thefourthfrequency.file.underground_mine_record.title","lineKeys":["terminal.thefourthfrequency.file.underground_mine_record.1","terminal.thefourthfrequency.file.underground_mine_record.2","terminal.thefourthfrequency.file.underground_mine_record.3"]},
+  {"id":"abandoned_warehouse_record","titleKey":"terminal.thefourthfrequency.file.abandoned_warehouse_record.title","lineKeys":["terminal.thefourthfrequency.file.abandoned_warehouse_record.1","terminal.thefourthfrequency.file.abandoned_warehouse_record.2","terminal.thefourthfrequency.file.abandoned_warehouse_record.3"]},
+  {"id":"encrypted_witness_file","titleKey":"terminal.thefourthfrequency.file.encrypted_witness_file.title","lineKeys":[]},
+  {"id":"correction_response_record","titleKey":"terminal.thefourthfrequency.file.correction_response_record.title","lineKeys":["terminal.thefourthfrequency.file.correction_response_record.1","terminal.thefourthfrequency.file.correction_response_record.2","terminal.thefourthfrequency.file.correction_response_record.3"]},
+  {"id":"overworld_fracture_record","titleKey":"terminal.thefourthfrequency.file.overworld_fracture_record.title","lineKeys":["terminal.thefourthfrequency.file.overworld_fracture_record.1","terminal.thefourthfrequency.file.overworld_fracture_record.2","terminal.thefourthfrequency.file.overworld_fracture_record.3"]},
+  {"id":"continuity_report","titleKey":"terminal.thefourthfrequency.file.continuity_report.title","lineKeys":["terminal.thefourthfrequency.file.continuity_report.1","terminal.thefourthfrequency.file.continuity_report.2","terminal.thefourthfrequency.file.continuity_report.3"]},
+  {"id":"body_mapping_warning","titleKey":"terminal.thefourthfrequency.file.body_mapping_warning.title","lineKeys":["terminal.thefourthfrequency.file.body_mapping_warning.1","terminal.thefourthfrequency.file.body_mapping_warning.2","terminal.thefourthfrequency.file.body_mapping_warning.3"]},
+  {"id":"permanent_aftermath_record","titleKey":"terminal.thefourthfrequency.file.permanent_aftermath_record.title","lineKeys":[]}
+]

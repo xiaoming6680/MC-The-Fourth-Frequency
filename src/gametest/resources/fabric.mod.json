@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "thefourthfrequency-test",
+  "version": "1.0.0",
+  "name": "The Fourth Frequency Game Tests",
+  "environment": "*",
+  "entrypoints": {
+    "fabric-gametest": [
+      "com.xm.thefourthfrequency.test.M0GameTests",
+      "com.xm.thefourthfrequency.test.M1GameTests",
+      "com.xm.thefourthfrequency.test.M4GameTests",
+      "com.xm.thefourthfrequency.test.M5GameTests"
+      ,"com.xm.thefourthfrequency.test.M6GameTests"
+      ,"com.xm.thefourthfrequency.test.M7GameTests"
+      ,"com.xm.thefourthfrequency.test.TerminalAnomalyGameTests"
+    ],
+    "fabric-client-gametest": [
+      "com.xm.thefourthfrequency.test.M0ClientGameTest",
+      "com.xm.thefourthfrequency.test.AnomalyClientGameTest",
+      "com.xm.thefourthfrequency.test.ReworkBodyClientGameTest",
+      "com.xm.thefourthfrequency.test.WatcherModelClientGameTest"
+    ]
+  },
+  "depends": {
+    "thefourthfrequency": "*",
+    "fabric-api": "*"
+  }
+}

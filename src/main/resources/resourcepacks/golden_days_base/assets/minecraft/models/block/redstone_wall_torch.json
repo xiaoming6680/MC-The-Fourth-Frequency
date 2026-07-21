@@ -1,0 +1,4 @@
+{
+  "parent": "block/template_torch_wall",
+  "textures": {"torch": "block/redstone_torch"}
+}

@@ -1,0 +1,9 @@
+{
+  "parent": "golden_days:item/template_chest",
+  "textures": {
+    "entity": "entity/chest/christmas",
+    "front": "block/christmas_chest_front",
+    "side": "block/christmas_chest_side",
+    "top": "block/christmas_chest_top"
+  }
+}

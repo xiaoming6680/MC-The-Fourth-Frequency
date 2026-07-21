@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "pattern": [
+    " E ",
+    "CRC",
+    " O "
+  ],
+  "key": {
+    "E": "minecraft:echo_shard",
+    "C": "minecraft:crying_obsidian",
+    "R": "minecraft:recovery_compass",
+    "O": "minecraft:obsidian"
+  },
+  "result": {
+    "id": "thefourthfrequency:termination_spike",
+    "count": 1
+  }
+}

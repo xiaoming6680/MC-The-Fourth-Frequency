@@ -1,0 +1,9 @@
+{
+  "parent": "block/template_table",
+  "textures": {
+    "top": "block/fletching_table_top",
+    "front": "block/fletching_table_front",
+    "side": "block/fletching_table_side",
+    "bottom": "block/oak_planks"
+  }
+}

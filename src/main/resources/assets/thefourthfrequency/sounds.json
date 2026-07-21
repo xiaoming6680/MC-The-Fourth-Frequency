@@ -1,0 +1,116 @@
+{
+  "empty_viewpoint": {
+    "subtitle": "subtitles.thefourthfrequency.empty_viewpoint",
+    "sounds": [
+      { "name": "minecraft:block.wooden_door.close", "type": "event", "volume": 0.65, "pitch": 0.72 },
+      { "name": "minecraft:block.stone.step", "type": "event", "volume": 0.35, "pitch": 0.55 }
+    ]
+  },
+  "empty_base": {
+    "subtitle": "subtitles.thefourthfrequency.empty_base",
+    "sounds": [
+      { "name": "minecraft:block.chest.close", "type": "event", "volume": 0.7, "pitch": 0.76 },
+      { "name": "minecraft:block.wooden_door.close", "type": "event", "volume": 0.4, "pitch": 0.62 }
+    ]
+  },
+  "empty_experience": {
+    "subtitle": "subtitles.thefourthfrequency.empty_experience",
+    "sounds": [
+      { "name": "minecraft:block.stone.place", "type": "event", "volume": 0.55, "pitch": 0.56 },
+      { "name": "minecraft:item.armor.equip_chain", "type": "event", "volume": 0.35, "pitch": 0.48 }
+    ]
+  },
+  "fourth_band": {
+    "subtitle": "subtitles.thefourthfrequency.fourth_band",
+    "sounds": [
+      { "name": "minecraft:block.amethyst_block.chime", "type": "event", "volume": 0.65, "pitch": 0.52 },
+      { "name": "minecraft:block.sculk_sensor.clicking", "type": "event", "volume": 0.32, "pitch": 0.64 }
+    ]
+  },
+  "rework_joint": {
+    "subtitle": "subtitles.thefourthfrequency.rework_joint",
+    "sounds": [
+      "thefourthfrequency:entity/rework/joint/01",
+      "thefourthfrequency:entity/rework/joint/02"
+    ]
+  },
+  "misread_body": {
+    "subtitle": "subtitles.thefourthfrequency.misread_body",
+    "sounds": [
+      "thefourthfrequency:entity/misread/body/01",
+      "thefourthfrequency:entity/misread/body/02"
+    ]
+  },
+  "misread_adaptation": {
+    "subtitle": "subtitles.thefourthfrequency.misread_adaptation",
+    "sounds": [
+      "thefourthfrequency:entity/misread/adaptation/operator",
+      "thefourthfrequency:entity/misread/adaptation/builder",
+      "thefourthfrequency:entity/misread/adaptation/miner"
+    ]
+  },
+  "termination": {
+    "subtitle": "subtitles.thefourthfrequency.termination",
+    "sounds": [
+      { "name": "minecraft:block.beacon.deactivate", "type": "event", "volume": 0.65, "pitch": 0.82 },
+      { "name": "minecraft:block.amethyst_block.break", "type": "event", "volume": 0.50, "pitch": 0.68 }
+    ]
+  },
+  "anomaly_echo": {
+    "subtitle": "subtitles.thefourthfrequency.anomaly_echo",
+    "sounds": [{ "name": "minecraft:block.iron_door.close", "type": "event", "volume": 0.46, "pitch": 0.68 }]
+  },
+  "window_glitch": {
+    "subtitle": "subtitles.thefourthfrequency.window_glitch",
+    "sounds": [{ "name": "minecraft:block.beacon.deactivate", "type": "event", "volume": 0.38, "pitch": 0.92 }]
+  },
+  "door_cascade": {
+    "subtitle": "subtitles.thefourthfrequency.door_cascade",
+    "sounds": [{ "name": "minecraft:block.iron_door.close", "type": "event", "volume": 0.72, "pitch": 0.61 }]
+  },
+  "rule_collapse": {
+    "subtitle": "subtitles.thefourthfrequency.rule_collapse",
+    "sounds": [{ "name": "minecraft:block.respawn_anchor.deplete", "type": "event", "volume": 0.82, "pitch": 0.48 }]
+  },
+  "terminal_click": {
+    "subtitle": "subtitles.thefourthfrequency.terminal_click",
+    "sounds": [
+      "thefourthfrequency:device/terminal/click/01",
+      "thefourthfrequency:device/terminal/click/02",
+      "thefourthfrequency:device/terminal/click/03",
+      "thefourthfrequency:device/terminal/click/04"
+    ]
+  },
+  "terminal_tune": {
+    "subtitle": "subtitles.thefourthfrequency.terminal_tune",
+    "sounds": [
+      "thefourthfrequency:device/terminal/tune/loop"
+    ]
+  },
+  "terminal_lock": {
+    "subtitle": "subtitles.thefourthfrequency.terminal_lock",
+    "sounds": [
+      "thefourthfrequency:device/terminal/lock/01",
+      "thefourthfrequency:device/terminal/lock/02"
+    ]
+  },
+  "terminal_fault": {
+    "subtitle": "subtitles.thefourthfrequency.terminal_fault",
+    "sounds": [
+      "thefourthfrequency:device/terminal/fault/01",
+      "thefourthfrequency:device/terminal/fault/02"
+    ]
+  },
+  "terminal_password": {
+    "subtitle": "subtitles.thefourthfrequency.terminal_password",
+    "sounds": [
+      "thefourthfrequency:device/terminal/password/01"
+    ]
+  },
+  "terminal_anomaly": {
+    "subtitle": "subtitles.thefourthfrequency.terminal_anomaly",
+    "sounds": [
+      "thefourthfrequency:device/terminal/anomaly/01"
+    ]
+  }
+}

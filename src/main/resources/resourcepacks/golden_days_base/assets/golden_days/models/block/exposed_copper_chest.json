@@ -1,0 +1,8 @@
+{
+  "parent": "golden_days:block/template_chest",
+  "textures": {
+    "front": "block/exposed_copper_chest_front",
+    "side": "block/exposed_copper_chest_side",
+    "top": "block/exposed_copper"
+  }
+}

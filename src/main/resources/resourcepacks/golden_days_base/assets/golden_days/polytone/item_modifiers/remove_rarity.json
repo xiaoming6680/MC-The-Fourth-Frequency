@@ -1,0 +1,4 @@
+{
+  "targets": ["minecraft:.*"],
+  "rarity": "common"
+}

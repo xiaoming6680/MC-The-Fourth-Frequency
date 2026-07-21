@@ -1,0 +1,10 @@
+{
+  "parent": "block/template_cauldron",
+  "render_type": "minecraft:translucent",
+  "textures": {
+    "bottom": "minecraft:block/cauldron_bottom",
+    "inside": "minecraft:block/cauldron_inner",
+    "side": "minecraft:block/cauldron_side",
+    "top": "minecraft:block/cauldron_top"
+  }
+}

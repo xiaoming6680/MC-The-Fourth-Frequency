@@ -1,0 +1,4 @@
+{
+  "parent": "minecraft:item/template_trapdoor_item_beta_uv",
+  "textures": {"texture": "minecraft:block/iron_trapdoor"}
+}
