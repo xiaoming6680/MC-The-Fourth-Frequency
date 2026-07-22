@@ -14,6 +14,7 @@ import com.xm.thefourthfrequency.world.ZeroStationLayout;
 import com.xm.thefourthfrequency.world.ZeroStationService;
 import com.xm.thefourthfrequency.world.ResourceGuidanceService;
 import com.xm.thefourthfrequency.world.StoryProgressService;
+import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.SurvivalProgressService;
 import com.xm.thefourthfrequency.world.TerminalLifecycleService;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
@@ -137,7 +138,10 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		ItemStack beforeBinding = findTerminal(player).copy();
 		var orePosition = player.blockPosition().below(2);
 		helper.getLevel().setBlockAndUpdate(orePosition, Blocks.IRON_ORE.defaultBlockState());
-		data.updateTerminalRecord(player.getUUID(), record -> record.putString(TerminalData.TARGET_KIND, "iron"));
+		data.updateTerminalRecord(player.getUUID(), record -> {
+			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, SurvivalMilestone.MINED_LOGS.mask());
+			record.putString(TerminalData.TARGET_KIND, "iron");
+		});
 		ResourceGuidanceService.requestRescan(player);
 		ResourceGuidanceService.updatePlayer(player);
 
@@ -159,8 +163,10 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		helper.getLevel().setBlockAndUpdate(orePosition, Blocks.IRON_ORE.defaultBlockState());
 		ResourceGuidanceService.requestRescan(player);
 		ResourceGuidanceService.updatePlayer(player);
+		helper.assertTrue(TerminalToolService.startGuidance(player, TerminalTool.MINERALS.slot()),
+				"The explicit mineral navigation toggle must accept the located iron target");
 		var navigation = TerminalRuntimeService.navigationSnapshot(player);
-		helper.assertValueEqual(navigation.protocolVersion(), 4, "Navigation protocol version");
+		helper.assertValueEqual(navigation.protocolVersion(), 5, "Navigation protocol version");
 		helper.assertValueEqual(TerminalRuntimeService.navigationSyncTicks(), 4, "Navigation cadence");
 		helper.assertValueEqual(navigation.targetKind(), 1, "Iron navigation kind");
 		helper.assertTrue(navigation.located() && navigation.navigable(),
@@ -242,6 +248,9 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 	public void resourceSelectionIsExplicitAndIgnoresInventoryGuessing(GameTestHelper helper) {
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
 		ServerPlayer miner = helper.makeMockServerPlayerInLevel();
+		data.updateTerminalRecord(miner.getUUID(), record -> record.putInt(
+				TerminalData.SURVIVAL_MILESTONE_MASK,
+				SurvivalMilestone.MINED_LOGS.mask() | SurvivalMilestone.RETURNED_NETHER.mask()));
 		miner.getInventory().add(new ItemStack(Items.IRON_INGOT));
 		miner.getInventory().add(new ItemStack(Items.IRON_PICKAXE));
 		helper.assertTrue(TerminalToolService.selectResource(miner, TerminalResource.DIAMOND.wireId()),
@@ -249,8 +258,18 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		helper.assertValueEqual(data.terminalRecord(miner.getUUID()).orElseThrow()
 				.getStringOr(TerminalData.TARGET_KIND, ""), "diamond",
 				"The chosen diamond target must not be replaced by an inventory guess");
+		helper.assertValueEqual(data.terminalRecord(miner.getUUID()).orElseThrow()
+				.getIntOr(TerminalData.ACTIVE_GUIDANCE_TOOL, TerminalToolService.NO_TOOL),
+				TerminalToolService.NO_TOOL, "Choosing a target must wait for the separate navigation toggle");
+		helper.assertTrue(TerminalToolService.startGuidance(miner, TerminalTool.MINERALS.slot()),
+				"The single navigation toggle can start the chosen resource target");
 
 		ServerPlayer crafter = helper.makeMockServerPlayerInLevel();
+		data.updateTerminalRecord(crafter.getUUID(), record -> {
+			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK,
+					SurvivalMilestone.MINED_LOGS.mask() | SurvivalMilestone.IRON.mask());
+			record.putLong(TerminalData.GUIDANCE_STALLED_TICKS, 6_000L);
+		});
 		crafter.getInventory().add(new ItemStack(Items.IRON_INGOT));
 		helper.assertTrue(TerminalToolService.selectResource(crafter, TerminalResource.REDSTONE.wireId()),
 				"Redstone must be an accepted fixed resource control value");

@@ -1,22 +1,39 @@
-# Gradle
+# Gradle and JVM build output
 .gradle/
 build/
 **/build/
+out/
+bin/
+*.class
+*.hprof
+hs_err_pid*
+replay_pid*
 
 # Fabric Loom and local Minecraft runtime
 run/
+runs/
 remappedSrc/
 src/main/generated/
 logs/
 crash-reports/
 *.log
 
-# Java
-out/
-bin/
-*.class
-hs_err_pid*
-replay_pid*
+# Python asset-generation tools
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Project-local scratch output
 /tmp/
 
 # IDEs and editors
@@ -28,23 +45,34 @@ replay_pid*
 .classpath
 .project
 .settings/
+*.swp
+*.swo
+*~
 
 # Local environment and signing material
 .env
 .env.*
 !.env.example
 local.properties
+secrets.properties
+keystore.properties
 *.jks
 *.keystore
 *.p12
 *.pfx
 
-# Operating system files
-.DS_Store
-Thumbs.db
-Desktop.ini
-
-# Local planning notes (public documentation lives in docs/)
+# Local Codex/agent state and planning notes
+/.agents/
+/.codex/
+/.planning/
 /task_plan.md
 /findings.md
 /progress.md
+
+# Operating system files
+.DS_Store
+.Spotlight-V100/
+.Trashes/
+Thumbs.db
+ehthumbs.db
+Desktop.ini

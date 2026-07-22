@@ -1,7 +1,7 @@
 package com.xm.thefourthfrequency.mixin;
 
 import com.xm.thefourthfrequency.client_ui.AnomalyPresentationController;
-import com.xm.thefourthfrequency.client_ui.AtmosphericFogProfile;
+import com.xm.thefourthfrequency.client_ui.DimensionViewDistanceController;
 import java.io.File;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
@@ -18,17 +18,17 @@ public abstract class OptionsAnomalyMixin {
 	@Inject(method = "<init>", at = @At("TAIL"))
 	private void thefourthfrequency$lockInitialRenderDistance(Minecraft client, File optionsFile,
 			CallbackInfo callback) {
-		thefourthfrequency$forceThreeChunkOption();
+		thefourthfrequency$forceLockedRenderDistance(client);
 	}
 
 	@Inject(method = "load", at = @At("RETURN"))
 	private void thefourthfrequency$lockLoadedRenderDistance(CallbackInfo callback) {
-		thefourthfrequency$forceThreeChunkOption();
+		thefourthfrequency$forceLockedRenderDistance(Minecraft.getInstance());
 	}
 
 	@Inject(method = "save", at = @At("HEAD"))
 	private void thefourthfrequency$lockSavedRenderDistance(CallbackInfo callback) {
-		thefourthfrequency$forceThreeChunkOption();
+		thefourthfrequency$forceLockedRenderDistance(Minecraft.getInstance());
 	}
 
 	@Inject(method = "getFinalSoundSourceVolume", at = @At("HEAD"), cancellable = true)
@@ -39,12 +39,15 @@ public abstract class OptionsAnomalyMixin {
 
 	@Inject(method = "getEffectiveRenderDistance", at = @At("RETURN"), cancellable = true)
 	private void thefourthfrequency$fixedRenderDistance(CallbackInfoReturnable<Integer> callback) {
-		callback.setReturnValue(Math.min(callback.getReturnValue(),
-				AtmosphericFogProfile.FIXED_RENDER_DISTANCE_CHUNKS));
+		if (DimensionViewDistanceController.isLocked()) {
+			callback.setReturnValue(DimensionViewDistanceController.lockedChunks(Minecraft.getInstance()));
+		}
 	}
 
 	@Unique
-	private void thefourthfrequency$forceThreeChunkOption() {
-		((Options) (Object) this).renderDistance().set(AtmosphericFogProfile.FIXED_RENDER_DISTANCE_CHUNKS);
+	private void thefourthfrequency$forceLockedRenderDistance(Minecraft client) {
+		if (DimensionViewDistanceController.isLocked()) {
+			((Options) (Object) this).renderDistance().set(DimensionViewDistanceController.lockedChunks(client));
+		}
 	}
 }

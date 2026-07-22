@@ -3,95 +3,58 @@ package com.xm.thefourthfrequency.config;
 public record ModConfig(
 		Meta meta,
 		Pacing pacing,
-		Limits limits,
 		ClientState clientState
 ) {
 	public static ModConfig defaults() {
-		return new ModConfig(Meta.defaults(), Pacing.defaults(), Limits.defaults(), ClientState.defaults());
+		return new ModConfig(Meta.defaults(), Pacing.defaults(), ClientState.defaults());
 	}
 
 	public ModConfig validated() {
 		return new ModConfig(
 				meta == null ? Meta.defaults() : meta.validated(),
-				pacing == null ? Pacing.defaults() : pacing.validated(),
-				limits == null ? Limits.defaults() : limits.validated(),
+				pacing == null ? Pacing.defaults() : pacing,
 				clientState == null ? ClientState.defaults() : clientState
 		);
 	}
 
 	public ModConfig withClientState(ClientState updatedClientState) {
-		return new ModConfig(meta, pacing, limits, updatedClientState).validated();
+		return new ModConfig(meta, pacing, updatedClientState).validated();
 	}
 
 	public record Meta(
 			boolean enabled,
-			boolean subtitlesEnabled,
 			double peakVolume
 	) {
 		private static Meta defaults() {
-			return new Meta(true, true, 0.8D);
+			return new Meta(true, 0.8D);
 		}
 
 		private Meta validated() {
-			return new Meta(enabled, subtitlesEnabled, clamp(peakVolume, 0.0D, 1.0D));
+			return new Meta(enabled, clamp(peakVolume, 0.0D, 1.0D));
 		}
 	}
 
-	public record Pacing(
-			boolean developerAcceleration,
-			int productionHours,
-			int acceleratedMinutes,
-			int ambientAnomalyMinMinutes,
-			int ambientAnomalyMaxMinutes
-	) {
+	public record Pacing(boolean developerAcceleration) {
 		private static Pacing defaults() {
-			return new Pacing(false, 8, 3, 5, 10);
-		}
-
-		private Pacing validated() {
-			int minimum = ambientAnomalyMinMinutes <= 0
-					? 5 : clamp(ambientAnomalyMinMinutes, 1, 60);
-			int maximum = ambientAnomalyMaxMinutes <= 0
-					? 10 : clamp(ambientAnomalyMaxMinutes, minimum, 120);
-			return new Pacing(
-					developerAcceleration,
-					clamp(productionHours, 6, 10),
-					clamp(acceleratedMinutes, 1, 30),
-					minimum,
-					maximum
-			);
-		}
-	}
-
-	public record Limits(int correctionWorkBudgetPerTick) {
-		private static Limits defaults() {
-			return new Limits(64);
-		}
-
-		private Limits validated() {
-			return new Limits(clamp(correctionWorkBudgetPerTick, 8, 512));
+			return new Pacing(false);
 		}
 	}
 
 	public record ClientState(
-			boolean safetyNoticeAcknowledged,
-			boolean alphaDowngradeComplete
+			boolean alphaDowngradeComplete,
+			boolean viewDistanceUnlocked
 	) {
 		private static ClientState defaults() {
 			return new ClientState(false, false);
 		}
 
-		public ClientState acknowledgeSafetyNotice() {
-			return new ClientState(true, alphaDowngradeComplete);
-		}
-
 		public ClientState completeAlphaDowngrade() {
-			return new ClientState(safetyNoticeAcknowledged, true);
+			return new ClientState(true, viewDistanceUnlocked);
 		}
-	}
 
-	private static int clamp(int value, int minimum, int maximum) {
-		return Math.max(minimum, Math.min(maximum, value));
+		public ClientState unlockViewDistance() {
+			return new ClientState(alphaDowngradeComplete, true);
+		}
 	}
 
 	private static double clamp(double value, double minimum, double maximum) {

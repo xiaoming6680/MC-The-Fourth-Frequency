@@ -179,10 +179,12 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 				&& notice.acknowledgementAvailableForTesting(), 160);
 		context.runOnClient(client -> {
 			if (client.screen instanceof FirstRunNoticeScreen notice) notice.acknowledgeForTesting();
-			if (!FirstRunNoticeController.acknowledgedForTesting())
-				throw new AssertionError("First-run notice could not be acknowledged before anomaly fixture setup");
 		});
-		context.waitTicks(2);
+		context.waitFor(client -> FirstRunNoticeController.acknowledgedForTesting(), 100);
+		context.runOnClient(client -> {
+			if (!FirstRunNoticeController.acknowledgedForTesting())
+				throw new AssertionError("First-run notice transition did not finish before anomaly fixture setup");
+		});
 	}
 
 	private static FixtureState prepareFixture(MinecraftServer server, AnomalyClientScenario scenario) {

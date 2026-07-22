@@ -3,7 +3,6 @@ package com.xm.thefourthfrequency.world;
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.state.NavigationState;
 import com.xm.thefourthfrequency.terminal.TerminalStructureTarget;
-import com.xm.thefourthfrequency.terminal.TerminalTool;
 import com.xm.thefourthfrequency.terminal.TerminalToolService;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -64,8 +63,6 @@ public final class StructureNavigationService {
 			NavigationState state = new NavigationState(target.id(), "", found != null, target.id(),
 					found == null ? 0L : found.asLong(), found == null ? "" : dimension, now);
 			state.writeTo(record);
-			record.putInt(TerminalData.ACTIVE_GUIDANCE_TOOL,
-					found == null ? TerminalToolService.NO_TOOL : TerminalTool.NAVIGATION.slot());
 		});
 		player.displayClientMessage(Component.translatable(found == null
 				? "message.thefourthfrequency.navigation.not_found"

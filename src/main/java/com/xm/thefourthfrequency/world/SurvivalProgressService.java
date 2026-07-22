@@ -16,6 +16,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.stats.Stats;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -26,7 +27,9 @@ import java.util.List;
 
 /** Server-authoritative vanilla-survival milestones replacing the legacy timed body counter. */
 public final class SurvivalProgressService {
-	public static final int REQUIRED_LOGS = 7;
+	public static final int REQUIRED_WOOD = 7;
+	/** Stable compatibility alias for older tests and saved objective wording. */
+	public static final int REQUIRED_LOGS = REQUIRED_WOOD;
 	public static final int REQUIRED_BLAZE_RODS = 6;
 	private static final int SCENE_ANOMALY = 1;
 	private static final int SCENE_CORRECTION = 1 << 1;
@@ -52,10 +55,10 @@ public final class SurvivalProgressService {
 		CompoundTag before = data.terminalRecord(player.getUUID()).orElse(null);
 		if (before == null) return;
 		int oldMask = before.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0);
-		int wood = Math.max(before.getIntOr(TerminalData.WOOD_MINED_COUNT, 0), minedLogs(player));
+		int wood = Math.max(before.getIntOr(TerminalData.WOOD_MINED_COUNT, 0), collectedWood(player));
 		int blazeRods = Math.max(before.getIntOr(TerminalData.BLAZE_ROD_SAMPLE_COUNT, 0), blazeRodSamples(player));
 		int add = 0;
-		if (wood >= REQUIRED_LOGS) add |= SurvivalMilestone.MINED_LOGS.mask();
+		if (wood >= REQUIRED_WOOD) add |= SurvivalMilestone.MINED_LOGS.mask();
 		if (hasHome(player, before)) add |= SurvivalMilestone.HOME.mask();
 		if (hasAny(player, Items.RAW_IRON, Items.IRON_INGOT)) add |= SurvivalMilestone.IRON.mask();
 		if (preparedForNether(player)) add |= SurvivalMilestone.PREPARED_NETHER.mask();
@@ -74,7 +77,7 @@ public final class SurvivalProgressService {
 				|| blazeRods != before.getIntOr(TerminalData.BLAZE_ROD_SAMPLE_COUNT, 0)) {
 			data.updateTerminalRecord(player.getUUID(), tag -> {
 				tag.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, newMask);
-				tag.putInt(TerminalData.WOOD_MINED_COUNT, Math.clamp(wood, 0, REQUIRED_LOGS));
+				tag.putInt(TerminalData.WOOD_MINED_COUNT, Math.clamp(wood, 0, REQUIRED_WOOD));
 				tag.putInt(TerminalData.BLAZE_ROD_SAMPLE_COUNT, Math.clamp(blazeRods, 0, REQUIRED_BLAZE_RODS));
 			});
 		}
@@ -103,15 +106,33 @@ public final class SurvivalProgressService {
 		}
 	}
 
-	public static int minedLogs(ServerPlayer player) {
-		int count = 0;
+	public static int collectedWood(ServerPlayer player) {
+		int mined = 0;
 		for (Block block : BuiltInRegistries.BLOCK) {
-			if (block.defaultBlockState().is(BlockTags.LOGS)) {
-				count += player.getStats().getValue(Stats.BLOCK_MINED, block);
-				if (count >= REQUIRED_LOGS) return REQUIRED_LOGS;
+			if (isWoodMaterial(block)) {
+				mined += player.getStats().getValue(Stats.BLOCK_MINED, block);
+				if (mined >= REQUIRED_WOOD) return REQUIRED_WOOD;
 			}
 		}
-		return Math.max(0, count);
+		int carried = 0;
+		for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+			ItemStack stack = player.getInventory().getItem(slot);
+			if (stack.getItem() instanceof BlockItem blockItem && isWoodMaterial(blockItem.getBlock())) {
+				carried += stack.getCount();
+				if (carried >= REQUIRED_WOOD) return REQUIRED_WOOD;
+			}
+		}
+		return Math.clamp(Math.max(mined, carried), 0, REQUIRED_WOOD);
+	}
+
+	/** Kept as a source-compatible probe; the opening task now accepts logs and planks of every wood family. */
+	public static int minedLogs(ServerPlayer player) {
+		return collectedWood(player);
+	}
+
+	private static boolean isWoodMaterial(Block block) {
+		return block.defaultBlockState().is(BlockTags.LOGS)
+				|| block.defaultBlockState().is(BlockTags.PLANKS);
 	}
 
 	public static int blazeRodSamples(ServerPlayer player) {

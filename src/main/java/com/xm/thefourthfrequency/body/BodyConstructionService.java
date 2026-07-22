@@ -2,7 +2,6 @@ package com.xm.thefourthfrequency.body;
 
 import com.xm.thefourthfrequency.audio.AudioService;
 
-import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
 import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.networking.PrivateAnomalyPayload;
@@ -245,18 +244,5 @@ public final class BodyConstructionService {
 
 	public static int buildBudgetPerTick() {
 		return BUILD_BUDGET_PER_TICK;
-	}
-
-	public static long pacingTicks() {
-		return RuntimeServices.config().pacing().developerAcceleration()
-				? RuntimeServices.config().pacing().acceleratedMinutes() * 60L * 20L
-				: RuntimeServices.config().pacing().productionHours() * 60L * 60L * 20L;
-	}
-
-	public static int projectTimedProgress(int current, long elapsedTicks, long totalTicks) {
-		if (totalTicks <= 0) {
-			throw new IllegalArgumentException("Legacy pacing must be positive");
-		}
-		return Math.clamp(current + (int) (Math.max(0L, elapsedTicks) * 1000L / totalTicks), 0, 1000);
 	}
 }

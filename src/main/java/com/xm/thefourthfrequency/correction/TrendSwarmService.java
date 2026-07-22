@@ -23,28 +23,26 @@ public final class TrendSwarmService {
 		CorrectionSpatialIndex.initialize();
 	}
 
-	public static int updateServer(MinecraftServer server) {
+	public static void updateServer(MinecraftServer server) {
 		if (parameters == null) {
 			throw new IllegalStateException("Trend swarm service is not initialized");
 		}
-		int work = CorrectionSpatialIndex.refresh(parameters.indexRefreshBudget());
+		CorrectionSpatialIndex.refresh(parameters.indexRefreshBudget());
 		FrequencyWorldData data = FrequencyWorldData.get(server);
 		if (!CorrectionState.active(data)
 				|| server.getTickCount() % parameters.trendSampleIntervalTicks() != 0) {
-			return work;
+			return;
 		}
 		ServerLevel level = server.overworld();
 		Optional<CorrectionTarget> target = CorrectionTargetService.blockTargets(level).stream().findFirst();
 		if (target.isEmpty()) {
-			return work;
+			return;
 		}
 		BlockPos targetPosition = target.get().position();
 		for (Mob mob : CorrectionSpatialIndex.sampleNear(level, targetPosition,
 				parameters.trendSearchRadius(), parameters.trendSampleBudget())) {
 			applyTrend(mob, targetPosition);
-			work++;
 		}
-		return work;
 	}
 
 	public static void applyTrend(Mob mob, BlockPos target) {

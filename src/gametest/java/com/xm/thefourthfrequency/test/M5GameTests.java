@@ -1,6 +1,5 @@
 package com.xm.thefourthfrequency.test;
 
-import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
 import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.correction.CorrectionOrganService;
@@ -116,10 +115,6 @@ public final class M5GameTests implements CustomTestMethodInvoker {
 				}
 				helper.assertTrue(bracePresent,
 						"Dismantling must include an actual purposeful placement action");
-				var state = CorrectionState.get(worldData);
-				helper.assertTrue(state.getIntOr("maximum_tick_work", 0)
-						<= RuntimeServices.config().limits().correctionWorkBudgetPerTick(),
-						"Observed correction work must stay within the configured global budget");
 				terminalCarrier.snapTo(body.getX() + 1.0, body.getY(), body.getZ(), 0.0F, 0.0F);
 				body.snapTo(terminalCarrier.getX() + 1.0, terminalCarrier.getY(), terminalCarrier.getZ(),
 						0.0F, 0.0F);
@@ -313,8 +308,7 @@ public final class M5GameTests implements CustomTestMethodInvoker {
 			for (String key : new String[] {
 					"active", "nascent_organ_pos", "nascent_organ_dismantled", "anomaly_traces",
 					"terminal_facility_pos", "last_dismantled_target", "rework_entity_uuid",
-					"rework_entity_pos", "last_rework_spawn_tick", "rework_spawn_count",
-					"maximum_tick_work", "last_tick_work"
+					"rework_entity_pos", "last_rework_spawn_tick", "rework_spawn_count"
 			}) state.remove(key);
 			state.putInt("dismantle_count", 0);
 		});

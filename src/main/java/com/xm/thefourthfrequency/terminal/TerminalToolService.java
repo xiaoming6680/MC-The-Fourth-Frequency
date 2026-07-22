@@ -179,11 +179,9 @@ public final class TerminalToolService {
 		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
 		data.updateTerminalRecord(player.getUUID(), record -> {
 			record.putInt(TerminalData.SELECTED_RESOURCE, resource.wireId());
-			record.putInt(TerminalData.ACTIVE_GUIDANCE_TOOL, TerminalTool.MINERALS.slot());
 			NavigationState.read(record).select(resource.id(), resourceItem(resource)).writeTo(record);
 		});
 		ResourceGuidanceService.restartScan(player, false);
-		guidanceFeedback(player, tag.getIntOr(TerminalData.ACTIVE_GUIDANCE_TOOL, NO_TOOL), TerminalTool.MINERALS);
 		return true;
 	}
 
@@ -192,8 +190,6 @@ public final class TerminalToolService {
 		if (tag == null || blockedByCorrection(player, tag)
 				|| selectedResource(tag) == TerminalResource.NONE
 				|| !resourceAvailable(tag, selectedResource(tag))) return false;
-		FrequencyWorldData.get(player.level().getServer()).updateTerminalRecord(player.getUUID(), record ->
-				record.putInt(TerminalData.ACTIVE_GUIDANCE_TOOL, TerminalTool.MINERALS.slot()));
 		ResourceGuidanceService.restartScan(player, true);
 		return true;
 	}

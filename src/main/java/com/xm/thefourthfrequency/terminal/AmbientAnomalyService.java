@@ -2,7 +2,6 @@ package com.xm.thefourthfrequency.terminal;
 
 import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
 import com.xm.thefourthfrequency.content.TerminalData;
-import com.xm.thefourthfrequency.ending.EndingOutcome;
 import com.xm.thefourthfrequency.ending.EndingState;
 import com.xm.thefourthfrequency.state.AnomalyState;
 import com.xm.thefourthfrequency.state.StoryState;
@@ -51,7 +50,7 @@ public final class AmbientAnomalyService {
 		AnomalyState anomaly = AnomalyState.read(record);
 		if (!story.bound() || !EndingState.activeAnomaliesAllowed(data) || anomaly.suspended()) return;
 		long now = player.level().getGameTime();
-		boolean endingActive = EndingState.started(data) && EndingState.outcome(data) == EndingOutcome.ACTIVE;
+		boolean endingActive = EndingState.endingPressureActive(data);
 		int ceiling = AnomalyIntensity.survivalStoryCeiling(story.bound(), story.bandStage(),
 				story.localFileUnlocked() || story.riftObserved(),
 				story.continuityLearned() || record.getBooleanOr(TerminalData.NETHER_RIFT_OBSERVED, false),
@@ -191,22 +190,4 @@ public final class AmbientAnomalyService {
 		data.updateTerminalRecord(player.getUUID(), tag -> AnomalyState.read(tag).scheduled(now + delay).writeTo(tag));
 	}
 
-	public static long intervalTicks(ServerPlayer player, boolean first) {
-		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
-		CompoundTag tag = data.terminalRecord(player.getUUID()).orElse(new CompoundTag());
-		if (RuntimeServices.config().pacing().developerAcceleration()) return first ? 100L : 200L;
-		AnomalyState anomaly = AnomalyState.read(tag);
-		return AnomalyIntensity.intervalTicks(Math.max(1, anomaly.tier()), anomaly.heat(),
-				player.getRandom().nextInt(), first);
-	}
-
-	/** Legacy pure helper retained for old tests and configuration migrations. */
-	public static long intervalTicks(int minimumMinutes, int maximumMinutes, int randomValue,
-			boolean first, boolean accelerated) {
-		if (accelerated) return first ? 100L : 200L;
-		if (first) return AnomalyIntensity.intervalTicks(1, 0, randomValue, true);
-		int minimum = Math.max(1, minimumMinutes);
-		int maximum = Math.max(minimum, maximumMinutes);
-		return (minimum + Math.floorMod(randomValue, maximum - minimum + 1)) * 60L * 20L;
-	}
 }

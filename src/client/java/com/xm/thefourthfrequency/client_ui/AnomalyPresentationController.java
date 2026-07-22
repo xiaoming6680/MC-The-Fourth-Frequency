@@ -722,6 +722,8 @@ public final class AnomalyPresentationController {
 	}
 	public static Set<Integer> misreadSlotsForTesting() { return Set.copyOf(MISREAD_SLOTS); }
 	public static BlockState visualReplacement(BlockPos pos, BlockState original) {
+		BlockState endingReplacement = WorldInterfacePresentationController.failureBlockReplacement(pos, original);
+		if (endingReplacement != original) return endingReplacement;
 		Minecraft client = Minecraft.getInstance();
 		if (client.level == null) return original;
 		TracePosition trace = new TracePosition(client.level.dimension().identifier().toString(), pos);

@@ -1,7 +1,6 @@
 package com.xm.thefourthfrequency.correction;
 
 import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
-import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.content.ModEntities;
 import com.xm.thefourthfrequency.entity.ReworkEntity;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
@@ -32,8 +31,6 @@ public final class CorrectionOrganService {
 		parameters = CorrectionDefinitionLoader.load();
 		TrendSwarmService.initialize(parameters);
 		ServerTickEvents.END_SERVER_TICK.register(CorrectionOrganService::updateServer);
-		TheFourthFrequency.LOGGER.info("Correction organs are ready with a {}-unit configured work budget",
-				RuntimeServices.config().limits().correctionWorkBudgetPerTick());
 	}
 
 	public static void updateServer(MinecraftServer server) {
@@ -44,12 +41,8 @@ public final class CorrectionOrganService {
 		if (!CorrectionState.active(FrequencyWorldData.get(server))) {
 			return;
 		}
-		int work = TrendSwarmService.updateServer(server);
-		if (work < RuntimeServices.config().limits().correctionWorkBudgetPerTick()) {
-			ensureReworkBody(server);
-			work++;
-		}
-		CorrectionState.recordBudget(FrequencyWorldData.get(server), work);
+		TrendSwarmService.updateServer(server);
+		ensureReworkBody(server);
 	}
 
 	private static void ensureReworkBody(MinecraftServer server) {

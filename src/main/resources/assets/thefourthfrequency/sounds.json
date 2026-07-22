@@ -112,5 +112,129 @@
     "sounds": [
       "thefourthfrequency:device/terminal/anomaly/01"
     ]
+  },
+  "world_interface_altar": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.altar",
+    "sounds": [
+      "thefourthfrequency:world_interface/altar/01",
+      "thefourthfrequency:world_interface/altar/02",
+      "thefourthfrequency:world_interface/altar/03",
+      "thefourthfrequency:world_interface/altar/04"
+    ]
+  },
+  "world_interface_terminal": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.terminal",
+    "sounds": [
+      "thefourthfrequency:world_interface/terminal/01",
+      "thefourthfrequency:world_interface/terminal/02",
+      "thefourthfrequency:world_interface/terminal/03",
+      "thefourthfrequency:world_interface/terminal/04"
+    ]
+  },
+  "world_interface_anchor": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.anchor",
+    "sounds": [
+      "thefourthfrequency:world_interface/anchor/01",
+      "thefourthfrequency:world_interface/anchor/02",
+      "thefourthfrequency:world_interface/anchor/03"
+    ]
+  },
+  "world_interface_gateway_purple": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.gateway_purple",
+    "sounds": [{"name":"thefourthfrequency:world_interface/gateway_purple/01","stream":true,"volume":0.6}]
+  },
+  "world_interface_gateway_gold": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.gateway_gold",
+    "sounds": [{"name":"thefourthfrequency:world_interface/gateway_gold/01","stream":true,"volume":0.6}]
+  },
+  "world_interface_gateway_red": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.gateway_red",
+    "sounds": [{"name":"thefourthfrequency:world_interface/gateway_red/01","stream":true,"volume":0.6}]
+  },
+  "world_interface_summon": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.summon",
+    "sounds": [
+      "thefourthfrequency:world_interface/summon/01",
+      "thefourthfrequency:world_interface/summon/02",
+      "thefourthfrequency:world_interface/summon/03"
+    ]
+  },
+  "world_interface_ambient_1": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.ambient_1",
+    "sounds": [{"name":"thefourthfrequency:world_interface/ambient_form_1/01","stream":true,"volume":0.42}]
+  },
+  "world_interface_ambient_2": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.ambient_2",
+    "sounds": [{"name":"thefourthfrequency:world_interface/ambient_form_2/01","stream":true,"volume":0.46}]
+  },
+  "world_interface_ambient_3": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.ambient_3",
+    "sounds": [{"name":"thefourthfrequency:world_interface/ambient_form_3/01","stream":true,"volume":0.5}]
+  },
+  "world_interface_morph": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.morph",
+    "sounds": [
+      "thefourthfrequency:world_interface/morph/01",
+      "thefourthfrequency:world_interface/morph/02",
+      "thefourthfrequency:world_interface/morph/03",
+      "thefourthfrequency:world_interface/morph/04"
+    ]
+  },
+  "world_interface_laser": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.laser",
+    "sounds": ["thefourthfrequency:world_interface/laser/01","thefourthfrequency:world_interface/laser/02","thefourthfrequency:world_interface/laser/03"]
+  },
+  "world_interface_orb": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.orb",
+    "sounds": ["thefourthfrequency:world_interface/orb/01","thefourthfrequency:world_interface/orb/02","thefourthfrequency:world_interface/orb/03"]
+  },
+  "world_interface_grab": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.grab",
+    "sounds": ["thefourthfrequency:world_interface/grab/01","thefourthfrequency:world_interface/grab/02","thefourthfrequency:world_interface/grab/03"]
+  },
+  "world_interface_mental": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.mental",
+    "sounds": [
+      {"name":"thefourthfrequency:world_interface/mental/01","volume":0.52},
+      {"name":"thefourthfrequency:world_interface/mental/02","volume":0.52},
+      {"name":"thefourthfrequency:world_interface/mental/03","volume":0.52}
+    ]
+  },
+  "world_interface_weapon": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.weapon",
+    "sounds": ["thefourthfrequency:world_interface/weapon/01","thefourthfrequency:world_interface/weapon/02","thefourthfrequency:world_interface/weapon/03"]
+  },
+  "world_interface_throw": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.throw",
+    "sounds": ["thefourthfrequency:world_interface/throw/01","thefourthfrequency:world_interface/throw/02","thefourthfrequency:world_interface/throw/03"]
+  },
+  "world_interface_hotbar": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.hotbar",
+    "sounds": ["thefourthfrequency:world_interface/hotbar/01","thefourthfrequency:world_interface/hotbar/02","thefourthfrequency:world_interface/hotbar/03"]
+  },
+  "world_interface_arrow": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.arrow",
+    "sounds": ["thefourthfrequency:world_interface/arrow/01","thefourthfrequency:world_interface/arrow/02","thefourthfrequency:world_interface/arrow/03"]
+  },
+  "world_interface_expulsion": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.expulsion",
+    "sounds": [
+      {"name":"thefourthfrequency:world_interface/expulsion/01","volume":0.48},
+      {"name":"thefourthfrequency:world_interface/expulsion/02","volume":0.48},
+      {"name":"thefourthfrequency:world_interface/expulsion/03","volume":0.48}
+    ]
+  },
+  "world_interface_success": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.success",
+    "sounds": ["thefourthfrequency:world_interface/success/01","thefourthfrequency:world_interface/success/02","thefourthfrequency:world_interface/success/03"]
+  },
+  "world_interface_failure": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.failure",
+    "sounds": [
+      "thefourthfrequency:world_interface/failure/01",
+      "thefourthfrequency:world_interface/failure/02",
+      "thefourthfrequency:world_interface/failure/03",
+      "thefourthfrequency:world_interface/failure/04"
+    ]
   }
 }

@@ -59,6 +59,7 @@ import java.util.UUID;
 /** Server-authoritative stronghold altar and final encounter. */
 public final class FinalConfrontationService {
 	private static final String ALTAR = "stronghold_altar";
+	private static final String LEGACY_ENDING = "ending";
 	private static final String RECOVERABLE_CORRUPTION = "recoverable_boss_corruption";
 	private static final int ALTAR_PHASE_ACTIVE = 1;
 	private static final int ALTAR_PHASE_COMPLETE = 2;
@@ -90,6 +91,10 @@ public final class FinalConfrontationService {
 	public static void updateServer(MinecraftServer server) {
 		FrequencyWorldData data = FrequencyWorldData.get(server);
 		if (server.getTickCount() % 20 == 0) discoverPortalRooms(server, data);
+		if (worldInterfaceOwnsFinale(data)) {
+			if (legacyFinaleStatePresent(data)) retireLegacyAltar(server);
+			return;
+		}
 		if (!altarActive(data)) return;
 		CompoundTag altar = altarState(data);
 		ServerLevel level = level(server, altar.getStringOr("dimension", "")).orElse(null);
@@ -156,7 +161,8 @@ public final class FinalConfrontationService {
 
 	private static MisreadBodyEntity startAltar(ServerPlayer player, ServerLevel level, BlockPos center) {
 		FrequencyWorldData data = FrequencyWorldData.get(level.getServer());
-		if (altarActive(data) || EndingState.started(data) && EndingState.outcome(data) != EndingOutcome.ACTIVE) return null;
+		if (worldInterfaceOwnsFinale(data) || altarActive(data)
+				|| EndingState.started(data) && EndingState.outcome(data) != EndingOutcome.ACTIVE) return null;
 		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
 		if (record == null || !anchorsCanBePlaced(level, center)) return null;
 		clearEndPortal(level, center);
@@ -238,12 +244,31 @@ public final class FinalConfrontationService {
 		return spawnBodyAt(level, near);
 	}
 
-	/** Retires the pre-End altar route without deleting its recovery/debug implementation. */
+	/** Retires persisted state owned by the replaced finale while retaining its prelude implementation. */
 	public static void retireLegacyAltar(MinecraftServer server) {
 		FrequencyWorldData data = FrequencyWorldData.get(server);
-		body(server, EndingState.get(data)).filter(entity -> entity.level().dimension() != Level.END)
-				.ifPresent(Entity::discard);
-		data.updateNarrativeState(root -> root.remove(ALTAR));
+		CompoundTag altar = altarState(data);
+		ServerLevel end = server.getLevel(Level.END);
+		if (end != null) {
+			List<MisreadBodyEntity> legacyEndBodies = new ArrayList<>();
+			for (Entity entity : end.getAllEntities()) {
+				if (entity instanceof MisreadBodyEntity body) legacyEndBodies.add(body);
+			}
+			legacyEndBodies.forEach(Entity::discard);
+		}
+		if (!legacyFinaleStatePresent(data)) return;
+		body(server, EndingState.get(data)).ifPresent(Entity::discard);
+		level(server, altar.getStringOr("dimension", "")).ifPresent(level -> {
+			for (BlockPos anchor : altarAnchors(altar)) {
+				if (level.hasChunkAt(anchor) && level.getBlockState(anchor).is(ModBlocks.ALTAR_ANCHOR)) {
+					level.setBlockAndUpdate(anchor, Blocks.AIR.defaultBlockState());
+				}
+			}
+		});
+		data.updateNarrativeState(root -> {
+			root.remove(ALTAR);
+			root.remove(LEGACY_ENDING);
+		});
 	}
 
 	private static MisreadBodyEntity spawnBodyAt(ServerLevel level, BlockPos position) {
@@ -258,6 +283,7 @@ public final class FinalConfrontationService {
 
 	public static Optional<ServerPlayer> selectTarget(MisreadBodyEntity body) {
 		FrequencyWorldData data = FrequencyWorldData.get(body.level().getServer());
+		if (worldInterfaceOwnsFinale(data)) return Optional.empty();
 		CompoundTag altar = altarState(data);
 		if (altar.getIntOr("phase", 0) != ALTAR_PHASE_ACTIVE) return Optional.empty();
 		BlockPos center = BlockPos.of(altar.getLongOr("center", 0L));
@@ -316,17 +342,23 @@ public final class FinalConfrontationService {
 		return false;
 	}
 
-	public static boolean useTerminationSpike(ServerPlayer player, MisreadBodyEntity body) {
+	public static boolean useTerminationSpike(ServerPlayer player, MisreadBodyEntity body, ItemStack spike) {
 		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
 		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
+		boolean endEncounter = EndBossEncounterService.isEncounterBoss(body)
+				&& !EndingState.endBossDefeated(data)
+				&& EndingState.get(data).getBooleanOr("body_active", false);
+		boolean legacyEncounter = altarActive(data) && EndingState.outcome(data) == EndingOutcome.ACTIVE;
 		if (record == null || !record.getBooleanOr(TerminalData.TRUTH_READ, false)
 				|| !record.getBooleanOr(TerminalData.RIFT_OBSERVED, false)
-				|| !altarActive(data) || EndingState.outcome(data) != EndingOutcome.ACTIVE) {
+				|| !spike.is(ModItems.TERMINATION_SPIKE) || !body.isAlive()
+				|| !endEncounter && !legacyEncounter) {
 			player.displayClientMessage(Component.translatable("message.thefourthfrequency.termination.rejected"), true);
 			return false;
 		}
-		if (!player.getAbilities().instabuild) player.getMainHandItem().shrink(1);
+		if (!player.getAbilities().instabuild) spike.shrink(1);
 		body.disrupt(300);
+		if (endEncounter) EndBossEncounterService.delayNextAttack(body, 300);
 		body.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 300, 1));
 		body.hurtServer((ServerLevel) player.level(), player.damageSources().playerAttack(player), 18.0F);
 		AudioService.play((ServerLevel) player.level(), player.blockPosition(), AudioService.Cue.TERMINATION);
@@ -334,12 +366,16 @@ public final class FinalConfrontationService {
 		return true;
 	}
 
-	/** Final combat is contained to the altar and never consumes terrain or player construction. */
+	public static boolean useTerminationSpike(ServerPlayer player, MisreadBodyEntity body) {
+		return useTerminationSpike(player, body, player.getMainHandItem());
+	}
+
+	/** Legacy altar bodies remain non-destructive; the new End encounter edits terrain in its own service. */
 	public static int absorbNearby(MisreadBodyEntity body) {
 		return 0;
 	}
 
-	/** Adaptation remains a telegraphed combat pause but no longer places blocks in the world. */
+	/** Legacy altar adaptation remains non-destructive; End braces are owned by EndBossArenaService. */
 	public static int placeAdaptationBarrier(MisreadBodyEntity body, Vec3 predictedTarget) {
 		return 0;
 	}
@@ -347,6 +383,7 @@ public final class FinalConfrontationService {
 	public static void onBodyDefeated(MisreadBodyEntity body, ServerPlayer victor) {
 		if (!(body.level() instanceof ServerLevel level)) return;
 		FrequencyWorldData data = FrequencyWorldData.get(level.getServer());
+		if (worldInterfaceOwnsFinale(data)) return;
 		CompoundTag altar = altarState(data);
 		if (altar.getIntOr("phase", 0) != ALTAR_PHASE_ACTIVE) return;
 		int remaining = countAnchors(level, altar);
@@ -565,16 +602,27 @@ public final class FinalConfrontationService {
 		return data.narrativeState().getCompoundOrEmpty(ALTAR).copy();
 	}
 
+	private static boolean worldInterfaceOwnsFinale(FrequencyWorldData data) {
+		return WorldInterfaceState.snapshot(data).present();
+	}
+
+	private static boolean legacyFinaleStatePresent(FrequencyWorldData data) {
+		return data.narrativeState().contains(ALTAR) || EndingState.started(data);
+	}
+
 	public static boolean altarActive(FrequencyWorldData data) {
-		return altarState(data).getIntOr("phase", 0) == ALTAR_PHASE_ACTIVE;
+		return !worldInterfaceOwnsFinale(data)
+				&& altarState(data).getIntOr("phase", 0) == ALTAR_PHASE_ACTIVE;
 	}
 
 	public static int anchorsRemaining(FrequencyWorldData data) {
+		if (worldInterfaceOwnsFinale(data)) return 0;
 		return Math.clamp(altarState(data).getIntOr("anchors_remaining", 0), 0, ANCHOR_COUNT);
 	}
 
 	/** Loaded, real block targets used by the correction body's final altar obstruction. */
 	public static List<BlockPos> activeAnchorPositions(FrequencyWorldData data, ServerLevel level) {
+		if (worldInterfaceOwnsFinale(data)) return List.of();
 		CompoundTag altar = altarState(data);
 		if (altar.getIntOr("phase", 0) != ALTAR_PHASE_ACTIVE
 				|| !level.dimension().identifier().toString().equals(altar.getStringOr("dimension", ""))) {

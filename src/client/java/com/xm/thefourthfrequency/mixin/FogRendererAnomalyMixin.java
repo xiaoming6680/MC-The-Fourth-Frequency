@@ -2,6 +2,8 @@ package com.xm.thefourthfrequency.mixin;
 
 import com.xm.thefourthfrequency.client_ui.AnomalyPresentationController;
 import com.xm.thefourthfrequency.client_ui.AtmosphericFogProfile;
+import com.xm.thefourthfrequency.client_ui.DimensionViewDistanceController;
+import com.xm.thefourthfrequency.client_ui.DimensionViewDistancePolicy;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -24,7 +26,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(FogRenderer.class)
 public abstract class FogRendererAnomalyMixin {
 	@Unique private AtmosphericFogProfile thefourthfrequency$atmosphericFog =
-			AtmosphericFogProfile.fixedDistanceOnly();
+			AtmosphericFogProfile.fixedDistanceOnly(DimensionViewDistancePolicy.OVERWORLD_CHUNKS);
 	@Unique private ResourceKey<Level> thefourthfrequency$lastDimension;
 	@Unique private long thefourthfrequency$lastFogTick = Long.MIN_VALUE;
 
@@ -40,7 +42,9 @@ public abstract class FogRendererAnomalyMixin {
 		AtmosphericFogProfile target = AtmosphericFogProfile.sample(skyExposure,
 				level.getRainLevel(partialTick), level.getThunderLevel(partialTick),
 				AtmosphericFogProfile.nightFactor(level.getDayTime()),
-				(float) camera.position().y, atmospheric);
+				(float) camera.position().y, atmospheric,
+				DimensionViewDistanceController.atmosphericChunks(
+						level.dimension().identifier().toString(), viewDistance));
 		long tick = level.getGameTime();
 		if (!level.dimension().equals(thefourthfrequency$lastDimension)
 				|| thefourthfrequency$lastFogTick == Long.MIN_VALUE

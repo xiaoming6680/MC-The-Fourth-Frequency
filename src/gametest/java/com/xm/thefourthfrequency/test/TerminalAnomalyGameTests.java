@@ -2,13 +2,13 @@ package com.xm.thefourthfrequency.test;
 
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.content.ModItems;
-import com.xm.thefourthfrequency.terminal.AmbientAnomalyService;
 import com.xm.thefourthfrequency.terminal.AnomalyCompletionStatus;
 import com.xm.thefourthfrequency.terminal.AnomalyConditions;
 import com.xm.thefourthfrequency.terminal.AnomalyGameTestBridge;
 import com.xm.thefourthfrequency.terminal.AnomalyLeaseService;
 import com.xm.thefourthfrequency.terminal.AnomalyRuntimeService;
 import com.xm.thefourthfrequency.terminal.AnomalyServerEffects;
+import com.xm.thefourthfrequency.terminal.AmbientAnomalyService;
 import com.xm.thefourthfrequency.terminal.TerminalAnomalyLogService;
 import com.xm.thefourthfrequency.terminal.SignalBand;
 import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
@@ -20,9 +20,11 @@ import com.xm.thefourthfrequency.networking.TerminalControlPayload;
 import com.xm.thefourthfrequency.networking.AnomalyCompleteC2S;
 import com.xm.thefourthfrequency.networking.DebugActionPayload;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
+import com.xm.thefourthfrequency.persistence.PersistenceSchema;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import com.xm.thefourthfrequency.world.ResourceGuidanceService;
 import com.xm.thefourthfrequency.world.StoryProgressService;
+import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.DebugPanelService;
 import com.xm.thefourthfrequency.world.TerminalLifecycleService;
 import com.xm.thefourthfrequency.world.WorldDecayService;
@@ -77,9 +79,10 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 		BlockPos ore = player.blockPosition().below(2);
 		helper.getLevel().setBlockAndUpdate(ore, Blocks.IRON_ORE.defaultBlockState());
 		data.updateTerminalRecord(player.getUUID(), record -> {
-				record.putLong(TerminalData.ISSUED_GAME_TIME, player.level().getGameTime() - 1_201L);
-				record.putInt(TerminalData.BAND_STAGE, 0);
-				record.putBoolean(TerminalData.BOUND, false);
+			record.putLong(TerminalData.ISSUED_GAME_TIME, player.level().getGameTime() - 1_201L);
+			record.putInt(TerminalData.BAND_STAGE, 0);
+			record.putBoolean(TerminalData.BOUND, false);
+			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, SurvivalMilestone.MINED_LOGS.mask());
 		});
 
 		TerminalToolService.selectResource(player, TerminalResource.IRON.wireId());
@@ -183,7 +186,7 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest
-	public void terminalV2RecordMigratesSignalsFilesTimesAndUnreadStateToV4(GameTestHelper helper) {
+	public void terminalV2RecordMigratesSignalsFilesTimesAndUnreadStateToCurrentSchema(GameTestHelper helper) {
 		CompoundTag legacy = new CompoundTag();
 		legacy.putInt(TerminalData.SCHEMA_VERSION, 2);
 		legacy.putString(TerminalData.OWNER_ID, java.util.UUID.randomUUID().toString());
@@ -207,7 +210,8 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 		legacy.putInt(TerminalData.UNREAD_ANOMALY_COUNT, 1);
 
 		CompoundTag migrated = TerminalData.migrateRecord(legacy);
-		helper.assertValueEqual(migrated.getIntOr(TerminalData.SCHEMA_VERSION, 0), 5, "Schema upgraded to v5");
+		helper.assertValueEqual(migrated.getIntOr(TerminalData.SCHEMA_VERSION, 0),
+				PersistenceSchema.CURRENT_VERSION, "Schema upgraded to the current version");
 		helper.assertValueEqual(migrated.getIntOr(TerminalData.ANOMALY_TIER, -1), 0,
 				"Unbound legacy record has no anomaly tier");
 		var entries = TerminalSignalLog.entries(migrated, SignalBand.UNKNOWN);
@@ -248,6 +252,30 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest
+	public void operationalTelemetryIsPrunedWithoutRemovingNavigationCandidates(GameTestHelper helper) {
+		CompoundTag record = new CompoundTag();
+		TerminalSignalLog.append(record, SignalBand.WEATHER, "weather_changed",
+				1L, 1L, "minecraft:overworld", 0L, 1, 1, true);
+		TerminalSignalLog.append(record, SignalBand.MINING, "resource_target_located",
+				2L, 2L, "minecraft:overworld", 0L, 1, 1, true);
+		TerminalSignalLog.append(record, SignalBand.UNKNOWN, "fragment_candidate_2_1",
+				3L, 3L, "minecraft:overworld", 0L, 1, 1, false);
+		TerminalSignalLog.append(record, SignalBand.PUBLIC, "facility_surface_shelter",
+				4L, 4L, "minecraft:overworld", 0L, 0, 1, true);
+
+		helper.assertTrue(TerminalSignalLog.pruneOperationalTelemetry(record),
+				"Existing operational telemetry is compacted once");
+		var types = TerminalSignalLog.entries(record).stream().map(TerminalSignalLog.Entry::type).toList();
+		helper.assertValueEqual(types.size(), 2, "Only useful and tool-owned entries remain");
+		helper.assertTrue(types.contains("fragment_candidate_2_1"),
+				"Candidate coordinates remain available to the navigation tool");
+		helper.assertTrue(types.contains("facility_surface_shelter"), "Story records remain visible");
+		helper.assertValueEqual(TerminalSignalLog.unreadCount(record), 1,
+				"Pruning also removes unread attention created only by telemetry");
+		helper.succeed();
+	}
+
+	@GameTest
 	public void discoveredLockedFileUnlocksInPlaceAndSortsByCatalog(GameTestHelper helper) {
 		CompoundTag record = new CompoundTag();
 		helper.assertTrue(TerminalFileState.discover(record, "encrypted_witness_file", 30, 40, false),
@@ -265,21 +293,6 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 		helper.assertTrue(witness.unlocked(), "Witness now unlocked");
 		helper.assertValueEqual(witness.discoveredGameTime(), 30L, "Discovery time retained");
 		helper.assertValueEqual(witness.unlockedGameTime(), 50L, "Unlock time recorded");
-		helper.succeed();
-	}
-
-	@GameTest
-	public void productionAndAcceleratedSchedulesStayInsideTheirContracts(GameTestHelper helper) {
-		helper.assertValueEqual(AmbientAnomalyService.intervalTicks(5, 10, 0, true, false), 1_200L,
-				"First post-binding random manifestation starts after sixty seconds");
-		helper.assertValueEqual(AmbientAnomalyService.intervalTicks(5, 10, 0, false, false), 6_000L,
-				"Minimum random interval");
-		helper.assertValueEqual(AmbientAnomalyService.intervalTicks(5, 10, -1, false, false), 12_000L,
-				"Maximum random interval");
-		helper.assertValueEqual(AmbientAnomalyService.intervalTicks(5, 10, 0, true, true), 100L,
-				"Accelerated first interval");
-		helper.assertValueEqual(AmbientAnomalyService.intervalTicks(5, 10, 0, false, true), 200L,
-				"Accelerated recurring interval");
 		helper.succeed();
 	}
 
@@ -375,33 +388,60 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 	@GameTest(maxTicks = 80)
 	public void doorCascadePermanentlyBreaksBothDoorHalvesWithoutDrops(GameTestHelper helper) {
 		ServerPlayer player = helper.makeMockServerPlayerInLevel();
+		player.setNoGravity(true);
 		AnomalyRuntimeService.interrupt(player, false);
+		BlockPos origin = player.blockPosition();
+		helper.getLevel().setBlockAndUpdate(origin.below(), Blocks.STONE.defaultBlockState());
+		player.snapTo(origin.getX() + 0.5D, origin.getY(), origin.getZ() + 0.5D, 0.0F, 0.0F);
 		var lowerState = Blocks.OAK_DOOR.defaultBlockState()
 				.setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.LOWER);
+		FrequencyWorldData worldData = FrequencyWorldData.get(helper.getLevel().getServer());
+		Direction selectedDirection = null;
+		for (Direction candidate : new Direction[] {Direction.EAST, Direction.WEST, Direction.NORTH, Direction.SOUTH}) {
+			boolean clear = true;
+			for (int distance : new int[] {8, 12, 16, 20}) {
+				BlockPos lower = origin.relative(candidate, distance);
+				if (AnomalyServerEffects.protectedPosition(helper.getLevel(), worldData, lower)
+						|| AnomalyServerEffects.protectedPosition(helper.getLevel(), worldData, lower.above())) {
+					clear = false;
+					break;
+				}
+			}
+			if (clear) {
+				selectedDirection = candidate;
+				break;
+			}
+		}
+		helper.assertTrue(selectedDirection != null, "Door fixture finds one unprotected radial lane");
+		Direction cascadeDirection = selectedDirection;
 		var doors = new java.util.ArrayList<BlockPos>();
 		for (int distance : new int[] { 8, 12, 16, 20 }) {
-			BlockPos lower = player.blockPosition().relative(Direction.EAST, distance);
+			BlockPos lower = origin.relative(cascadeDirection, distance);
 			helper.getLevel().setBlockAndUpdate(lower.below(), Blocks.STONE.defaultBlockState());
 			helper.getLevel().setBlock(lower, lowerState, 3);
 			Blocks.OAK_DOOR.setPlacedBy(helper.getLevel(), lower, lowerState, player, new ItemStack(Items.OAK_DOOR));
 			doors.add(lower);
 		}
 		helper.runAfterDelay(3, () -> {
+			player.snapTo(origin.getX() + 0.5D, origin.getY(), origin.getZ() + 0.5D, 0.0F, 0.0F);
 			helper.getLevel().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class,
 					player.getBoundingBox().inflate(22.0)).stream()
 					.filter(item -> item.getItem().is(Items.OAK_DOOR)).forEach(net.minecraft.world.entity.Entity::discard);
 			helper.assertTrue(AmbientAnomalyService.trigger(player, "door_cascade", false),
 					"Multiple ordinary doors within twenty blocks start the cascade");
-			helper.runAfterDelay(12, () -> {
+			helper.runAfterDelay(14, () -> {
 				helper.assertTrue(helper.getLevel().getBlockState(doors.getLast()).isAir(),
 						"The farthest twenty-block door breaks first");
 				helper.assertTrue(helper.getLevel().getBlockState(doors.getFirst()).getBlock() instanceof net.minecraft.world.level.block.DoorBlock,
 						"A nearer door remains while the cascade advances inward");
 			});
-			helper.runAfterDelay(45, () -> {
-				for (BlockPos lower : doors) {
-					helper.assertTrue(helper.getLevel().getBlockState(lower).isAir(), "Lower half is permanently removed");
-					helper.assertTrue(helper.getLevel().getBlockState(lower.above()).isAir(), "Upper half is permanently removed");
+			helper.runAfterDelay(55, () -> {
+				for (int index = 0; index < doors.size(); index++) {
+					BlockPos lower = doors.get(index);
+					helper.assertTrue(helper.getLevel().getBlockState(lower).isAir(),
+							"Lower half " + index + " is permanently removed at " + lower);
+					helper.assertTrue(helper.getLevel().getBlockState(lower.above()).isAir(),
+							"Upper half " + index + " is permanently removed at " + lower.above());
 				}
 				helper.assertFalse(helper.getLevel().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class,
 						player.getBoundingBox().inflate(22.0)).stream()

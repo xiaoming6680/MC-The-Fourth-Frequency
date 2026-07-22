@@ -30,6 +30,7 @@ public final class MisreadBodyRenderer extends MobRenderer<MisreadBodyEntity, Mi
 		state.massStage = entity.massStage();
 		state.adaptationAction = entity.adaptationAction();
 		state.adaptationTicks = entity.adaptationTicks();
+		state.endPhase = entity.endPhase().id();
 	}
 
 	@Override

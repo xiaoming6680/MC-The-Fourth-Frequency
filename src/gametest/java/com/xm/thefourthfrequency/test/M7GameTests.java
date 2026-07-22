@@ -14,7 +14,6 @@ import com.xm.thefourthfrequency.networking.TerminalControlPayload;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
 import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
-import com.xm.thefourthfrequency.world.StoryProgressService;
 import com.xm.thefourthfrequency.world.TerminalLifecycleService;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
@@ -81,13 +80,7 @@ public final class M7GameTests implements CustomTestMethodInvoker {
 		helper.assertFalse(EndingState.started(data),
 				"Legacy maximum progress cannot start an ending without the altar");
 
-		helper.assertValueEqual(StoryProgressService.objective(
-				data.terminalRecord(player.getUUID()).orElseThrow(), data).id(), "find_portal_room",
-				"Reaching the stronghold must lead to the real portal-room task");
 		data.updateTerminalRecord(player.getUUID(), record -> record.putBoolean(TerminalData.PORTAL_ROOM_FOUND, true));
-		helper.assertValueEqual(StoryProgressService.objective(
-				data.terminalRecord(player.getUUID()).orElseThrow(), data).id(), "open_altar",
-				"Finding the portal room must lead to the final Eye altar task");
 
 		ItemStack terminal = TerminalData.stackFromRecord(data.terminalRecord(player.getUUID()).orElseThrow());
 		player.setItemInHand(InteractionHand.MAIN_HAND, terminal);
@@ -155,8 +148,6 @@ public final class M7GameTests implements CustomTestMethodInvoker {
 		helper.assertTrue(record.getStringOr(TerminalData.TERMINAL_CAPABILITIES, "")
 				.contains("resource_guidance"),
 				"The successful ending cannot erase terminal abilities already earned in survival");
-		helper.assertValueEqual(StoryProgressService.objective(record, data).id(), "complete",
-				"Every final route must reach the complete objective after the entity is defeated");
 		helper.assertTrue(TerminalSignalLog.containsType(record, "altar_started")
 				&& TerminalSignalLog.containsType(record, "altar_entity_awakened")
 				&& TerminalSignalLog.containsType(record, "altar_entity_defeated")

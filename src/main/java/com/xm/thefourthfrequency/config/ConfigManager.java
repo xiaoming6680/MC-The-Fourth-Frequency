@@ -63,6 +63,11 @@ public final class ConfigManager {
 		return writeAtomically(path, current.withClientState(updatedState));
 	}
 
+	/** Restores only MOD progression flags; user-selected Meta and pacing settings are preserved. */
+	public static synchronized boolean resetClientState() {
+		return updateClientState(ignored -> new ModConfig.ClientState(false, false));
+	}
+
 	private static ModConfig readOrDefaults(Path path) {
 		try {
 			return read(path);

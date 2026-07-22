@@ -1,6 +1,6 @@
 package com.xm.thefourthfrequency.mixin;
 
-import com.xm.thefourthfrequency.client_ui.AtmosphericFogProfile;
+import com.xm.thefourthfrequency.client_ui.DimensionViewDistanceController;
 import java.util.function.Consumer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.OptionInstance;
@@ -19,8 +19,9 @@ public abstract class OptionInstanceRenderDistanceMixin {
 	@ModifyVariable(method = "set", at = @At("HEAD"), argsOnly = true)
 	private Object thefourthfrequency$rejectRenderDistanceChanges(Object requestedValue) {
 		Minecraft client = Minecraft.getInstance();
-		if (client != null && client.options != null && (Object) this == client.options.renderDistance()) {
-			return AtmosphericFogProfile.FIXED_RENDER_DISTANCE_CHUNKS;
+		if (DimensionViewDistanceController.isLocked() && client != null && client.options != null
+				&& (Object) this == client.options.renderDistance()) {
+			return DimensionViewDistanceController.lockedChunks(client);
 		}
 		return requestedValue;
 	}
@@ -29,12 +30,13 @@ public abstract class OptionInstanceRenderDistanceMixin {
 			+ "Lnet/minecraft/client/gui/components/AbstractWidget;", at = @At("RETURN"))
 	private void thefourthfrequency$disableRenderDistanceControl(Options options, int x, int y, int width,
 			Consumer<?> onValueChanged, CallbackInfoReturnable<AbstractWidget> callback) {
-		if ((Object) this != options.renderDistance()) return;
+		if (!DimensionViewDistanceController.isLocked() || (Object) this != options.renderDistance()) return;
+		int locked = DimensionViewDistanceController.lockedChunks(Minecraft.getInstance());
 		AbstractWidget widget = callback.getReturnValue();
 		widget.active = false;
 		widget.setMessage(Component.translatable("options.thefourthfrequency.render_distance_locked",
-				AtmosphericFogProfile.FIXED_RENDER_DISTANCE_CHUNKS));
+				locked));
 		widget.setTooltip(Tooltip.create(Component.translatable(
-				"options.thefourthfrequency.render_distance_locked.tooltip")));
+				"options.thefourthfrequency.render_distance_locked.tooltip", locked)));
 	}
 }

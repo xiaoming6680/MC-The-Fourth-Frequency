@@ -7,4 +7,5 @@ public final class MisreadBodyRenderState extends LivingEntityRenderState {
 	public int massStage;
 	public int adaptationAction;
 	public int adaptationTicks;
+	public int endPhase;
 }

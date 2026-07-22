@@ -13,16 +13,22 @@ import com.xm.thefourthfrequency.client_render.MisreadBodyRenderer;
 import com.xm.thefourthfrequency.client_render.MisreadBodyModel;
 import com.xm.thefourthfrequency.client_render.WatcherRenderer;
 import com.xm.thefourthfrequency.client_render.WatcherModel;
+import com.xm.thefourthfrequency.client_render.WorldInterfaceModel;
+import com.xm.thefourthfrequency.client_render.WorldInterfaceEnergyOrbRenderer;
+import com.xm.thefourthfrequency.client_render.WorldInterfaceRenderer;
 import com.xm.thefourthfrequency.meta_api.MetaController;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityModelLayerRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import com.xm.thefourthfrequency.networking.TerminalOpenPayload;
+import net.minecraft.client.renderer.entity.NoopRenderer;
 
 public final class TheFourthFrequencyClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
+		WorldInterfaceEndingClient.initialize();
 		AlphaLoadSessionController.initialize();
+		DimensionViewDistanceController.initialize();
 		EntityModelLayerRegistry.registerModelLayer(ReworkBodyRenderer.STAGE_1_LAYER,
 				ReworkBodyModel::createStage1Layer);
 		EntityModelLayerRegistry.registerModelLayer(ReworkBodyRenderer.STAGE_2_LAYER,
@@ -38,11 +44,20 @@ public final class TheFourthFrequencyClient implements ClientModInitializer {
 		EntityRendererRegistry.register(ModEntities.MISREAD_BODY, MisreadBodyRenderer::new);
 		EntityModelLayerRegistry.registerModelLayer(WatcherRenderer.MODEL_LAYER, WatcherModel::createBodyLayer);
 		EntityRendererRegistry.register(ModEntities.WATCHER, WatcherRenderer::new);
+		EntityModelLayerRegistry.registerModelLayer(WorldInterfaceRenderer.MODEL_LAYER,
+				WorldInterfaceModel::createLayer);
+		EntityRendererRegistry.register(ModEntities.WORLD_INTERFACE, WorldInterfaceRenderer::new);
+		EntityRendererRegistry.register(ModEntities.WORLD_INTERFACE_PART, NoopRenderer::new);
+		EntityRendererRegistry.register(ModEntities.WORLD_INTERFACE_ENERGY_ORB,
+				WorldInterfaceEnergyOrbRenderer::new);
 		EmptySegmentClient.initialize();
 		PrivateAnomalyClient.initialize();
 		FirstRunNoticeController.initialize();
 		MetaController.initialize();
 		TerminalClientNetworking.initialize();
+		WorldInterfaceClientNetworking.initialize();
+		WorldInterfacePresentationController.initialize();
+		WorldInterfaceHud.initialize();
 		AmbientAnomalyClient.initialize();
 		AnomalyPresentationController.initialize();
 		MenuErosionState.initialize();

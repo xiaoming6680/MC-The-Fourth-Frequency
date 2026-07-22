@@ -60,8 +60,9 @@ public final class MisreadBodyModel extends EntityModel<MisreadBodyRenderState> 
 		builderLobe.xScale = builderLobe.yScale = builderLobe.zScale = 1.0F;
 		minerMaw.xScale = minerMaw.yScale = minerMaw.zScale = 1.0F;
 		float pulse = Mth.sin(state.ageInTicks * 0.08F);
-		core.yScale = 1.0F + pulse * 0.025F;
-		core.xScale = 1.0F - pulse * 0.012F;
+		float phasePulse = 1.0F + Math.max(0, state.endPhase - 1) * 0.20F;
+		core.yScale = 1.0F + pulse * 0.025F * phasePulse;
+		core.xScale = 1.0F - pulse * 0.012F * phasePulse;
 		core.zScale = core.xScale;
 		leftTendril.xRot = 0.08F + Mth.sin(state.ageInTicks * 0.055F) * 0.12F;
 		rightTendril.xRot = 0.08F + Mth.sin(state.ageInTicks * 0.055F + Mth.PI) * 0.12F;
@@ -76,6 +77,18 @@ public final class MisreadBodyModel extends EntityModel<MisreadBodyRenderState> 
 				}
 				case 2 -> builderLobe.yScale = warning;
 				case 3 -> minerMaw.xRot += 0.48F;
+				case 4 -> {
+					core.xScale *= warning;
+					core.zScale *= warning;
+					leftTendril.xRot -= 0.35F;
+					rightTendril.xRot -= 0.35F;
+					rearTendril.xRot -= 0.25F;
+				}
+				case 5 -> {
+					operatorCrown.xScale = operatorCrown.zScale = warning;
+					builderLobe.xScale = builderLobe.yScale = warning;
+					minerMaw.xScale = minerMaw.yScale = warning;
+				}
 				default -> { }
 			}
 		} else {

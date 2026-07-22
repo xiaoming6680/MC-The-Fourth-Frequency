@@ -1,6 +1,8 @@
 package com.xm.thefourthfrequency.mixin;
 
 import com.xm.thefourthfrequency.client_ui.WorldDecayClient;
+import com.xm.thefourthfrequency.client_ui.WorldInterfacePresentationController;
+import com.xm.thefourthfrequency.client_ui.LanHostFailureVisualState;
 import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureManager;
@@ -20,7 +22,9 @@ public abstract class TextureDecayMixin {
 	@Inject(method = "getTexture", at = @At("HEAD"), cancellable = true)
 	private void thefourthfrequency$selectiveTextureLoss(Identifier id,
 			CallbackInfoReturnable<AbstractTexture> callback) {
-		if (!WorldDecayClient.corruptTexture(id)) return;
+		if (!WorldDecayClient.corruptTexture(id)
+				&& !WorldInterfacePresentationController.corruptEntityTexture(id)
+				&& !LanHostFailureVisualState.corruptEntityTexture(id)) return;
 		AbstractTexture missing = byPath.get(MissingTextureAtlasSprite.getLocation());
 		if (missing == null) missing = byPath.get(TextureManager.INTENTIONAL_MISSING_TEXTURE);
 		if (missing != null) callback.setReturnValue(missing);

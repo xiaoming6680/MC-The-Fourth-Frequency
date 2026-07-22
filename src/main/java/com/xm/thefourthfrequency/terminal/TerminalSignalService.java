@@ -52,24 +52,15 @@ public final class TerminalSignalService {
 		List<FragmentInvestigationService.SharedReceipt> sharedReceipts = new ArrayList<>();
 		boolean[] projectionChanged = {false};
 		data.updateTerminalRecord(player.getUUID(), tag -> {
+			projectionChanged[0] |= TerminalSignalLog.pruneOperationalTelemetry(tag);
 			if (player.isAlive() && !player.isSpectator()) {
 				long survived = Math.max(0L, tag.getLongOr(TerminalData.ONLINE_SURVIVAL_TICKS, 0L)) + 20L;
 				tag.putLong(TerminalData.ONLINE_SURVIVAL_TICKS, survived);
 			}
 
 			int weather = player.level().isThundering() ? 2 : player.level().isRaining() ? 1 : 0;
-			int previousWeather = tag.getIntOr(TerminalData.LAST_SIGNAL_WEATHER, weather);
-			if (previousWeather >= 0 && weather != previousWeather) {
-				append(tag, player, SignalBand.WEATHER, "weather_changed", weather, 1, true);
-				projectionChanged[0] = true;
-			}
 			tag.putInt(TerminalData.LAST_SIGNAL_WEATHER, weather);
 			String dimension = player.level().dimension().identifier().toString();
-			String previousDimension = tag.getStringOr(TerminalData.LAST_SIGNAL_DIMENSION, dimension);
-			if (!previousDimension.isBlank() && !previousDimension.equals(dimension)) {
-				append(tag, player, SignalBand.WEATHER, "dimension_changed", 0, 1, true);
-				projectionChanged[0] = true;
-			}
 			tag.putString(TerminalData.LAST_SIGNAL_DIMENSION, dimension);
 
 			if (tag.getBooleanOr(TerminalData.BOUND, false))

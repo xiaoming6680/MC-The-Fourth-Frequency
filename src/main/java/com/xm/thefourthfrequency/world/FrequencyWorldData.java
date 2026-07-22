@@ -244,4 +244,5 @@ public final class FrequencyWorldData extends SavedData {
 		update.accept(narrativeState);
 		setDirty();
 	}
+
 }

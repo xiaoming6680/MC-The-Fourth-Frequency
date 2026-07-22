@@ -3,35 +3,29 @@ package com.xm.thefourthfrequency.ending;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
+/** Regression coverage for the fixed-roster world-interface difficulty contract. */
 class EndBossDifficultyTest {
+	private static final double EPSILON = 0.000_000_1D;
+
 	@Test
-	void everyLostStabilityAnchorTierMakesTheBossHarder() {
-		var contained = EndBossDifficulty.forEncounter(10, 1);
-		var strained = EndBossDifficulty.forEncounter(6, 1);
-		var critical = EndBossDifficulty.forEncounter(3, 1);
-		var failing = EndBossDifficulty.forEncounter(1, 1);
-		var unbound = EndBossDifficulty.forEncounter(0, 1);
-		var profiles = java.util.List.of(contained, strained, critical, failing, unbound);
-		for (int index = 1; index < profiles.size(); index++) {
-			var easier = profiles.get(index - 1);
-			var harder = profiles.get(index);
-			assertTrue(harder.movementSpeed() > easier.movementSpeed());
-			assertTrue(harder.attackDamage() > easier.attackDamage());
-			assertTrue(harder.damageTakenMultiplier() < easier.damageTakenMultiplier());
-			assertTrue(harder.attackInterval() < easier.attackInterval());
-			assertTrue(harder.adaptationCooldown() < easier.adaptationCooldown());
+	void frozenRosterSizeIsTheOnlyInputToMaximumVirtualHealth() {
+		for (int rosterSize = 1; rosterSize <= WorldInterfacePolicy.MAX_ROSTER_SIZE; rosterSize++) {
+			assertEquals(600.0D * rosterSize, WorldInterfacePolicy.maxHealth(rosterSize), EPSILON);
 		}
-		assertEquals(0.0F, unbound.healingPerSecond());
-		assertTrue(unbound.damageTakenMultiplier() <= 0.035F);
+		assertThrows(IllegalArgumentException.class, () -> WorldInterfacePolicy.maxHealth(0));
+		assertThrows(IllegalArgumentException.class,
+				() -> WorldInterfacePolicy.maxHealth(WorldInterfacePolicy.MAX_ROSTER_SIZE + 1));
 	}
 
 	@Test
-	void participantScalingOnlyRaisesMaximumHealth() {
-		var solo = EndBossDifficulty.forEncounter(10, 1);
-		var group = EndBossDifficulty.forEncounter(10, 4);
-		assertTrue(group.maxHealth() > solo.maxHealth());
-		assertEquals(solo.attackDamage(), group.attackDamage());
+	void theSameTickBoundaryHasTwoDistinctTerminalVerdicts() {
+		assertEquals(WorldInterfacePolicy.TickVerdict.SUCCESS,
+				WorldInterfacePolicy.resolveTick(11_999L, 0, true));
+		assertEquals(WorldInterfacePolicy.TickVerdict.FAILURE,
+				WorldInterfacePolicy.resolveTick(12_000L, 0, true));
+		assertEquals("SUCCESS", WorldInterfacePolicy.TickVerdict.SUCCESS.name());
+		assertEquals("FAILURE", WorldInterfacePolicy.TickVerdict.FAILURE.name());
 	}
 }

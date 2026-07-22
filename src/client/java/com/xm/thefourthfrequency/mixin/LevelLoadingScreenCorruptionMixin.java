@@ -183,9 +183,6 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 		String failedLine = prefix + Component.translatable(
 				"screen.thefourthfrequency.alpha_loading.failed").getString();
 		int lineWidth = font.width(failedLine);
-		int patchWidth = Math.max(lineWidth + 24,
-				font.width(prefix + Component.translatable(
-						"screen.thefourthfrequency.alpha_loading.progress").getString()) + 24);
 
 		int startX = centerX - (font.width(prefix) + font.width(suffix)) / 2;
 		graphics.drawString(font, prefix, startX, labelY, 0xFFFFFFFF, false);
@@ -202,13 +199,6 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 			int color = alpha << 24 | 0x00FF1818;
 			graphics.drawCenteredString(font, failedLine, centerX + jitter, y, color);
 		}
-		if (copies > 0 && (motionTick & 3) == 0) {
-			int scanY = labelY + 4 + Math.floorMod(motionTick * 3,
-					Math.max(1, Math.min(94, graphics.guiHeight() - labelY - 5)));
-			graphics.fill(centerX - patchWidth / 2 - 10, scanY,
-					centerX + patchWidth / 2 + 10, scanY + 1, 0x90FF1010);
-		}
-
 		int smallCopies = AlphaLoadTimeline.smallFailureCopies(thefourthfrequency$screenTicks);
 		if (smallCopies > 0) {
 			int width = graphics.guiWidth();

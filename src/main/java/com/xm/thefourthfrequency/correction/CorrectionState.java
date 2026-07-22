@@ -147,16 +147,4 @@ public final class CorrectionState {
 		return Math.max(0, get(data).getIntOr(DISMANTLE_COUNT, 0));
 	}
 
-	public static void recordBudget(FrequencyWorldData data, int work) {
-		CompoundTag current = get(data);
-		int maximum = Math.max(work, current.getIntOr("maximum_tick_work", 0));
-		if (current.getIntOr("last_tick_work", -1) == work
-				&& current.getIntOr("maximum_tick_work", 0) == maximum) {
-			return;
-		}
-		update(data, state -> {
-			state.putInt("last_tick_work", work);
-			state.putInt("maximum_tick_work", maximum);
-		});
-	}
 }

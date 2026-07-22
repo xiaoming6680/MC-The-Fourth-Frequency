@@ -48,6 +48,23 @@ public final class SurvivalReworkGameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest
+	public void openingTaskAcceptsMixedWoodFamiliesAndPlanks(GameTestHelper helper) {
+		ServerPlayer player = helper.makeMockServerPlayerInLevel();
+		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
+		player.getInventory().add(new ItemStack(Items.BIRCH_PLANKS, 3));
+		player.getInventory().add(new ItemStack(Items.CRIMSON_PLANKS, 4));
+		helper.assertValueEqual(SurvivalProgressService.collectedWood(player),
+				SurvivalProgressService.REQUIRED_WOOD,
+				"The opening task accepts planks from mixed Overworld and Nether wood families");
+		SurvivalProgressService.updatePlayer(player, data);
+		int milestones = data.terminalRecord(player.getUUID()).orElseThrow()
+				.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0);
+		helper.assertTrue(SurvivalMilestone.MINED_LOGS.present(milestones),
+				"Any accepted wood material completes the compatibility milestone");
+		helper.succeed();
+	}
+
+	@GameTest
 	public void vanillaMilestonesStartARecoverableCorrectionScene(GameTestHelper helper) {
 		ServerPlayer player = helper.makeMockServerPlayerInLevel();
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());

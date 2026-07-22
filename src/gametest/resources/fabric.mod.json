@@ -12,6 +12,7 @@
       "com.xm.thefourthfrequency.test.M5GameTests"
       ,"com.xm.thefourthfrequency.test.M6GameTests"
       ,"com.xm.thefourthfrequency.test.M7GameTests"
+      ,"com.xm.thefourthfrequency.test.EndBossGameTests"
       ,"com.xm.thefourthfrequency.test.TerminalAnomalyGameTests"
     ],
     "fabric-client-gametest": [
@@ -19,6 +20,7 @@
       "com.xm.thefourthfrequency.test.AnomalyClientGameTest",
       "com.xm.thefourthfrequency.test.ReworkBodyClientGameTest",
       "com.xm.thefourthfrequency.test.WatcherModelClientGameTest"
+      ,"com.xm.thefourthfrequency.test.EndBossClientGameTest"
     ]
   },
   "depends": {

@@ -48,6 +48,13 @@ final class AnomalyClientAutomationContractTest {
 		assertFalse(defaults.runsMetaSmoke());
 		assertFalse(defaults.runsReworkForms());
 		assertFalse(defaults.runsWatcherModel());
+		assertFalse(defaults.runsNoticeEntry());
+		assertFalse(defaults.runsEndBoss());
+
+		var noticeEntry = ClientGameTestSelection.parse("notice-entry", "");
+		assertTrue(noticeEntry.runsNoticeEntry());
+		assertFalse(noticeEntry.runsMainline());
+		assertFalse(noticeEntry.runsAnomalies());
 
 		var relaunch = ClientGameTestSelection.parse("alpha-relaunch", "");
 		assertTrue(relaunch.runsAlphaRelaunch());
@@ -66,11 +73,19 @@ final class AnomalyClientAutomationContractTest {
 		assertTrue(reworkForms.runsReworkForms());
 		assertFalse(reworkForms.runsMainline());
 		assertFalse(reworkForms.runsAnomalies());
+		var toolsUi = ClientGameTestSelection.parse("tools-ui", "");
+		assertTrue(toolsUi.runsMainline());
+		assertTrue(toolsUi.runsToolsUi());
+		assertFalse(toolsUi.runsAnomalies());
 		var watcherModel = ClientGameTestSelection.parse("watcher-model", "");
 		assertTrue(watcherModel.runsWatcherModel());
 		assertFalse(watcherModel.runsMainline());
 		assertFalse(watcherModel.runsAnomalies());
 		assertFalse(watcherModel.runsReworkForms());
+		var endBoss = ClientGameTestSelection.parse("end-boss", "");
+		assertTrue(endBoss.runsEndBoss());
+		assertFalse(endBoss.runsMainline());
+		assertFalse(endBoss.runsAnomalies());
 		assertThrows(IllegalArgumentException.class,
 				() -> ClientGameTestSelection.parse("mainline", "phantom_echo"));
 		assertThrows(IllegalArgumentException.class,

@@ -101,6 +101,20 @@ public final class TerminalSignalLog {
 		return entries(record).stream().anyMatch(entry -> entry.type().equals(type));
 	}
 
+	public static boolean pruneOperationalTelemetry(CompoundTag record) {
+		ListTag events = record.getListOrEmpty(TerminalData.SIGNAL_EVENTS).copy();
+		boolean changed = false;
+		for (int index = events.size() - 1; index >= 0; index--) {
+			String type = events.getCompoundOrEmpty(index).getStringOr("type", "unknown");
+			if (TerminalRecordPolicy.retainedInLog(type)) continue;
+			events.remove(index);
+			changed = true;
+		}
+		if (changed) record.put(TerminalData.SIGNAL_EVENTS, events);
+		record.putInt(TerminalData.UNREAD_SIGNAL_COUNT, unreadCount(events));
+		return changed;
+	}
+
 	public static String clock(long dayTime) {
 		return SignalClock.format(dayTime);
 	}

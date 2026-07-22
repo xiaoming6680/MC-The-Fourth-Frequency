@@ -11,7 +11,7 @@ public final class TerminalUiLayout {
 	public static final Bounds HOME_QUICK_PRIMARY = new Bounds(44, 123, 194, 164);
 	public static final Bounds HOME_QUICK_SECONDARY = new Bounds(198, 123, 348, 164);
 	public static final Bounds HOME_TOOL_DETAIL = new Bounds(44, 123, 348, 164);
-	public static final Bounds HOME_TOOL_BACK = new Bounds(50, 129, 96, 158);
+	public static final Bounds HOME_TOOL_CLOSE = new Bounds(302, 129, 342, 158);
 	public static final Bounds HOME_RECENT = new Bounds(44, 168, 348, 196);
 	public static final Bounds TOOLS_GRID = new Bounds(44, 72, 348, 190);
 	public static final Bounds TOOL_HEADER = new Bounds(44, 72, 348, 92);
@@ -28,10 +28,11 @@ public final class TerminalUiLayout {
 	public static final Bounds TOOL_OPTION_THREE = new Bounds(244, 139, 342, 157);
 	public static final Bounds TOOL_ACTION_PRIMARY = new Bounds(50, 166, 190, 188);
 	public static final Bounds TOOL_ACTION_SECONDARY = new Bounds(202, 166, 342, 188);
+	public static final Bounds TOOL_ACTION_FULL = new Bounds(50, 166, 342, 188);
 	public static final Bounds KEYPAD = new Bounds(149, 123, 336, 184);
 	public static final Bounds HARDWARE_SAFE = new Bounds(389, 24, 495, 230);
 	public static final Bounds SCOPE = new Bounds(400, 46, 484, 88);
-	public static final Bounds COMPASS = new Bounds(425, 98, 459, 132);
+	public static final Bounds COMPASS = new Bounds(421, 94, 463, 136);
 	public static final Bounds RECEIVER_SLIDER = new Bounds(400, 141, 484, 163);
 	public static final Bounds RECEIVER_LCD = new Bounds(400, 176, 484, 204);
 	public static final Bounds LCD_LINE_ONE = new Bounds(404, 180, 480, 190);
@@ -47,6 +48,8 @@ public final class TerminalUiLayout {
 	public static final int FILE_LIST_VISIBLE_ROWS = 6;
 	public static final int HINT_HOLD_TICKS = 40;
 	public static final int HINT_END_TICKS = 60;
+	public static final int UNREAD_FLASH_HALF_PERIOD_TICKS = 10;
+	public static final int UNREAD_FLASH_DURATION_TICKS = 40;
 
 	private TerminalUiLayout() { }
 
@@ -55,6 +58,14 @@ public final class TerminalUiLayout {
 		if (ageTicks >= HINT_END_TICKS) return 0;
 		return (int) Math.round(255.0D * (HINT_END_TICKS - ageTicks)
 				/ (HINT_END_TICKS - HINT_HOLD_TICKS));
+	}
+
+	public static boolean unreadFlashOn(double elapsedTicks) {
+		double elapsed = Math.max(0.0D, elapsedTicks);
+		if (elapsed >= UNREAD_FLASH_DURATION_TICKS) return false;
+		long tick = (long) Math.floor(elapsed);
+		return Math.floorMod(tick, UNREAD_FLASH_HALF_PERIOD_TICKS * 2L)
+				< UNREAD_FLASH_HALF_PERIOD_TICKS;
 	}
 
 	public static int scroll(int current, int delta, int maximum) {

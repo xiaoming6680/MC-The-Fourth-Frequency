@@ -40,6 +40,7 @@ public final class AlphaLoadSessionController {
 	private static boolean persistentStartupApplied;
 	private static boolean persistentInitialPackSelectionPrepared;
 	private static boolean persistentIdentityPrimed;
+	private static boolean presentationRetired;
 	private static boolean javaIconApplied;
 	private static boolean resourceReloadFinished = true;
 	private static boolean resourceReloadInProgress;
@@ -72,12 +73,14 @@ public final class AlphaLoadSessionController {
 	public static void initialize() {
 		if (initialized) return;
 		initialized = true;
+		WorldInterfaceResourcePackLease.initialize();
+		presentationRetired = WorldInterfaceResourcePackLease.presentationRetired();
 		ModContainer container = FabricLoader.getInstance().getModContainer(TheFourthFrequency.MOD_ID)
 				.orElseThrow(() -> new IllegalStateException("Missing own Fabric mod container"));
 		registerPack(container, "golden_days_base", "Golden Days Base");
 		registerPack(container, "golden_days_alpha", "Golden Days Alpha");
 		corruptionEverPlayed = ConfigManager.loadClientState().alphaDowngradeComplete();
-		persistentStartupPending = corruptionEverPlayed;
+		persistentStartupPending = corruptionEverPlayed && !presentationRetired;
 
 		ClientPlayConnectionEvents.INIT.register((handler, client) -> client.execute(() -> begin(client)));
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> client.execute(() -> begin(client)));
@@ -95,7 +98,7 @@ public final class AlphaLoadSessionController {
 	}
 
 	private static void begin(Minecraft client) {
-		if (active || client.getWindow() == null) return;
+		if (presentationRetired || active || client.getWindow() == null) return;
 		active = true;
 		corruptionInProgress = false;
 		resourceReloadFailed = false;
@@ -122,6 +125,7 @@ public final class AlphaLoadSessionController {
 		++reloadGeneration;
 		currentViewportFlooded = false;
 		suppressNextResourceReloadAnimation = false;
+		if (presentationRetired) return;
 		// The Alpha bases intentionally stay selected on the main menu and between later world entries.
 		if (javaIconApplied && client.getWindow() != null) applyJavaIcon(client);
 		if (corruptionEverPlayed && client.getWindow() != null) {
@@ -130,7 +134,7 @@ public final class AlphaLoadSessionController {
 	}
 
 	public static boolean claimInitialCorruptionScreen() {
-		if (!active || corruptionEverPlayed || corruptionInProgress) return false;
+		if (presentationRetired || !active || corruptionEverPlayed || corruptionInProgress) return false;
 		corruptionEverPlayed = true;
 		corruptionInProgress = true;
 		corruptionPlayCount++;
@@ -148,7 +152,7 @@ public final class AlphaLoadSessionController {
 	}
 
 	public static boolean shouldUsePersistentAlphaLoadingStyle() {
-		return AlphaLoadingPresentationPolicy.usePersistentLegacyPresentation(
+		return !presentationRetired && AlphaLoadingPresentationPolicy.usePersistentLegacyPresentation(
 				corruptionEverPlayed, corruptionInProgress);
 	}
 
@@ -187,13 +191,13 @@ public final class AlphaLoadSessionController {
 	}
 
 	public static void retainFinalWindowTitle(Minecraft client) {
-		if (corruptionEverPlayed && !corruptionInProgress && client.getWindow() != null) {
+		if (!presentationRetired && corruptionEverPlayed && !corruptionInProgress && client.getWindow() != null) {
 			applyPersistentFinalTitle(client);
 		}
 	}
 
 	public static String menuVersionText(String vanillaText) {
-		return corruptionEverPlayed ? MENU_VERSION_TEXT : vanillaText;
+		return corruptionEverPlayed && !presentationRetired ? MENU_VERSION_TEXT : vanillaText;
 	}
 
 	public static void recordLegacyLoadingScreenRendered() {
@@ -212,13 +216,15 @@ public final class AlphaLoadSessionController {
 	}
 
 	private static void clientTick(Minecraft client) {
+		if (presentationRetired) return;
 		primePersistentIdentity(client);
 		applyPersistentStartupIfReady(client);
 		capturePendingScreenshot(client);
 	}
 
 	public static void preparePersistentPackSelectionBeforeInitialReload(Minecraft client) {
-		if (!corruptionEverPlayed || persistentInitialPackSelectionPrepared || client.options == null) return;
+		if (presentationRetired || !corruptionEverPlayed
+				|| persistentInitialPackSelectionPrepared || client.options == null) return;
 		try {
 			selectAlphaResourceStack(client);
 			client.options.resourcePacks.removeIf(AlphaResourcePackPlan.SESSION_BASES_LOW_TO_HIGH::contains);
@@ -235,14 +241,15 @@ public final class AlphaLoadSessionController {
 	}
 
 	private static void primePersistentIdentity(Minecraft client) {
-		if (!corruptionEverPlayed || active || persistentIdentityPrimed || client.getWindow() == null) return;
+		if (presentationRetired || !corruptionEverPlayed
+				|| active || persistentIdentityPrimed || client.getWindow() == null) return;
 		if (applyJavaIcon(client)) javaIconApplied = true;
 		applyPersistentFinalTitle(client);
 		persistentIdentityPrimed = true;
 	}
 
 	private static void applyPersistentStartupIfReady(Minecraft client) {
-		if (!persistentStartupPending || active || client.getWindow() == null
+		if (presentationRetired || !persistentStartupPending || active || client.getWindow() == null
 				|| !(client.screen instanceof TitleScreen) || client.getOverlay() != null) return;
 		persistentStartupPending = false;
 		launchedVersion = client.getLaunchedVersion() == null || client.getLaunchedVersion().isBlank()
@@ -266,6 +273,7 @@ public final class AlphaLoadSessionController {
 	}
 
 	private static void ensureAlphaResourceStack(Minecraft client, boolean recordSessionRequest) {
+		if (presentationRetired) return;
 		boolean selectionChanged = selectAlphaResourceStack(client);
 		if (recordSessionRequest) resourceReloadRequestedThisSession = selectionChanged;
 		if (!selectionChanged) {
@@ -298,15 +306,18 @@ public final class AlphaLoadSessionController {
 	}
 
 	private static boolean selectAlphaResourceStack(Minecraft client) {
+		if (presentationRetired) return false;
 		PackRepository repository = client.getResourcePackRepository();
 		repository.reload();
 		List<String> selectedBefore = repository.getSelectedPacks().stream().map(Pack::getId).toList();
 		if (containsOrderedAlphaBases(selectedBefore)) {
+			WorldInterfaceResourcePackLease.adoptExistingAutomaticSelection(selectedBefore);
 			activePackOrder = List.copyOf(selectedBefore);
 			return false;
 		}
 		activePackOrder = AlphaResourcePackPlan.selectionForSession(selectedBefore,
 				repository.getAvailableIds());
+		WorldInterfaceResourcePackLease.captureAutomaticSelection(selectedBefore, activePackOrder);
 		for (String packId : AlphaResourcePackPlan.SESSION_BASES_LOW_TO_HIGH) {
 			if (!repository.isAvailable(packId)) {
 				TheFourthFrequency.LOGGER.error("Required Alpha base resource pack is unavailable: {}", packId);
@@ -453,6 +464,34 @@ public final class AlphaLoadSessionController {
 
 	public static String sessionKindForTesting() {
 		return sessionKind.name();
+	}
+
+	/** Permanently ends the optional Alpha presentation without changing core mod resources. */
+	public static void retirePresentation() {
+		presentationRetired = true;
+		active = false;
+		persistentStartupPending = false;
+		persistentIdentityPrimed = false;
+		resourceReloadInProgress = false;
+		resourceReloadFinished = true;
+		++reloadGeneration;
+		WorldInterfaceResourcePackLease.markPresentationRetired();
+	}
+
+	public static void resetForReplay() {
+		active = false;
+		corruptionEverPlayed = false;
+		corruptionInProgress = false;
+		persistentStartupPending = false;
+		persistentStartupApplied = false;
+		persistentIdentityPrimed = false;
+		presentationRetired = false;
+		resourceReloadInProgress = false;
+		resourceReloadFinished = true;
+	}
+
+	public static boolean presentationRetiredForTesting() {
+		return presentationRetired;
 	}
 
 	private static void applyVersionTitle(Minecraft client, int stage) {

@@ -51,7 +51,7 @@ public final class WorldDecayService {
 				: SurvivalMilestone.RETURNED_NETHER.present(milestones) ? 4
 				: SurvivalMilestone.IRON.present(milestones) ? 3
 				: SurvivalMilestone.HOME.present(milestones) ? 2 : 0;
-		if (EndingState.started(data) && EndingState.outcome(data) == EndingOutcome.ACTIVE) return 5;
+		if (EndingState.endingPressureActive(data)) return 5;
 		return Math.max(anomaly, survival);
 	}
 }

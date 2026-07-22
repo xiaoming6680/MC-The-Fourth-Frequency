@@ -88,7 +88,6 @@ public final class TerminalRuntimeService {
 			case TerminalControlPayload.SELECT_FRAGMENT_TARGET -> {
 				if (value < 0 || value >= 12) return;
 				if (!FragmentInvestigationService.selectCandidate(player, value)) return;
-				TerminalToolService.startGuidance(player, TerminalTool.NAVIGATION.slot());
 			}
 			case TerminalControlPayload.SELECT_TOOL -> {
 				if (!TerminalToolService.selectTool(player, value)) return;
@@ -101,10 +100,12 @@ public final class TerminalRuntimeService {
 			}
 			case TerminalControlPayload.SELECT_NEAREST_UNSTABLE -> {
 				if (value != 0 || !FragmentInvestigationService.selectNearestCandidate(player)) return;
-				TerminalToolService.startGuidance(player, TerminalTool.NAVIGATION.slot());
 			}
 			case TerminalControlPayload.START_GUIDANCE -> {
-				if (!TerminalToolService.startGuidance(player, value)) return;
+				if (!TerminalToolService.startGuidance(player, value)) {
+					sendSnapshot(player, view);
+					return;
+				}
 			}
 			case TerminalControlPayload.STOP_GUIDANCE -> {
 				if (!TerminalToolService.stopGuidance(player, value)) return;

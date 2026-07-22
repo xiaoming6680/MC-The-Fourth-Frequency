@@ -3,8 +3,12 @@ package com.xm.thefourthfrequency.entity;
 import com.xm.thefourthfrequency.ending.FinalConfrontationService;
 import com.xm.thefourthfrequency.ending.EndBossDifficulty;
 import com.xm.thefourthfrequency.ending.EndBossEncounterService;
+import com.xm.thefourthfrequency.ending.EndBossAction;
+import com.xm.thefourthfrequency.ending.EndBossArenaService;
+import com.xm.thefourthfrequency.ending.EndBossPhase;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import net.minecraft.network.chat.Component;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
@@ -21,6 +25,7 @@ import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.Vec3;
@@ -35,6 +40,8 @@ public final class MisreadBodyEntity extends Monster {
 	private static final EntityDataAccessor<Integer> ADAPTATION_ACTION = SynchedEntityData.defineId(
 			MisreadBodyEntity.class, EntityDataSerializers.INT);
 	private static final EntityDataAccessor<Integer> ADAPTATION_TICKS = SynchedEntityData.defineId(
+			MisreadBodyEntity.class, EntityDataSerializers.INT);
+	private static final EntityDataAccessor<Integer> END_PHASE = SynchedEntityData.defineId(
 			MisreadBodyEntity.class, EntityDataSerializers.INT);
 	private final ServerBossEvent bossEvent = (ServerBossEvent) new ServerBossEvent(
 			Component.translatable("bossbar.thefourthfrequency.fourth_frequency"),
@@ -76,7 +83,8 @@ public final class MisreadBodyEntity extends Monster {
 	protected void defineSynchedData(SynchedEntityData.Builder builder) {
 		super.defineSynchedData(builder);
 		builder.define(PHENOTYPE, 3).define(MASS_STAGE, 0).define(ABSORBED, 0)
-				.define(ADAPTATION_ACTION, 0).define(ADAPTATION_TICKS, 0);
+				.define(ADAPTATION_ACTION, 0).define(ADAPTATION_TICKS, 0)
+				.define(END_PHASE, EndBossPhase.OBSERVATION.id());
 	}
 
 	@Override
@@ -128,13 +136,17 @@ public final class MisreadBodyEntity extends Monster {
 	}
 
 	private void tickEndEncounter(ServerLevel level) {
-		if (disruptedTicks > 0) {
-			disruptedTicks--;
-			clearAdaptation();
-		}
+		recoverToArena(level);
 		ServerPlayer target = EndBossEncounterService.selectTarget(this).orElse(null);
 		if (adaptationTicks() > 0) {
 			tickAdaptation(level, target);
+			return;
+		}
+		if (disruptedTicks > 0) {
+			disruptedTicks--;
+			setTarget(null);
+			getNavigation().stop();
+			setDeltaMovement(0.0, getDeltaMovement().y, 0.0);
 			return;
 		}
 		if (target == null) {
@@ -143,11 +155,6 @@ public final class MisreadBodyEntity extends Monster {
 			return;
 		}
 		setTarget(target);
-		if (disruptedTicks <= 0 && --adaptationCooldown <= 0 && distanceToSqr(target) <= 56.0 * 56.0) {
-			int action = phenotype() == 3 ? 1 + Math.floorMod(adaptationCycle++, 3) : phenotype() + 1;
-			beginAdaptation(target, action);
-			return;
-		}
 		Vec3 predicted = FinalConfrontationService.predictedDestination(target);
 		double speed = endNavigationSpeed + (target.isUsingItem() ? 0.10 : 0.0)
 				+ FinalConfrontationService.learnedTimingBonus(target);
@@ -158,7 +165,7 @@ public final class MisreadBodyEntity extends Monster {
 		}
 	}
 
-	public void configureEndEncounter(EndBossDifficulty.Profile profile) {
+	public void configureEndEncounter(EndBossDifficulty.Profile profile, EndBossPhase phase) {
 		float healthRatio = getHealth() / Math.max(1.0F, getMaxHealth());
 		boolean profileChanged = !endEncounter || endAnchors != profile.anchors()
 				|| endParticipants != profile.participantScale();
@@ -171,6 +178,7 @@ public final class MisreadBodyEntity extends Monster {
 		endAttackInterval = profile.attackInterval();
 		endAdaptationCooldown = profile.adaptationCooldown();
 		endAdaptationDamage = profile.adaptationDamage();
+		setEndPhase(phase);
 		getAttribute(Attributes.MAX_HEALTH).setBaseValue(profile.maxHealth());
 		getAttribute(Attributes.MOVEMENT_SPEED).setBaseValue(profile.movementSpeed());
 		getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(profile.attackDamage());
@@ -182,7 +190,12 @@ public final class MisreadBodyEntity extends Monster {
 			}
 		}
 		bossEvent.setName(Component.translatable("bossbar.thefourthfrequency.end_boss",
+				Component.translatable("phase.thefourthfrequency.end_boss." + phase.serializedName()),
 				profile.anchors(), profile.participantScale()));
+	}
+
+	public void configureEndEncounter(EndBossDifficulty.Profile profile) {
+		configureEndEncounter(profile, endPhase());
 	}
 
 	public void setPhenotype(int phenotype) {
@@ -195,6 +208,20 @@ public final class MisreadBodyEntity extends Monster {
 	public int absorbedBlocks() { return entityData.get(ABSORBED); }
 	public int adaptationAction() { return entityData.get(ADAPTATION_ACTION); }
 	public int adaptationTicks() { return entityData.get(ADAPTATION_TICKS); }
+	public EndBossPhase endPhase() { return EndBossPhase.fromId(entityData.get(END_PHASE)); }
+	public float endAdaptationDamage() { return endAdaptationDamage; }
+	public boolean canBeginEndBossAction() {
+		return endEncounter && isAlive() && disruptedTicks <= 0 && adaptationTicks() <= 0;
+	}
+
+	public void setEndPhase(EndBossPhase phase) {
+		EndBossPhase safe = phase == null ? EndBossPhase.OBSERVATION : phase;
+		entityData.set(END_PHASE, safe.id());
+		if (endEncounter && massStage() != safe.massStage()) {
+			entityData.set(MASS_STAGE, safe.massStage());
+			refreshDimensions();
+		}
+	}
 	public void inheritGrowth(int absorbed) {
 		entityData.set(ABSORBED, Math.clamp(absorbed, 0, 384));
 		int stage = absorbed >= 72 ? 3 : absorbed >= 36 ? 2 : absorbed >= 12 ? 1 : 0;
@@ -206,11 +233,12 @@ public final class MisreadBodyEntity extends Monster {
 
 	public void disrupt(int ticks) {
 		disruptedTicks = Math.max(disruptedTicks, ticks);
-		clearAdaptation();
-		adaptationCooldown = Math.max(adaptationCooldown, 80);
+		if (!endEncounter || adaptationTicks() <= 0) clearAdaptation();
+		adaptationCooldown = Math.max(adaptationCooldown, endEncounter ? ticks : 80);
 	}
 
 	public boolean beginAdaptation(ServerPlayer target, int action) {
+		if (endEncounter) return beginEndBossAction(target, EndBossAction.fromId(action), endPhase());
 		if (action < 1 || action > 3 || adaptationTicks() > 0 || target.level() != level()) return false;
 		Vec3 predicted = FinalConfrontationService.predictedDestination(target);
 		Vec3 targetPoint = action == 3 ? target.position() : predicted;
@@ -232,14 +260,68 @@ public final class MisreadBodyEntity extends Monster {
 		return true;
 	}
 
+	public boolean beginEndBossAction(ServerPlayer target, EndBossAction action, EndBossPhase phase) {
+		if (!canBeginEndBossAction() || action == null || action == EndBossAction.NONE
+				|| action == EndBossAction.ORGAN_DISPLACEMENT
+				|| target.level() != level()) return false;
+		Vec3 predicted = FinalConfrontationService.predictedDestination(target);
+		Vec3 targetPoint = action == EndBossAction.MINER_TRENCH ? target.position() : predicted;
+		BlockPos targetPos = BlockPos.containing(targetPoint.x, targetPoint.y, targetPoint.z);
+		if (!EndBossArenaService.arm(this, action, targetPos, phase)) return false;
+		adaptationTargetX = targetPoint.x;
+		adaptationTargetY = targetPoint.y;
+		adaptationTargetZ = targetPoint.z;
+		entityData.set(ADAPTATION_ACTION, action.id());
+		entityData.set(ADAPTATION_TICKS, EndBossArenaService.WARNING_TICKS);
+		getNavigation().stop();
+		target.displayClientMessage(Component.translatable(switch (action) {
+			case OPERATOR_DASH -> "message.thefourthfrequency.boss.adaptation.operator";
+			case BUILDER_BRACE -> "message.thefourthfrequency.boss.adaptation.builder";
+			case MINER_TRENCH -> "message.thefourthfrequency.boss.adaptation.miner";
+			case ARENA_RUPTURE -> "message.thefourthfrequency.end_boss.rupture_warning";
+			default -> "message.thefourthfrequency.end_boss.rupture_warning";
+		}), true);
+		if (level() instanceof ServerLevel serverLevel) {
+			com.xm.thefourthfrequency.audio.AudioService.play(serverLevel, blockPosition(),
+					com.xm.thefourthfrequency.audio.AudioService.Cue.MISREAD_ADAPTATION);
+		}
+		return true;
+	}
+
+	public boolean beginEndBossIntrusionVisual(ServerPlayer target) {
+		if (!canBeginEndBossAction() || target.level() != level()) return false;
+		adaptationTargetX = target.getX();
+		adaptationTargetY = target.getY();
+		adaptationTargetZ = target.getZ();
+		entityData.set(ADAPTATION_ACTION, EndBossAction.ORGAN_DISPLACEMENT.id());
+		entityData.set(ADAPTATION_TICKS, com.xm.thefourthfrequency.ending.EndBossIntrusionService.WARNING_TICKS);
+		getNavigation().stop();
+		if (level() instanceof ServerLevel serverLevel) {
+			com.xm.thefourthfrequency.audio.AudioService.play(serverLevel, blockPosition(),
+					com.xm.thefourthfrequency.audio.AudioService.Cue.MISREAD_ADAPTATION);
+		}
+		return true;
+	}
+
+	public void showEndBossActionVisual(EndBossAction action, BlockPos target, int ticks) {
+		if (!endEncounter || action == null || action == EndBossAction.NONE) return;
+		adaptationTargetX = target.getX() + 0.5;
+		adaptationTargetY = target.getY();
+		adaptationTargetZ = target.getZ() + 0.5;
+		entityData.set(ADAPTATION_ACTION, action.id());
+		entityData.set(ADAPTATION_TICKS, Math.clamp(ticks, 1, EndBossArenaService.WARNING_TICKS));
+	}
+
 	private void tickAdaptation(ServerLevel level, ServerPlayer target) {
 		getNavigation().stop();
+		setDeltaMovement(0.0, getDeltaMovement().y, 0.0);
 		getLookControl().setLookAt(adaptationTargetX, adaptationTargetY + 1.0, adaptationTargetZ, 60.0F, 60.0F);
 		if (adaptationTicks() % 4 == 0) {
 			var particle = switch (adaptationAction()) {
 				case 1 -> ParticleTypes.END_ROD;
 				case 2 -> ParticleTypes.SMOKE;
-				default -> ParticleTypes.CRIT;
+				case 3 -> ParticleTypes.CRIT;
+				default -> ParticleTypes.REVERSE_PORTAL;
 			};
 			level.sendParticles(particle, adaptationTargetX, adaptationTargetY + 0.25, adaptationTargetZ,
 					6, 0.35, 0.15, 0.35, 0.02);
@@ -252,6 +334,15 @@ public final class MisreadBodyEntity extends Monster {
 	private void resolveAdaptation(ServerLevel level, ServerPlayer target) {
 		int action = adaptationAction();
 		Vec3 marked = new Vec3(adaptationTargetX, adaptationTargetY, adaptationTargetZ);
+		if (endEncounter) {
+			if (action == EndBossAction.OPERATOR_DASH.id()) {
+				Vec3 dash = marked.subtract(position()).multiply(1.0, 0.0, 1.0);
+				if (dash.lengthSqr() > 0.01) setDeltaMovement(dash.normalize().scale(1.35).add(0.0, 0.08, 0.0));
+			}
+			clearAdaptation();
+			adaptationCooldown = endAdaptationCooldown;
+			return;
+		}
 		if (action == 1) {
 			Vec3 dash = marked.subtract(position()).multiply(1.0, 0.0, 1.0);
 			if (dash.lengthSqr() > 0.01) setDeltaMovement(dash.normalize().scale(1.35).add(0.0, 0.08, 0.0));
@@ -265,6 +356,16 @@ public final class MisreadBodyEntity extends Monster {
 		}
 		clearAdaptation();
 		adaptationCooldown = endEncounter ? endAdaptationCooldown : 120 + getRandom().nextInt(61);
+	}
+
+	private void recoverToArena(ServerLevel level) {
+		double horizontal = getX() * getX() + getZ() * getZ();
+		if (getY() >= 32.0 && horizontal <= 192.0 * 192.0) return;
+		int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, 0, 12);
+		snapTo(0.5, Math.max(62.0, y + 1.0), 12.5, getYRot(), getXRot());
+		setDeltaMovement(Vec3.ZERO);
+		fallDistance = 0.0F;
+		getNavigation().stop();
 	}
 
 	private void clearAdaptation() {
@@ -372,6 +473,7 @@ public final class MisreadBodyEntity extends Monster {
 		output.putInt("end_attack_interval", endAttackInterval);
 		output.putInt("end_adaptation_cooldown", endAdaptationCooldown);
 		output.putFloat("end_adaptation_damage", endAdaptationDamage);
+		output.putInt("end_phase", endPhase().id());
 	}
 
 	@Override
@@ -382,8 +484,9 @@ public final class MisreadBodyEntity extends Monster {
 		entityData.set(ABSORBED, Math.max(0, input.getIntOr("absorbed_blocks", 0)));
 		capturedStrength = Math.max(0, input.getIntOr("captured_strength", 0));
 		disruptedTicks = Math.max(0, input.getIntOr("disrupted_ticks", 0));
-		entityData.set(ADAPTATION_ACTION, Math.clamp(input.getIntOr("adaptation_action", 0), 0, 3));
-		entityData.set(ADAPTATION_TICKS, Math.clamp(input.getIntOr("adaptation_ticks", 0), 0, 24));
+		entityData.set(ADAPTATION_ACTION, Math.clamp(input.getIntOr("adaptation_action", 0), 0, 5));
+		entityData.set(ADAPTATION_TICKS, Math.clamp(input.getIntOr("adaptation_ticks", 0), 0,
+				EndBossArenaService.WARNING_TICKS));
 		adaptationCooldown = Math.max(0, input.getIntOr("adaptation_cooldown", 100));
 		adaptationCycle = Math.max(0, input.getIntOr("adaptation_cycle", 0));
 		adaptationTargetX = input.getDoubleOr("adaptation_target_x", getX());
@@ -397,6 +500,9 @@ public final class MisreadBodyEntity extends Monster {
 		endAttackInterval = Math.max(1, input.getIntOr("end_attack_interval", 10));
 		endAdaptationCooldown = Math.max(1, input.getIntOr("end_adaptation_cooldown", 120));
 		endAdaptationDamage = Math.max(1.0F, input.getFloatOr("end_adaptation_damage", 6.0F));
+		entityData.set(END_PHASE, EndBossPhase.fromId(input.getIntOr("end_phase",
+				EndBossPhase.OBSERVATION.id())).id());
+		if (endEncounter) entityData.set(MASS_STAGE, endPhase().massStage());
 		applyCombatProfile();
 	}
 

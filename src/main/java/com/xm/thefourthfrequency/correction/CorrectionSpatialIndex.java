@@ -73,9 +73,9 @@ public final class CorrectionSpatialIndex {
 		}
 	}
 
-	public static int refresh(int budget) {
-		int work = 0;
-		while (work < budget && !REFRESH_ORDER.isEmpty()) {
+	public static void refresh(int budget) {
+		int refreshed = 0;
+		while (refreshed < budget && !REFRESH_ORDER.isEmpty()) {
 			if (refreshCursor >= REFRESH_ORDER.size()) {
 				refreshCursor = 0;
 			}
@@ -98,9 +98,8 @@ public final class CorrectionSpatialIndex {
 				BUCKETS.computeIfAbsent(current, ignored -> new LinkedHashSet<>()).add(id);
 				ENTRIES.put(id, new Entry(entry.mob(), current));
 			}
-			work++;
+			refreshed++;
 		}
-		return work;
 	}
 
 	public static List<Mob> sampleNear(ServerLevel level, net.minecraft.core.BlockPos origin, int radius, int limit) {

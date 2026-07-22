@@ -30,6 +30,8 @@ public final class MenuErosionState {
 			"TA没有离开",
 			"你没有走错路",
 			"你回来了?");
+	private static final String SESSION_SPLASH = BOOT_SPLASHES.get(Math.floorMod(
+			(int) (System.nanoTime() >>> 8), BOOT_SPLASHES.size()));
 	private static volatile Stage stage = Stage.BOOT;
 	private static boolean initialized;
 	private MenuErosionState() { }
@@ -41,5 +43,7 @@ public final class MenuErosionState {
 						Stage.values().length - 1)]));
 	}
 	public static Stage stage() { return stage; }
+	public static String sessionSplash() { return SESSION_SPLASH; }
+	public static void resetForReplay() { stage = Stage.BOOT; }
 	public static void setForTesting(Stage value) { stage = value; }
 }

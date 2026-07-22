@@ -6,6 +6,7 @@ import com.xm.thefourthfrequency.networking.TerminalSnapshotPayload;
 import com.xm.thefourthfrequency.networking.TerminalLogEntryPayload;
 import com.xm.thefourthfrequency.networking.TerminalFilePayload;
 import com.xm.thefourthfrequency.terminal.SignalBand;
+import com.xm.thefourthfrequency.terminal.TerminalRecordPolicy;
 import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
 import com.xm.thefourthfrequency.terminal.TerminalNavigationMath;
 import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
@@ -51,10 +52,15 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 		return payload.signalEvents().stream().filter(entry -> entry.band() == SignalBand.UNKNOWN.wireId()
 				|| entry.type().startsWith("fragment_") || entry.type().startsWith("facility_")).toList();
 	}
-	public List<TerminalLogEntryPayload> allSignalEntries() { return payload.signalEvents(); }
+	public List<TerminalLogEntryPayload> recordEntries() {
+		return payload.signalEvents().stream()
+				.filter(entry -> TerminalRecordPolicy.visibleInRecords(entry.type()))
+				.toList();
+	}
 	public Component latestSignalEvent() {
-		if (payload.signalEvents().isEmpty()) return Component.translatable("terminal.thefourthfrequency.home.no_recent");
-		TerminalLogEntryPayload latest = payload.signalEvents().getFirst();
+		List<TerminalLogEntryPayload> entries = recordEntries();
+		if (entries.isEmpty()) return Component.translatable("terminal.thefourthfrequency.home.no_recent");
+		TerminalLogEntryPayload latest = entries.getFirst();
 		return Component.literal("[" + signalTime(latest) + "] ").append(signalEvent(latest));
 	}
 	public Component weatherLine() {

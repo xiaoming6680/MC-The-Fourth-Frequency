@@ -36,6 +36,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.ALERT_BACKGROUND;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.AMBER;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.CYAN;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.DARK_BORDER;
@@ -45,6 +46,8 @@ import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.GREEN;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.HOT;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.LCD_BACKGROUND;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.LCD_BORDER;
+import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.MUTED;
+import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.MUTED_DARK;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.SELECTED;
 
 public final class TerminalScreen extends Screen {
@@ -65,6 +68,7 @@ public final class TerminalScreen extends Screen {
 	private int tuning;
 	private int age;
 	private double renderAge;
+	private double unreadFlashStartedAt;
 	private long renderNowMillis;
 	private final TuningTransition tuningTransition;
 	private final TuningTransition waveformMorphTransition;
@@ -85,7 +89,9 @@ public final class TerminalScreen extends Screen {
 	private double targetObjectiveFraction;
 	private String animatedObjectiveId;
 	private boolean toolOpenedFromHome;
-	private boolean localLockedTool;
+	private TerminalTool homeLiveTool;
+	private boolean localNavigationTargetChosen;
+	private int hoveredToolSlot = -1;
 	private boolean localTuningOnly;
 
 	private LogView logView = LogView.DIRECTORY;
@@ -126,6 +132,7 @@ public final class TerminalScreen extends Screen {
 
 	public void update(TerminalSnapshotPayload payload) {
 		TerminalSnapshot next = new TerminalSnapshot(payload);
+		if (next.unreadCount() > snapshot.unreadCount()) unreadFlashStartedAt = age;
 		long nowMillis = nowMillis();
 		int nextTuning = next.tuning();
 		if (nextTuning != tuning && (!localTuningOnly || receiverGameplayActive())) {
@@ -167,7 +174,11 @@ public final class TerminalScreen extends Screen {
 	public void updateTools(TerminalToolSnapshotPayload payload) {
 		boolean gameplayBefore = receiverGameplayActive();
 		tools = new TerminalToolSnapshot(payload);
-		if (selectedTool != null && !tools.available(selectedTool) && !localLockedTool) clearSelectedTool(false);
+		TerminalTool activeGuidance = tools.guidanceTool();
+		if (activeGuidance != null) homeLiveTool = activeGuidance;
+		else if (homeLiveTool != TerminalTool.WEATHER) homeLiveTool = null;
+		if (tools.selectedNavigationTarget() != TerminalStructureTarget.NONE) localNavigationTargetChosen = true;
+		if (selectedTool != null && !tools.available(selectedTool)) clearSelectedTool(false);
 		if (!gameplayBefore && receiverGameplayActive() && localTuningOnly) {
 			localTuningOnly = false;
 			if (snapshot.tuning() != tuning) retargetTuningVisual(snapshot.tuning(), nowMillis());
@@ -224,6 +235,12 @@ public final class TerminalScreen extends Screen {
 		double[] localMouse = local(mouseX, mouseY);
 		hoveredFile = page == TerminalPage.FILES
 				? TerminalUiLayout.fileIndexAt(localMouse[0], localMouse[1], fileListScroll, snapshot.files().size()) : -1;
+		hoveredToolSlot = -1;
+		if (page == TerminalPage.TOOLS && selectedTool == null) {
+			int slot = TerminalUiLayout.toolSlotAt(localMouse[0], localMouse[1]);
+			TerminalTool hovered = TerminalTool.fromSlot(slot);
+			if (hovered != null && tools.available(hovered)) hoveredToolSlot = slot;
+		}
 		drawGlass(graphics);
 		drawTabs(graphics);
 		switch (page) {
@@ -248,18 +265,28 @@ public final class TerminalScreen extends Screen {
 	}
 
 	private void drawTabs(GuiGraphics graphics) {
-		drawTab(graphics, TerminalUiLayout.HOME_TAB, TerminalPage.HOME, "terminal.thefourthfrequency.tab.home");
-		drawTab(graphics, TerminalUiLayout.TOOLS_TAB, TerminalPage.TOOLS, "terminal.thefourthfrequency.tab.tools");
-		drawTab(graphics, TerminalUiLayout.RECORDS_TAB, TerminalPage.RECORDS, "terminal.thefourthfrequency.tab.records");
-		drawTab(graphics, TerminalUiLayout.FILES_TAB, TerminalPage.FILES, "terminal.thefourthfrequency.tab.files");
+		drawTab(graphics, TerminalUiLayout.HOME_TAB, TerminalPage.HOME,
+				"terminal.thefourthfrequency.tab.home", false);
+		drawTab(graphics, TerminalUiLayout.TOOLS_TAB, TerminalPage.TOOLS,
+				"terminal.thefourthfrequency.tab.tools", false);
+		drawTab(graphics, TerminalUiLayout.RECORDS_TAB, TerminalPage.RECORDS,
+				"terminal.thefourthfrequency.tab.records", snapshot.unreadCount() > 0);
+		drawTab(graphics, TerminalUiLayout.FILES_TAB, TerminalPage.FILES,
+				"terminal.thefourthfrequency.tab.files", false);
 	}
 
 	private void drawTab(GuiGraphics graphics, TerminalUiLayout.Bounds bounds,
-			TerminalPage tab, String key) {
+			TerminalPage tab, String key, boolean unread) {
 		boolean selected = page == tab;
-		graphics.fill(bounds.left(), bounds.top(), bounds.right(), bounds.bottom(), selected ? SELECTED : GLASS);
-		if (selected) graphics.fill(bounds.left(), bounds.top() + 2, bounds.left() + 2, bounds.bottom() - 2, pageAccent());
-		drawCenteredFitted(graphics, Component.translatable(key), bounds, selected ? pageAccent() : DIM);
+		boolean flashOn = unread && TerminalUiLayout.unreadFlashOn(renderAge - unreadFlashStartedAt);
+		int background = flashOn ? ALERT_BACKGROUND : selected ? SELECTED : GLASS;
+		graphics.fill(bounds.left(), bounds.top(), bounds.right(), bounds.bottom(), background);
+		if (flashOn) graphics.renderOutline(bounds.left(), bounds.top(), bounds.width(), bounds.height(), HOT);
+		if (selected) graphics.fill(bounds.left(), bounds.top() + 2, bounds.left() + 2, bounds.bottom() - 2,
+				unread ? HOT : pageAccent());
+		Component label = Component.translatable(key);
+		if (unread) label = label.copy().append(Component.literal(" [!]"));
+		drawCenteredFitted(graphics, label, bounds, unread ? HOT : selected ? pageAccent() : DIM);
 	}
 
 	private void drawHome(GuiGraphics graphics) {
@@ -277,8 +304,8 @@ public final class TerminalScreen extends Screen {
 		graphics.fill(TerminalUiLayout.HOME_TASK.left() + 7, progressY,
 				TerminalUiLayout.HOME_TASK.left() + 7 + filled, progressY + 3, pageAccent());
 
-		if (selectedTool != null && toolOpenedFromHome) {
-			drawHomeToolDetail(graphics, selectedTool);
+		if (homeLiveTool != null) {
+			drawHomeToolDetail(graphics, homeLiveTool);
 		} else {
 			drawQuickTool(graphics, tools.recommendedPrimaryTool(), TerminalUiLayout.HOME_QUICK_PRIMARY);
 			drawQuickTool(graphics, tools.recommendedSecondaryTool(), TerminalUiLayout.HOME_QUICK_SECONDARY);
@@ -314,16 +341,15 @@ public final class TerminalScreen extends Screen {
 	private void drawHomeToolDetail(GuiGraphics graphics, TerminalTool tool) {
 		TerminalUiLayout.Bounds bounds = TerminalUiLayout.HOME_TOOL_DETAIL;
 		drawCard(graphics, bounds, tools.available(tool) ? pageAccent() : DIM);
-		drawToolButton(graphics, TerminalUiLayout.HOME_TOOL_BACK,
-				Component.translatable("terminal.thefourthfrequency.tool.back_home"), false);
+		drawToolButton(graphics, TerminalUiLayout.HOME_TOOL_CLOSE,
+				Component.translatable("terminal.thefourthfrequency.tool.close_live"), false);
 		graphics.drawString(font, Component.translatable("terminal.thefourthfrequency.home.live_tool", toolName(tool)),
-				104, bounds.top() + 6, tools.available(tool) ? AMBER : DIM, false);
+				bounds.left() + 7, bounds.top() + 6, tools.available(tool) ? AMBER : DIM, false);
 		List<Component> lines = toolDetailLines(tool);
-		Component status = lines.size() > 1 ? lines.get(1) : lines.getFirst();
-		graphics.drawString(font, ellipsize(status.getString(), bounds.right() - 110),
-				104, bounds.top() + 21, tools.available(tool) ? GREEN : DIM, false);
-		Component detail = Component.translatable("terminal.thefourthfrequency.tool.open_detail");
-		graphics.drawString(font, detail, bounds.right() - 7 - font.width(detail), bounds.top() + 6, AMBER, false);
+		Component status = lines.size() > 1 ? lines.getLast() : lines.getFirst();
+		graphics.drawString(font, ellipsize(status.getString(), TerminalUiLayout.HOME_TOOL_CLOSE.left()
+				- bounds.left() - 14), bounds.left() + 7, bounds.top() + 21,
+				tools.available(tool) ? GREEN : DIM, false);
 	}
 
 	private void drawTools(GuiGraphics graphics) {
@@ -334,27 +360,78 @@ public final class TerminalScreen extends Screen {
 		for (TerminalTool tool : TerminalTool.values()) {
 			TerminalUiLayout.Bounds cell = TerminalUiLayout.toolCell(tool.slot());
 			boolean available = tools.available(tool);
-			drawCard(graphics, cell, available ? GREEN : DARK_BORDER);
+			boolean hovered = available && hoveredToolSlot == tool.slot();
+			drawCard(graphics, cell, hovered ? AMBER : available ? GREEN : DARK_BORDER);
 			drawToolGlyph(graphics, tool, cell);
 			drawCenteredFitted(graphics, toolName(tool),
 					new TerminalUiLayout.Bounds(cell.left() + 3, cell.bottom() - 18, cell.right() - 3, cell.bottom() - 3),
-					available ? GREEN : DIM);
+					hovered ? AMBER : available ? GREEN : DIM);
 			if (!available) drawPixelLock(graphics, cell.right() - 14, cell.top() + 5);
 		}
 	}
 
 	private void drawToolGlyph(GuiGraphics graphics, TerminalTool tool, TerminalUiLayout.Bounds cell) {
 		String[] pixels = switch (tool) {
-			case HOME -> new String[]{"....#....", "...###...", "..####...", ".##..##..", ".#....#..", ".#..+.#..", ".#..+.#..", ".######..", "........."};
-			case MINERALS -> new String[]{".######..", "##....##.", ".....##..", "....##...", "...##....", "..##.....", ".##......", "##.......", "........."};
-			case PORTAL -> new String[]{"..#####..", "..#~~~#..", "..#~~~#..", "..#~~~#..", "..#~~~#..", "..#~~~#..", "..#~~~#..", "..#####..", "........."};
-			case WEATHER -> new String[]{"...###...", "..#####..", "..#####..", "...###...", ".++++++..", "++++++++.", "..~..~...", ".~..~....", "........."};
-			case NAVIGATION -> new String[]{"....!....", "...!!!...", "...!#!...", "..!###!..", ".!##+##!.", "..!#+#!..", "...!#!...", "....!....", "........."};
-			case STRONGHOLD -> new String[]{".........", "..++++...", ".++##++..", "++#~~#++.", "+#~!!~#+.", "++#~~#++.", ".++##++..", "..++++...", "........."};
+			case HOME -> new String[]{
+					".....#.....", "....###....", "...#####...", "..##...##..", ".##.....##.",
+					".##..+..##.", ".##..+..##.", ".##..+..##.", ".##.+++.##.", ".#########.",
+					"..........."};
+			case MINERALS -> new String[]{
+					".....#.....", "...#####...", "..##~~~##..", ".##~!~!~##.", ".#~~!!!~~#.",
+					".##~!~!~##.", "..##~~~##..", "...##+##...", "....#+#....", ".....#.....",
+					"..........."};
+			case PORTAL -> new String[]{
+					"..#######..", ".##+++++##.", ".##~~~~~##.", ".##~!~~~##.", ".##~~~!~##.",
+					".##~~!~~##.", ".##~!~~~##.", ".##~~~~~##.", ".##+++++##.", "..#######..",
+					"..........."};
+			case WEATHER -> new String[]{
+					".......#...", ".....#####.", "....###!###", "...###..##.", "..~~~~~~~~.",
+					".~~~~~~~~~.", "..~~~~~~~..", "...+.+.+...", "..+.+.+....", "...........",
+					"..........."};
+			case NAVIGATION -> new String[]{
+					"...#####...", "..##...##..", ".##..!..##.", "##...!...##", "#...!!!...#",
+					"#....!....#", "#....~....#", "##..~~~..##", ".##..~..##.", "..##...##..",
+					"...#####..."};
+			case STRONGHOLD -> new String[]{
+					"...........", "..#.....#..", ".###...###.", ".###...###.", ".#########.",
+					".##~###~##.", ".##~###~##.", ".##~!#!~##.", ".##~!#!~##.", ".#########.",
+					"..........."};
 		};
-		int x = (cell.left() + cell.right()) / 2 - 9;
-		int y = cell.top() + 4;
-		drawPixelPattern(graphics, pixels, x, y, tools.available(tool));
+		int pixelSize = 2;
+		int glyphWidth = pixels[0].length() * pixelSize;
+		int glyphHeight = pixels.length * pixelSize;
+		int x = (cell.left() + cell.right() - glyphWidth) / 2;
+		int y = cell.top() + 5;
+		boolean available = tools.available(tool);
+		boolean hovered = available && hoveredToolSlot == tool.slot();
+		drawToolGlyphPlate(graphics, tool, x - 4, y - 3, glyphWidth + 8, glyphHeight + 6,
+				available, hovered);
+		drawPixelPattern(graphics, pixels, x, y, available);
+	}
+
+	private void drawToolGlyphPlate(GuiGraphics graphics, TerminalTool tool, int x, int y,
+			int width, int height, boolean available, boolean hovered) {
+		graphics.fill(x, y, x + width, y + height, available ? 0xC20A120D : 0xB20A0E0B);
+		int frame = !available ? DARK_BORDER : hovered ? AMBER : toolAccent(tool);
+		int corner = 5;
+		graphics.fill(x, y, x + corner, y + 1, frame);
+		graphics.fill(x, y, x + 1, y + corner, frame);
+		graphics.fill(x + width - corner, y, x + width, y + 1, frame);
+		graphics.fill(x + width - 1, y, x + width, y + corner, frame);
+		graphics.fill(x, y + height - 1, x + corner, y + height, frame);
+		graphics.fill(x, y + height - corner, x + 1, y + height, frame);
+		graphics.fill(x + width - corner, y + height - 1, x + width, y + height, frame);
+		graphics.fill(x + width - 1, y + height - corner, x + width, y + height, frame);
+		graphics.fill(x + 3, y + height - 4, x + 5, y + height - 2, available ? frame : DIM);
+	}
+
+	private static int toolAccent(TerminalTool tool) {
+		return switch (tool) {
+			case HOME, STRONGHOLD -> AMBER;
+			case MINERALS, WEATHER -> CYAN;
+			case PORTAL -> GREEN;
+			case NAVIGATION -> HOT;
+		};
 	}
 
 	private void drawPixelPattern(GuiGraphics graphics, String[] pixels, int x, int y, boolean available) {
@@ -362,11 +439,16 @@ public final class TerminalScreen extends Screen {
 			for (int column = 0; column < pixels[row].length(); column++) {
 				char pixel = pixels[row].charAt(column);
 				if (pixel == '.') continue;
-				int color = !available ? DIM : switch (pixel) {
+				int color = available ? switch (pixel) {
 					case '+' -> GREEN;
 					case '~' -> CYAN;
 					case '!' -> HOT;
 					default -> AMBER;
+				} : switch (pixel) {
+					case '+' -> DARK_BORDER;
+					case '~' -> MUTED_DARK;
+					case '!' -> MUTED;
+					default -> DIM;
 				};
 				graphics.fill(x + column * 2, y + row * 2, x + column * 2 + 2, y + row * 2 + 2, color);
 			}
@@ -414,14 +496,22 @@ public final class TerminalScreen extends Screen {
 		lines.add(Component.translatable("terminal.thefourthfrequency.tool." + tool.id() + ".summary"));
 		switch (tool) {
 			case HOME -> lines.add(tools.homeLine());
-			case MINERALS -> lines.add(navigation.targetKind() >= 1 && navigation.targetKind() <= 3
-					? snapshot.navigationLine(navigation, tools.playerY())
-					: Component.translatable("terminal.thefourthfrequency.tool.minerals.waiting"));
+			case MINERALS -> {
+				if (tools.selectedResource() == TerminalResource.NONE) {
+					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.waiting"));
+				} else if (navigation.targetKind() >= 1 && navigation.targetKind() <= 3) {
+					lines.add(snapshot.navigationLine(navigation, tools.playerY()));
+				} else {
+					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.auto_refresh",
+							Component.translatable("terminal.thefourthfrequency.resource."
+									+ tools.selectedResource().id())));
+				}
+			}
 			case PORTAL -> lines.add(tools.portalLine());
 			case WEATHER -> lines.add(tools.weatherLine());
 			case NAVIGATION -> {
 				lines.add(tools.navigationSummaryLine());
-				if (navigation.navigable()) lines.add(snapshot.navigationLine(navigation, tools.playerY()));
+				if (navigation.targetKind() != 0) lines.add(snapshot.navigationLine(navigation, tools.playerY()));
 			}
 			case STRONGHOLD -> lines.add(tools.strongholdLine());
 		}
@@ -482,29 +572,40 @@ public final class TerminalScreen extends Screen {
 			case HOME -> {
 				drawToolButton(graphics, TerminalUiLayout.TOOL_OPTION_ONE,
 						Component.translatable("terminal.thefourthfrequency.tool.home.set_here"), false);
-				if (tools.payload().homeKnown()) drawGuidanceButtons(graphics, tool);
+				if (tools.payload().homeKnown()) drawGuidanceToggle(graphics, tool,
+						TerminalUiLayout.TOOL_ACTION_FULL);
 			}
 			case MINERALS -> {
 				List<TerminalResource> resources = visibleResources();
 				for (int index = 0; index < resources.size(); index++)
 					drawResourceButton(graphics, resourceOptionBounds(index), resources.get(index));
-				drawToolButton(graphics, TerminalUiLayout.TOOL_ACTION_PRIMARY,
-						Component.translatable("terminal.thefourthfrequency.tool.rescan"), false);
-				drawToolButton(graphics, TerminalUiLayout.TOOL_ACTION_SECONDARY,
-						Component.translatable("terminal.thefourthfrequency.tool.stop"), false);
+				if (tools.selectedResource() != TerminalResource.NONE) drawGuidanceToggle(graphics, tool,
+						TerminalUiLayout.TOOL_ACTION_FULL);
 			}
-			case PORTAL, STRONGHOLD -> drawGuidanceButtons(graphics, tool);
-			case NAVIGATION -> drawToolButton(graphics, TerminalUiLayout.TOOL_ACTION_SECONDARY,
-					Component.translatable("terminal.thefourthfrequency.tool.stop"), false);
-			case WEATHER -> { }
+			case PORTAL -> {
+				if (tools.payload().portalKnown()) drawGuidanceToggle(graphics, tool,
+						TerminalUiLayout.TOOL_ACTION_FULL);
+			}
+			case NAVIGATION -> {
+				if (tools.guidanceTool() == tool || localNavigationTargetChosen) drawGuidanceToggle(graphics, tool,
+						TerminalUiLayout.TOOL_ACTION_FULL);
+			}
+			case STRONGHOLD -> {
+				if (tools.payload().strongholdKnown()) drawGuidanceToggle(graphics, tool,
+						TerminalUiLayout.TOOL_ACTION_FULL);
+			}
+			case WEATHER -> drawToolButton(graphics, TerminalUiLayout.TOOL_ACTION_FULL,
+					Component.translatable(homeLiveTool == tool
+							? "terminal.thefourthfrequency.tool.unpin"
+							: "terminal.thefourthfrequency.tool.pin"), homeLiveTool == tool);
 		}
 	}
 
-	private void drawGuidanceButtons(GuiGraphics graphics, TerminalTool tool) {
-		drawToolButton(graphics, TerminalUiLayout.TOOL_ACTION_PRIMARY,
-				Component.translatable("terminal.thefourthfrequency.tool.guide"), tools.guidanceTool() == tool);
-		drawToolButton(graphics, TerminalUiLayout.TOOL_ACTION_SECONDARY,
-				Component.translatable("terminal.thefourthfrequency.tool.stop"), false);
+	private void drawGuidanceToggle(GuiGraphics graphics, TerminalTool tool, TerminalUiLayout.Bounds bounds) {
+		boolean active = tools.guidanceTool() == tool;
+		drawToolButton(graphics, bounds, Component.translatable(active
+				? "terminal.thefourthfrequency.tool.stop"
+				: "terminal.thefourthfrequency.tool.guide"), active);
 	}
 
 	private void drawResourceButton(GuiGraphics graphics, TerminalUiLayout.Bounds bounds, TerminalResource resource) {
@@ -538,7 +639,7 @@ public final class TerminalScreen extends Screen {
 		var body = TerminalUiLayout.RECORDS_BODY;
 		graphics.fill(body.left(), body.top(), body.right(), body.bottom(), GLASS);
 		List<StyledRow> rows = new ArrayList<>();
-		for (TerminalLogEntryPayload entry : snapshot.allSignalEntries()) {
+		for (TerminalLogEntryPayload entry : snapshot.recordEntries()) {
 			Component line = Component.literal("[" + snapshot.signalTime(entry) + "] ").append(snapshot.signalEvent(entry));
 			rows.addAll(styledRows(List.of(line), body.width() - 16, entry.unread() ? AMBER : GREEN, 6, entry.unread()));
 		}
@@ -909,38 +1010,21 @@ public final class TerminalScreen extends Screen {
 
 	private void drawCompass(GuiGraphics graphics) {
 		var compass = TerminalUiLayout.COMPASS;
-		graphics.fill(compass.left(), compass.top(), compass.right(), compass.bottom(), 0xFF080D09);
-		graphics.renderOutline(compass.left(), compass.top(), compass.width(), compass.height(), 0xFF716B43);
 		int cx = (compass.left() + compass.right()) / 2;
 		int cy = (compass.top() + compass.bottom()) / 2;
-		graphics.fill(cx, compass.top() + 2, cx + 1, compass.top() + 5, 0xFFB8A96D);
-		graphics.fill(compass.left() + 2, cy, compass.left() + 5, cy + 1, 0xFF5A6249);
-		graphics.fill(compass.right() - 5, cy, compass.right() - 2, cy + 1, 0xFF5A6249);
-		graphics.fill(cx, compass.bottom() - 5, cx + 1, compass.bottom() - 2, 0xFF5A6249);
-		drawNeedle(graphics, cx, cy, northNeedle, 9, HOT, 0);
-		if (navigation.navigable()) {
-			int color = navigation.targetKind() == TerminalNavigationPayload.UNSTABLE_SIGNAL ? 0xFFE5A0A4
-					: navigation.targetKind() >= TerminalNavigationPayload.VILLAGE ? GREEN
-					: switch (Math.clamp(navigation.targetKind(), 1, 3)) {
-				case 2 -> 0xFFE34B46;
-				case 3 -> CYAN;
-				default -> AMBER;
-			};
-			drawNeedle(graphics, cx, cy, mineralNeedle, 7, color, navigation.targetKind());
-		}
-		graphics.fill(cx - 1, cy - 1, cx + 2, cy + 2, 0xFFF2DEA0);
-		String front = Component.translatable("terminal.thefourthfrequency.compass.front").getString();
-		String right = Component.translatable("terminal.thefourthfrequency.compass.right").getString();
-		String back = Component.translatable("terminal.thefourthfrequency.compass.back").getString();
-		String left = Component.translatable("terminal.thefourthfrequency.compass.left").getString();
-		drawCompassLabel(graphics, front, cx - font.width(front) / 2, compass.top() + 1);
-		drawCompassLabel(graphics, right, compass.right() - font.width(right) - 1, cy - font.lineHeight / 2);
-		drawCompassLabel(graphics, back, cx - font.width(back) / 2, compass.bottom() - font.lineHeight);
-		drawCompassLabel(graphics, left, compass.left() + 1, cy - font.lineHeight / 2);
-	}
+		drawPixelCircle(graphics, cx, cy, 20, 0xFF716B43);
+		drawPixelCircle(graphics, cx, cy, 18, 0xFF17180F);
+		drawPixelCircle(graphics, cx, cy, 16, 0xFF080D09);
 
-	private void drawCompassLabel(GuiGraphics graphics, String label, int x, int y) {
-		graphics.drawString(font, label, x, y, DIM, false);
+		graphics.fill(cx, cy - 16, cx + 1, cy - 13, DIM);
+		graphics.fill(cx + 14, cy, cx + 17, cy + 1, DIM);
+		graphics.fill(cx, cy + 14, cx + 1, cy + 17, DIM);
+		graphics.fill(cx - 16, cy, cx - 13, cy + 1, DIM);
+
+		if (navigation.navigable()) drawTargetNeedle(graphics, cx, cy, mineralNeedle);
+		drawNorthNeedle(graphics, cx, cy, northNeedle);
+		graphics.fill(cx - 2, cy - 2, cx + 3, cy + 3, 0xFF17180F);
+		graphics.fill(cx - 1, cy - 1, cx + 2, cy + 2, AMBER);
 	}
 
 	private void drawReceiverSlider(GuiGraphics graphics) {
@@ -990,10 +1074,8 @@ public final class TerminalScreen extends Screen {
 					: "terminal.thefourthfrequency.receiver.mechanical_only");
 			if (tools.receiverAvailable()) lineTwoColor = HOT;
 		}
-		graphics.drawString(font, ellipsize(lineOne.getString(), lcd.width() - 8),
-				lcd.left() + 4, lcd.top() + 4, lineOneColor, false);
-		graphics.drawString(font, ellipsize(lineTwo.getString(), lcd.width() - 8),
-				lcd.left() + 4, lcd.top() + 15, lineTwoColor, false);
+		drawFittedLine(graphics, lineOne, TerminalUiLayout.LCD_LINE_ONE, lineOneColor);
+		drawFittedLine(graphics, lineTwo, TerminalUiLayout.LCD_LINE_TWO, lineTwoColor);
 	}
 
 	private double currentWaveOffset(int sample, long nowMillis, double phaseAge) {
@@ -1105,15 +1187,13 @@ public final class TerminalScreen extends Screen {
 			return true;
 		}
 		if (page == TerminalPage.HOME) {
-			if (selectedTool != null && toolOpenedFromHome) {
-				if (TerminalUiLayout.HOME_TOOL_BACK.contains(local[0], local[1])) {
-					clearSelectedTool(true);
+			if (homeLiveTool != null) {
+				if (TerminalUiLayout.HOME_TOOL_CLOSE.contains(local[0], local[1])) {
+					closeHomeLiveTool();
 					return true;
 				}
 				if (TerminalUiLayout.HOME_TOOL_DETAIL.contains(local[0], local[1])) {
-					page = TerminalPage.TOOLS;
-					setMode(TerminalControlPolicy.Mode.SIGNAL.ordinal());
-					TerminalClientAudio.click();
+					openTool(homeLiveTool);
 					return true;
 				}
 			} else if (TerminalUiLayout.HOME_QUICK_PRIMARY.contains(local[0], local[1])) {
@@ -1128,17 +1208,11 @@ public final class TerminalScreen extends Screen {
 		}
 		if (page == TerminalPage.TOOLS) {
 			if (selectedTool != null && TerminalUiLayout.TOOL_BACK.contains(local[0], local[1])) {
-				boolean returnHome = toolOpenedFromHome;
-				clearSelectedTool(true);
-				if (returnHome) {
-					page = TerminalPage.HOME;
-					setMode(TerminalPage.HOME.wireMode());
-				}
-				return true;
+				return backFromToolDetail();
 			}
 			if (selectedTool == null) {
 				TerminalTool tool = TerminalTool.fromSlot(TerminalUiLayout.toolSlotAt(local[0], local[1]));
-				if (tool != null && toolVisible(tool)) {
+				if (tool != null && toolVisible(tool) && tools.available(tool)) {
 					openTool(tool);
 					return true;
 				}
@@ -1167,11 +1241,6 @@ public final class TerminalScreen extends Screen {
 					TerminalClientAudio.click();
 					return true;
 				}
-				if (TerminalUiLayout.TOOL_ACTION_PRIMARY.contains(x, y)) {
-					send(TerminalControlPayload.REQUEST_RESCAN, 0);
-					TerminalClientAudio.click();
-					return true;
-				}
 			}
 			case NAVIGATION -> {
 				if (new TerminalUiLayout.Bounds(50, 124, 342, 163).contains(x, y)
@@ -1179,24 +1248,82 @@ public final class TerminalScreen extends Screen {
 			}
 			case PORTAL, STRONGHOLD, WEATHER -> { }
 		}
-		if (selectedTool != TerminalTool.WEATHER && selectedTool != TerminalTool.NAVIGATION
-				&& TerminalUiLayout.TOOL_ACTION_PRIMARY.contains(x, y)) {
-			send(TerminalControlPayload.START_GUIDANCE, selectedTool.slot());
-			TerminalClientAudio.click();
+		if (selectedTool == TerminalTool.WEATHER && TerminalUiLayout.TOOL_ACTION_FULL.contains(x, y)) {
+			togglePinnedTool();
 			return true;
 		}
-		if (selectedTool != TerminalTool.WEATHER
-				&& TerminalUiLayout.TOOL_ACTION_SECONDARY.contains(x, y)) {
-			send(TerminalControlPayload.STOP_GUIDANCE, 0);
-			TerminalClientAudio.click();
+		TerminalUiLayout.Bounds guidanceBounds = TerminalUiLayout.TOOL_ACTION_FULL;
+		if (selectedTool != TerminalTool.WEATHER && guidanceBounds.contains(x, y)
+				&& canToggleGuidance(selectedTool)) {
+			toggleGuidance();
 			return true;
 		}
 		return false;
 	}
 
+	private boolean canToggleGuidance(TerminalTool tool) {
+		if (tools.guidanceTool() == tool) return true;
+		return switch (tool) {
+			case HOME -> tools.payload().homeKnown();
+			case MINERALS -> tools.selectedResource() != TerminalResource.NONE;
+			case PORTAL -> tools.payload().portalKnown();
+			case NAVIGATION -> localNavigationTargetChosen;
+			case STRONGHOLD -> tools.payload().strongholdKnown();
+			case WEATHER -> false;
+		};
+	}
+
+	private void toggleGuidance() {
+		if (tools.guidanceTool() == selectedTool) {
+			send(TerminalControlPayload.STOP_GUIDANCE, 0);
+			if (homeLiveTool == selectedTool) homeLiveTool = null;
+			TerminalClientAudio.click();
+			return;
+		}
+		send(TerminalControlPayload.START_GUIDANCE, selectedTool.slot());
+		homeLiveTool = selectedTool;
+		returnHomeAfterToolActivation();
+	}
+
+	private void togglePinnedTool() {
+		if (homeLiveTool == selectedTool) {
+			homeLiveTool = null;
+			TerminalClientAudio.click();
+			return;
+		}
+		if (tools.guidanceTool() != null) send(TerminalControlPayload.STOP_GUIDANCE, 0);
+		homeLiveTool = selectedTool;
+		returnHomeAfterToolActivation();
+	}
+
+	private void returnHomeAfterToolActivation() {
+		clearSelectedTool(false);
+		page = TerminalPage.HOME;
+		setMode(TerminalPage.HOME.wireMode());
+		TerminalClientAudio.click();
+	}
+
+	private void closeHomeLiveTool() {
+		if (tools.guidanceTool() != null) send(TerminalControlPayload.STOP_GUIDANCE, 0);
+		homeLiveTool = null;
+		TerminalClientAudio.click();
+	}
+
+	private boolean backFromToolDetail() {
+		if (selectedTool == null) return false;
+		boolean returnHome = toolOpenedFromHome;
+		clearSelectedTool(true);
+		if (returnHome) {
+			page = TerminalPage.HOME;
+			setMode(TerminalPage.HOME.wireMode());
+		}
+		return true;
+	}
+
 	private boolean handleNavigationClick(double x, double y) {
 		for (NavigationHit hit : navigationHits) {
 			if (!hit.bounds().contains(x, y)) continue;
+			localNavigationTargetChosen = true;
 			send(hit.action(), hit.value());
 			TerminalClientAudio.click();
 			return true;
@@ -1369,6 +1496,10 @@ public final class TerminalScreen extends Screen {
 
 	private boolean selectPage(TerminalPage next) {
 		if (next == page) {
+			if (next == TerminalPage.RECORDS && snapshot.unreadCount() > 0) {
+				send(TerminalControlPayload.MARK_RECORDS_READ, 0);
+				TerminalClientAudio.click();
+			}
 			if (selectedTool != null && (next == TerminalPage.TOOLS || next == TerminalPage.HOME)) {
 				clearSelectedTool(true);
 			}
@@ -1386,17 +1517,13 @@ public final class TerminalScreen extends Screen {
 	}
 
 	private void openTool(TerminalTool tool) {
-		if (!toolVisible(tool)) return;
+		if (!toolVisible(tool) || !tools.available(tool)) return;
 		boolean fromHome = page == TerminalPage.HOME;
 		toolOpenedFromHome = fromHome;
-		localLockedTool = !tools.available(tool);
 		selectedTool = tool;
-		if (tools.available(tool)) send(TerminalControlPayload.SELECT_TOOL, tool.slot());
-		else send(TerminalControlPayload.SELECT_TOOL, TerminalToolService.NO_TOOL);
-		if (!fromHome) {
-			page = TerminalPage.TOOLS;
-			setMode(TerminalControlPolicy.Mode.SIGNAL.ordinal());
-		}
+		send(TerminalControlPayload.SELECT_TOOL, tool.slot());
+		page = TerminalPage.TOOLS;
+		setMode(TerminalControlPolicy.Mode.SIGNAL.ordinal());
 		TerminalClientAudio.click();
 	}
 
@@ -1404,7 +1531,6 @@ public final class TerminalScreen extends Screen {
 		if (selectedTool != null) send(TerminalControlPayload.SELECT_TOOL, TerminalToolService.NO_TOOL);
 		selectedTool = null;
 		toolOpenedFromHome = false;
-		localLockedTool = false;
 		navigationHits.clear();
 		if (audio) TerminalClientAudio.click();
 	}
@@ -1485,6 +1611,15 @@ public final class TerminalScreen extends Screen {
 		TerminalTool tool = TerminalTool.fromSlot(slot);
 		if (tool != null) openTool(tool);
 	}
+	public int selectedToolForTesting() {
+		return selectedTool == null ? TerminalToolService.NO_TOOL : selectedTool.slot();
+	}
+	public void activateSelectedToolForTesting() {
+		if (selectedTool == TerminalTool.WEATHER) togglePinnedTool();
+		else if (selectedTool != null && canToggleGuidance(selectedTool)) toggleGuidance();
+	}
+	public void backFromToolForTesting() { backFromToolDetail(); }
+	public void closeHomeLiveToolForTesting() { closeHomeLiveTool(); }
 	public void setHomeForTesting() { send(TerminalControlPayload.SET_HOME, 0); }
 	public void selectResourceForTesting(int value) { send(TerminalControlPayload.SELECT_RESOURCE, value); }
 	public void startGuidanceForTesting(int slot) { send(TerminalControlPayload.START_GUIDANCE, slot); }
@@ -1543,6 +1678,9 @@ public final class TerminalScreen extends Screen {
 	public void submitPasswordForTesting() { submitPassword(); }
 	public int passwordResultForTesting() { return passwordResult; }
 	public int unreadCountForTesting() { return snapshot.unreadCount(); }
+	public boolean unreadFlashOnForTesting() {
+		return snapshot.unreadCount() > 0 && TerminalUiLayout.unreadFlashOn(age - unreadFlashStartedAt);
+	}
 	public String logViewForTesting() { return logView.name(); }
 	public void scrollRowsForTesting(int rows) { scrollBy(rows); }
 	public int modeForTesting() { return mode; }
@@ -1556,6 +1694,10 @@ public final class TerminalScreen extends Screen {
 		TerminalTool tool = tools.guidanceTool();
 		return tool == null ? TerminalToolService.NO_TOOL : tool.slot();
 	}
+	public int homeLiveToolForTesting() {
+		return homeLiveTool == null ? TerminalToolService.NO_TOOL : homeLiveTool.slot();
+	}
+	public boolean toolReturnsHomeForTesting() { return toolOpenedFromHome; }
 	public int tuningForTesting() { return tuning; }
 	public double displayedTuningForTesting(long nowMillis) { return tuningTransition.valueAt(nowMillis); }
 	public int selectedFileForTesting() { return selectedFile; }
@@ -1613,6 +1755,18 @@ public final class TerminalScreen extends Screen {
 		}
 	}
 
+	private void drawFittedLine(GuiGraphics graphics, Component text, TerminalUiLayout.Bounds bounds, int color) {
+		int textWidth = Math.max(1, font.width(text));
+		float scale = Math.min(1.0F, bounds.width() / (float) textWidth);
+		float renderedHeight = font.lineHeight * scale;
+		graphics.pose().pushMatrix();
+		graphics.pose().translate(bounds.left(), bounds.top() + Math.max(0.0F,
+				(bounds.height() - renderedHeight) / 2.0F));
+		graphics.pose().scale(scale, scale);
+		graphics.drawString(font, text, 0, 0, color, false);
+		graphics.pose().popMatrix();
+	}
+
 	private int pageAccent() {
 		return snapshot.visualStage() >= 2 ? HOT : snapshot.visualStage() == 1 ? CYAN : AMBER;
 	}
@@ -1629,30 +1783,43 @@ public final class TerminalScreen extends Screen {
 		return (int) Math.round(from + (to - from) * progress);
 	}
 
-	private static void drawNeedle(GuiGraphics graphics, int cx, int cy, double degrees, int length, int color, int style) {
+	private static void drawPixelCircle(GuiGraphics graphics, int cx, int cy, int radius, int color) {
+		for (int dy = -radius; dy <= radius; dy++) {
+			int span = (int) Math.floor(Math.sqrt(radius * radius - dy * dy));
+			graphics.fill(cx - span, cy + dy, cx + span + 1, cy + dy + 1, color);
+		}
+	}
+
+	private static void drawTargetNeedle(GuiGraphics graphics, int cx, int cy, double degrees) {
+		double radians = Math.toRadians(degrees);
+		int widthX = (int) Math.round(Math.cos(radians));
+		int widthY = (int) Math.round(Math.sin(radians));
+		int endX = cx;
+		int endY = cy;
+		for (int step = 2; step <= 9; step++) {
+			endX = cx + (int) Math.round(Math.sin(radians) * step);
+			endY = cy - (int) Math.round(Math.cos(radians) * step);
+			graphics.fill(endX, endY, endX + 1, endY + 1, AMBER);
+			graphics.fill(endX + widthX, endY + widthY,
+					endX + widthX + 1, endY + widthY + 1, AMBER);
+			graphics.fill(endX - widthX, endY - widthY,
+					endX - widthX + 1, endY - widthY + 1, AMBER);
+		}
+		graphics.fill(endX - 1, endY, endX + 2, endY + 1, AMBER);
+		graphics.fill(endX, endY - 1, endX + 1, endY + 2, AMBER);
+	}
+
+	private static void drawNorthNeedle(GuiGraphics graphics, int cx, int cy, double degrees) {
 		double radians = Math.toRadians(degrees);
 		int endX = cx;
 		int endY = cy;
-		for (int step = 2; step <= length; step++) {
+		for (int step = 2; step <= 12; step++) {
 			endX = cx + (int) Math.round(Math.sin(radians) * step);
 			endY = cy - (int) Math.round(Math.cos(radians) * step);
-			graphics.fill(endX, endY, endX + 1, endY + 1, color);
+			graphics.fill(endX, endY, endX + 1, endY + 1, HOT);
 		}
-		switch (style) {
-			case 1 -> graphics.fill(endX - 1, endY - 1, endX + 2, endY + 2, color);
-			case 2 -> {
-				graphics.fill(endX - 2, endY, endX + 3, endY + 1, color);
-				graphics.fill(endX, endY - 2, endX + 1, endY + 3, color);
-			}
-			case 3 -> {
-				graphics.fill(endX, endY - 2, endX + 1, endY + 3, color);
-				graphics.fill(endX - 2, endY, endX + 3, endY + 1, color);
-			}
-			default -> {
-				graphics.fill(endX - 1, endY, endX + 2, endY + 1, color);
-				graphics.fill(endX, endY - 1, endX + 1, endY + 2, color);
-			}
-		}
+		graphics.fill(endX - 1, endY, endX + 2, endY + 1, HOT);
+		graphics.fill(endX, endY - 1, endX + 1, endY + 2, HOT);
 	}
 
 	private void drawFileIcon(GuiGraphics graphics, TerminalFilePayload file, int x, int y) {

@@ -58,6 +58,12 @@ sourceSets {
 			srcDir "src/main/generated"
 		}
 	}
+	gametest {
+		// Server and client GameTests intentionally share this source set.  The latter reference
+		// split-environment client classes even when only the dedicated GameTest runner is launched.
+		compileClasspath += sourceSets.client.output
+		runtimeClasspath += sourceSets.client.output
+	}
 	test {
 		compileClasspath += sourceSets.gametest.output
 		runtimeClasspath += sourceSets.gametest.output
@@ -143,7 +149,7 @@ def clientAnomaly = providers.gradleProperty("tffAnomaly").orElse("")
 tasks.named("runClientGameTest") {
 	doFirst {
 		def suite = clientTestSuite.get().trim().toLowerCase(Locale.ROOT)
-		def allowed = ["all", "default", "mainline", "alpha-relaunch", "anomalies", "anomaly-meta-smoke", "rework-forms", "watcher-model"]
+		def allowed = ["all", "default", "mainline", "tools-ui", "notice-entry", "alpha-relaunch", "anomalies", "anomaly-meta-smoke", "rework-forms", "watcher-model", "end-boss"]
 		if (!allowed.contains(suite)) throw new GradleException("Unknown -PtffClientTestSuite=${suite}")
 		def anomaly = clientAnomaly.get().trim()
 		if (!anomaly.isEmpty() && suite != "anomalies")
@@ -152,7 +158,7 @@ tasks.named("runClientGameTest") {
 	jvmArgs "-Dthefourthfrequency.clientTestSuite=${clientTestSuite.get()}",
 			"-Dthefourthfrequency.anomaly=${clientAnomaly.get()}",
 			"-Dthefourthfrequency.projectDir=${project.projectDir.absolutePath}"
-	if (["rework-forms", "watcher-model"].contains(clientTestSuite.get().trim().toLowerCase(Locale.ROOT))) {
+	if (["rework-forms", "watcher-model", "end-boss"].contains(clientTestSuite.get().trim().toLowerCase(Locale.ROOT))) {
 		jvmArgs "-Dfabric.client.gametest.disableNetworkSynchronizer=true"
 	}
 }

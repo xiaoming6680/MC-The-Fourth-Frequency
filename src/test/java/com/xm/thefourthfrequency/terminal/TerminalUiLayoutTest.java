@@ -16,7 +16,7 @@ final class TerminalUiLayoutTest {
 				TerminalUiLayout.RECORDS_TAB, TerminalUiLayout.FILES_TAB, TerminalUiLayout.PAGE_BODY,
 				TerminalUiLayout.HOME_TASK, TerminalUiLayout.HOME_QUICK_PRIMARY,
 				TerminalUiLayout.HOME_QUICK_SECONDARY, TerminalUiLayout.HOME_TOOL_DETAIL,
-				TerminalUiLayout.HOME_TOOL_BACK, TerminalUiLayout.HOME_RECENT,
+				TerminalUiLayout.HOME_TOOL_CLOSE, TerminalUiLayout.HOME_RECENT,
 				TerminalUiLayout.TOOLS_GRID, TerminalUiLayout.TOOL_HEADER, TerminalUiLayout.TOOL_DETAIL,
 				TerminalUiLayout.RECORDS_BODY, TerminalUiLayout.FILE_BODY, TerminalUiLayout.FILE_LIST,
 				TerminalUiLayout.FILE_DIVIDER, TerminalUiLayout.FILE_CONTENT, TerminalUiLayout.FOOTER,
@@ -25,7 +25,9 @@ final class TerminalUiLayoutTest {
 		}
 		for (var bounds : List.of(TerminalUiLayout.TOOL_OPTION_ONE, TerminalUiLayout.TOOL_OPTION_TWO,
 				TerminalUiLayout.TOOL_OPTION_THREE, TerminalUiLayout.TOOL_ACTION_PRIMARY,
-				TerminalUiLayout.TOOL_ACTION_SECONDARY)) assertTrue(TerminalUiLayout.TOOL_DETAIL.contains(bounds));
+				TerminalUiLayout.TOOL_ACTION_SECONDARY, TerminalUiLayout.TOOL_ACTION_FULL)) {
+			assertTrue(TerminalUiLayout.TOOL_DETAIL.contains(bounds));
+		}
 		for (var hardware : List.of(TerminalUiLayout.SCOPE, TerminalUiLayout.COMPASS,
 				TerminalUiLayout.RECEIVER_SLIDER, TerminalUiLayout.RECEIVER_LCD, TerminalUiLayout.CLOSE_HINT)) {
 			assertTrue(TerminalUiLayout.HARDWARE_SAFE.contains(hardware),
@@ -37,12 +39,34 @@ final class TerminalUiLayoutTest {
 	}
 
 	@Test
+	void expandedCompassRemainsCenteredAndSeparatedFromAdjacentHardware() {
+		var compass = TerminalUiLayout.COMPASS;
+		assertEquals(42, compass.width());
+		assertEquals(42, compass.height());
+		assertEquals((TerminalUiLayout.SCOPE.left() + TerminalUiLayout.SCOPE.right()) / 2,
+				(compass.left() + compass.right()) / 2);
+		assertTrue(compass.top() - TerminalUiLayout.SCOPE.bottom() >= 5);
+		assertTrue(TerminalUiLayout.RECEIVER_SLIDER.top() - compass.bottom() >= 5);
+	}
+
+	@Test
 	void hintAndScrollClamp() {
 		assertEquals(255, TerminalUiLayout.hintAlpha(40));
 		assertEquals(128, TerminalUiLayout.hintAlpha(50));
 		assertEquals(0, TerminalUiLayout.hintAlpha(60));
 		assertEquals(0, TerminalUiLayout.scroll(0, -3, 8));
 		assertEquals(8, TerminalUiLayout.scroll(7, 9, 8));
+	}
+
+	@Test
+	void unreadAlertStartsLitAndStopsFlashingAfterTwoSeconds() {
+		assertTrue(TerminalUiLayout.unreadFlashOn(0.0D));
+		assertTrue(TerminalUiLayout.unreadFlashOn(9.99D));
+		assertFalse(TerminalUiLayout.unreadFlashOn(10.0D));
+		assertFalse(TerminalUiLayout.unreadFlashOn(19.99D));
+		assertTrue(TerminalUiLayout.unreadFlashOn(20.0D));
+		assertFalse(TerminalUiLayout.unreadFlashOn(30.0D));
+		assertFalse(TerminalUiLayout.unreadFlashOn(40.0D));
 	}
 
 	@Test

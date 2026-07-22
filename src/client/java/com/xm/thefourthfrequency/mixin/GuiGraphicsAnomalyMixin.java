@@ -2,6 +2,7 @@ package com.xm.thefourthfrequency.mixin;
 
 import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.client_ui.AnomalyPresentationController;
+import com.xm.thefourthfrequency.client_ui.EndBossIntrusionClient;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.resources.Identifier;
@@ -40,7 +41,7 @@ public abstract class GuiGraphicsAnomalyMixin {
 	}
 
 	private boolean thefourthfrequency$drawMisread(ItemStack stack, int x, int y) {
-		if (!AnomalyPresentationController.isMisread(stack)) return false;
+		if (!AnomalyPresentationController.isMisread(stack) && !EndBossIntrusionClient.isLocked(stack)) return false;
 		((GuiGraphics) (Object) this).blit(RenderPipelines.GUI_TEXTURED, EYE, x, y,
 				0.0F, 0.0F, 16, 16, EYE_TEXTURE_SIZE, EYE_TEXTURE_SIZE,
 				EYE_TEXTURE_SIZE, EYE_TEXTURE_SIZE);

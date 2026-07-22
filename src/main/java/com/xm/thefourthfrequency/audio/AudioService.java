@@ -21,6 +21,15 @@ public final class AudioService {
 				Math.min(2.0F, cue.pitch * 1.08F));
 	}
 
+	/** Plays an authored encounter cue while honoring the same configured peak-volume ceiling. */
+	public static void playBounded(ServerLevel level, BlockPos position, SoundEvent event,
+			SoundSource source, float relativeVolume, float pitch) {
+		float volume = (float) Math.clamp(RuntimeServices.config().meta().peakVolume()
+				* Math.clamp(relativeVolume, 0.0F, 1.0F), 0.0D, 1.0D);
+		if (volume <= 0.0F) return;
+		level.playSound(null, position, event, source, volume, Math.clamp(pitch, 0.5F, 2.0F));
+	}
+
 	public enum Cue {
 		EMPTY_VIEWPOINT(ModSounds.EMPTY_VIEWPOINT, SoundEvents.WOODEN_DOOR_CLOSE, SoundEvents.STONE_STEP,
 				SoundSource.AMBIENT, 0.55F, 0.72F),

@@ -2,6 +2,7 @@ package com.xm.thefourthfrequency.world;
 
 import com.xm.thefourthfrequency.content.ModItems;
 import com.xm.thefourthfrequency.content.TerminalData;
+import com.xm.thefourthfrequency.ending.WorldInterfaceRitualService;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -95,9 +96,14 @@ public final class TerminalLifecycleService {
 		if (record == null) {
 			return false;
 		}
+		if (WorldInterfaceRitualService.terminalRecoverySuppressed(
+				player.level().getServer(), player.getUUID())) {
+			clearTransientRecovery(player.getUUID());
+			return false;
+		}
 		if (record.getBooleanOr(TerminalData.TERMINAL_CAPTURED, false)) {
-			PENDING_RECOVERY.remove(player.getUUID());
-			RECOVERY_NOTIFIED.remove(player.getUUID());
+			clearTransientRecovery(player.getUUID());
+			removeOwnedTerminalCopies(player);
 			return false;
 		}
 		int validCopies = synchronizeValidCopies(player, data);
@@ -126,8 +132,11 @@ public final class TerminalLifecycleService {
 	}
 
 	public static boolean adminRepair(ServerPlayer player) {
+		if (WorldInterfaceRitualService.terminalRecoverySuppressed(
+				player.level().getServer(), player.getUUID())) return false;
 		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
-		if (data.terminalRecord(player.getUUID()).isEmpty()) {
+		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
+		if (record == null || record.getBooleanOr(TerminalData.TERMINAL_CAPTURED, false)) {
 			return false;
 		}
 		for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
@@ -156,6 +165,20 @@ public final class TerminalLifecycleService {
 		return true;
 	}
 
+	/** Inserts a journal-backed return without incrementing the copy generation. */
+	public static boolean insertAuthoritativeReturn(ServerPlayer player, ItemStack terminal) {
+		if (terminal.isEmpty() || !TerminalData.belongsTo(terminal, player.getUUID())) return false;
+		boolean inserted = insertIntoSafeSlot(player, terminal);
+		if (inserted) clearTransientRecovery(player.getUUID());
+		return inserted;
+	}
+
+	/** Drops only the old in-memory recovery attempt; authoritative ledgers live in SavedData. */
+	public static void clearTransientRecovery(UUID playerId) {
+		PENDING_RECOVERY.remove(playerId);
+		RECOVERY_NOTIFIED.remove(playerId);
+	}
+
 	private static int synchronizeValidCopies(ServerPlayer player, FrequencyWorldData data) {
 		int validCopies = 0;
 		boolean inventoryChanged = false;
@@ -176,6 +199,16 @@ public final class TerminalLifecycleService {
 		}
 		if (inventoryChanged) player.getInventory().setChanged();
 		return Math.min(validCopies, 1);
+	}
+
+	private static void removeOwnedTerminalCopies(ServerPlayer player) {
+		boolean changed = false;
+		for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+			if (!TerminalData.belongsTo(player.getInventory().getItem(slot), player.getUUID())) continue;
+			player.getInventory().setItem(slot, ItemStack.EMPTY);
+			changed = true;
+		}
+		if (changed) player.getInventory().setChanged();
 	}
 
 	private static boolean containsEntry(String entries, String value) {

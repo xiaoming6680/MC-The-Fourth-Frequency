@@ -3,8 +3,11 @@ package com.xm.thefourthfrequency.mixin;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.xm.thefourthfrequency.client_ui.AnomalyPresentationController;
+import com.xm.thefourthfrequency.client_ui.LanHostFailureVisualState;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.block.BlockRenderDispatcher;
 import net.minecraft.client.renderer.block.model.BlockModelPart;
+import net.minecraft.client.renderer.block.model.BlockStateModel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.BlockAndTintGetter;
@@ -13,12 +16,20 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.List;
 
 @Mixin(BlockRenderDispatcher.class)
 public abstract class BlockRenderDispatcherAnomalyMixin {
 	private static final ThreadLocal<Boolean> REPLACING = ThreadLocal.withInitial(() -> false);
+
+	@Inject(method = "getBlockModel", at = @At("HEAD"), cancellable = true)
+	private void thefourthfrequency$lanHostMissingBlockModel(BlockState state,
+			CallbackInfoReturnable<BlockStateModel> callback) {
+		if (!LanHostFailureVisualState.active()) return;
+		callback.setReturnValue(Minecraft.getInstance().getModelManager().getMissingBlockStateModel());
+	}
 
 	@Inject(method = "renderBatched", at = @At("HEAD"), cancellable = true)
 	private void thefourthfrequency$privateBlockPresentation(BlockState state, BlockPos pos,

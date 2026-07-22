@@ -8,19 +8,19 @@ public record AtmosphericFogProfile(
 		float greenScale,
 		float blueScale,
 		float desaturation) {
-	public static final int FIXED_RENDER_DISTANCE_CHUNKS = 3;
-	public static final float FIXED_RENDER_DISTANCE_BLOCKS = FIXED_RENDER_DISTANCE_CHUNKS * 16.0F;
-	public static final float EDGE_HIDING_FOG_END = FIXED_RENDER_DISTANCE_BLOCKS - 5.0F;
+	private static final float EDGE_HIDING_INSET_BLOCKS = 5.0F;
 	private static final float FIXED_ONLY_FOG_START = 32.0F;
 
-	public static AtmosphericFogProfile fixedDistanceOnly() {
-		return new AtmosphericFogProfile(FIXED_ONLY_FOG_START, EDGE_HIDING_FOG_END,
+	public static AtmosphericFogProfile fixedDistanceOnly(int renderDistanceChunks) {
+		float fogEnd = renderDistanceChunks * 16.0F - EDGE_HIDING_INSET_BLOCKS;
+		return new AtmosphericFogProfile(Math.min(FIXED_ONLY_FOG_START, fogEnd - 4.0F), fogEnd,
 				1.0F, 1.0F, 1.0F, 0.0F);
 	}
 
 	public static AtmosphericFogProfile sample(float skyExposure, float rain, float thunder,
-			float night, float cameraY, boolean enhanceAtmosphere) {
-		if (!enhanceAtmosphere) return fixedDistanceOnly();
+			float night, float cameraY, boolean enhanceAtmosphere, int renderDistanceChunks) {
+		AtmosphericFogProfile distanceOnly = fixedDistanceOnly(renderDistanceChunks);
+		if (!enhanceAtmosphere) return distanceOnly;
 
 		float sky = clamp01(skyExposure);
 		float rainAmount = clamp01(rain);
@@ -35,7 +35,7 @@ public record AtmosphericFogProfile(
 		float density = max(rainAmount * 0.55F, thunderAmount * 0.90F,
 				cave * 0.75F, voidDepth * 0.95F, cloudLayer * 0.65F, nightAmount * 0.18F);
 		float start = lerp(24.0F, 4.0F, density);
-		float end = lerp(EDGE_HIDING_FOG_END, 27.0F, density);
+		float end = lerp(distanceOnly.renderEnd(), 27.0F, density);
 
 		float baseScale = 1.0F - rainAmount * 0.12F - thunderAmount * 0.18F
 				- cave * 0.20F - voidDepth * 0.30F - nightAmount * 0.06F;
@@ -111,4 +111,3 @@ public record AtmosphericFogProfile(
 		return Math.max(minimum, Math.min(maximum, value));
 	}
 }
-

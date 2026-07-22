@@ -81,9 +81,9 @@ public final class StoryProgressService {
 	public static Objective objective(CompoundTag tag, FrequencyWorldData data) {
 		int milestones = tag.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0);
 		int wood = Math.clamp(tag.getIntOr(TerminalData.WOOD_MINED_COUNT, 0), 0,
-				SurvivalProgressService.REQUIRED_LOGS);
+				SurvivalProgressService.REQUIRED_WOOD);
 		if (!SurvivalMilestone.MINED_LOGS.present(milestones)) return new Objective("mine_logs", wood,
-				SurvivalProgressService.REQUIRED_LOGS);
+				SurvivalProgressService.REQUIRED_WOOD);
 		if (!SurvivalMilestone.IRON.present(milestones)) return new Objective("bring_iron", 0, 1);
 		if (!SurvivalMilestone.ENTERED_NETHER.present(milestones)) return new Objective("enter_nether", 0, 1);
 		int blazeRods = Math.clamp(tag.getIntOr(TerminalData.BLAZE_ROD_SAMPLE_COUNT, 0), 0,

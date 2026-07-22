@@ -4,7 +4,7 @@ import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.state.NavigationState;
 import com.xm.thefourthfrequency.state.PlayerPatternState;
 import com.xm.thefourthfrequency.terminal.TerminalResource;
-import com.xm.thefourthfrequency.terminal.TerminalTool;
+import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
 import com.xm.thefourthfrequency.terminal.TerminalToolService;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -84,7 +84,11 @@ public final class ResourceGuidanceService {
 		if (navigation.located()) {
 			boolean sameDimension = player.level().dimension().identifier().toString()
 					.equals(navigation.dimension());
-			if (!sameDimension || targetStillPresent(player.level(), navigation)) return;
+			BlockPos target = BlockPos.of(navigation.position());
+			boolean withinRefreshArea = sameDimension
+					&& ResourceScanRefreshPolicy.contains(player.getBlockX(), player.getBlockZ(),
+							target.getX(), target.getZ(), MAX_SCAN_RADIUS);
+			if (withinRefreshArea && targetStillPresent(player.level(), navigation)) return;
 			data.updateTerminalRecord(player.getUUID(), tag -> clearLocatedTarget(tag));
 		}
 
@@ -100,11 +104,6 @@ public final class ResourceGuidanceService {
 	}
 
 	public static void requestRescan(ServerPlayer player) {
-		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
-		if (data.terminalRecord(player.getUUID()).isPresent()) {
-			data.updateTerminalRecord(player.getUUID(), record ->
-					record.putInt(TerminalData.ACTIVE_GUIDANCE_TOOL, TerminalTool.MINERALS.slot()));
-		}
 		restartScan(player, true);
 	}
 
@@ -157,9 +156,7 @@ public final class ResourceGuidanceService {
 				NavigationState.read(record).locate(blockId, candidate, scan.dimension, level.getGameTime()).writeTo(record);
 			});
 			player.displayClientMessage(Component.translatable("message.thefourthfrequency.guidance.ready"), true);
-			com.xm.thefourthfrequency.terminal.TerminalSignalService.record(player,
-					com.xm.thefourthfrequency.terminal.SignalBand.MINING, "resource_target_located",
-					scan.need.ordinal(), 1, true);
+			TerminalRuntimeService.refresh(player);
 			return true;
 		}
 		return false;
@@ -172,9 +169,7 @@ public final class ResourceGuidanceService {
 		});
 		TerminalLifecycleService.ensureCarried(player, false);
 		player.displayClientMessage(Component.translatable("message.thefourthfrequency.guidance.accepted"), true);
-		com.xm.thefourthfrequency.terminal.TerminalSignalService.record(player,
-				com.xm.thefourthfrequency.terminal.SignalBand.MINING, "resource_advice_accepted",
-				need.ordinal(), 1, true);
+		TerminalRuntimeService.refresh(player);
 	}
 
 	private static boolean hasBindingResource(ServerPlayer player, ResourceNeed need) {

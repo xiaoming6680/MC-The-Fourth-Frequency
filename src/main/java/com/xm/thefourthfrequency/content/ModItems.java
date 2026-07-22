@@ -23,7 +23,7 @@ public final class ModItems {
 	public static final Item TERMINATION_SPIKE = Registry.register(
 			BuiltInRegistries.ITEM,
 			TERMINATION_SPIKE_KEY,
-			new Item(new Item.Properties().setId(TERMINATION_SPIKE_KEY).stacksTo(1))
+			new TerminationSpikeItem(new Item.Properties().setId(TERMINATION_SPIKE_KEY).stacksTo(1))
 	);
 
 	private ModItems() {

@@ -1,0 +1,19 @@
+{
+  "replace": false,
+  "values": [
+    "thefourthfrequency:shelter_bearing_marker",
+    "thefourthfrequency:missing_bay_marker",
+    "thefourthfrequency:depth_echo_marker",
+    "thefourthfrequency:observation_vane_marker",
+    "thefourthfrequency:archive_lock",
+    "thefourthfrequency:rule_fracture_core",
+    "thefourthfrequency:nascent_body_organ",
+    "thefourthfrequency:nether_rule_fracture_core",
+    "thefourthfrequency:altar_anchor",
+    "thefourthfrequency:missing_texture_proxy",
+    "thefourthfrequency:resonance_core",
+    "thefourthfrequency:stability_anchor_cage",
+    "thefourthfrequency:warp_gate_core",
+    "thefourthfrequency:world_interface_exit_portal"
+  ]
+}

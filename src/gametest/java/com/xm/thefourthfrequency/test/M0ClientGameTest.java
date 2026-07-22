@@ -7,8 +7,10 @@ import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.terminal.TerminalControlPolicy;
 import com.xm.thefourthfrequency.terminal.TerminalResource;
 import com.xm.thefourthfrequency.terminal.TerminalTool;
+import com.xm.thefourthfrequency.terminal.TerminalToolService;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import com.xm.thefourthfrequency.world.ResourceGuidanceService;
+import com.xm.thefourthfrequency.world.SurvivalProgressService;
 import com.xm.thefourthfrequency.world.TerminalActivityTracker;
 import com.xm.thefourthfrequency.world.FragmentInvestigationService;
 import com.xm.thefourthfrequency.content.ModBlocks;
@@ -23,7 +25,8 @@ import com.xm.thefourthfrequency.client_ui.FirstRunNoticeScreen;
 import com.xm.thefourthfrequency.client_ui.AlphaLoadSessionController;
 import com.xm.thefourthfrequency.client_ui.AlphaLoadTimeline;
 import com.xm.thefourthfrequency.client_ui.AlphaResourcePackPlan;
-import com.xm.thefourthfrequency.client_ui.AtmosphericFogProfile;
+import com.xm.thefourthfrequency.client_ui.DimensionViewDistanceController;
+import com.xm.thefourthfrequency.client_ui.DimensionViewDistancePolicy;
 import com.xm.thefourthfrequency.terminal.TerminalAnomalyLogService;
 import com.xm.thefourthfrequency.terminal.TerminalSignalService;
 import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
@@ -90,8 +93,16 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			return;
 		}
 		if (!selection.runsMainline()) {
-			assertAndAcknowledgeFirstRunNotice(context);
+			if (selection.runsNoticeEntry()) {
+				assertAndAcknowledgeFirstRunNotice(context);
+			} else {
+				acknowledgeFirstRunNoticeForFocusedSuite(context);
+			}
 			context.waitForScreen(TitleScreen.class);
+			if (selection.runsNoticeEntry()) {
+				context.waitTicks(10);
+				context.takeScreenshot("m1-first-run-title-after-entry");
+			}
 			return;
 		}
 		assertAndAcknowledgeFirstRunNotice(context);
@@ -101,7 +112,8 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				throw new AssertionError("Terminal UI screenshots must run with the Chinese language selected");
 			}
 		});
-		assertFixedRenderDistance(context);
+		context.runOnClient(DimensionViewDistanceController::resetForTesting);
+		assertInitialOverworldRenderDistance(context);
 		if (Boolean.getBoolean("thefourthfrequency.realMetaSmoke")) {
 			context.runOnClient(client -> {
 				var awakened = MetaController.dispatchForTesting(MetaEvent.FINAL_BODY_AWAKENED);
@@ -163,7 +175,14 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				terminal.selectPageForTesting(1);
 			});
 			context.takeScreenshot("r-terminal-tools-grid");
-			context.runOnClient(client -> ((TerminalScreen) client.screen).openToolForTesting(TerminalTool.HOME.slot()));
+			context.runOnClient(client -> {
+				TerminalScreen terminal = (TerminalScreen) client.screen;
+				terminal.selectPageForTesting(0);
+				terminal.openToolForTesting(TerminalTool.HOME.slot());
+				if (!"TOOLS".equals(terminal.pageForTesting()) || !terminal.toolReturnsHomeForTesting()) {
+					throw new AssertionError("A HOME shortcut must open the full detail page with a HOME back target");
+				}
+			});
 			context.waitTicks(2);
 			context.takeScreenshot("r-terminal-tool-home-empty");
 			context.runOnClient(client -> ((TerminalScreen) client.screen).setHomeForTesting());
@@ -171,6 +190,10 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.takeScreenshot("r-terminal-tool-home-saved");
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
+				terminal.backFromToolForTesting();
+				if (!"HOME".equals(terminal.pageForTesting())) {
+					throw new AssertionError("The detail back control did not return a HOME-opened tool to HOME");
+				}
 				terminal.selectPageForTesting(1);
 				terminal.openToolForTesting(TerminalTool.WEATHER.slot());
 			});
@@ -178,11 +201,31 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.takeScreenshot("r-terminal-tool-weather-current");
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
-				terminal.selectPageForTesting(1);
-				terminal.openToolForTesting(TerminalTool.NAVIGATION.slot());
+				terminal.activateSelectedToolForTesting();
+				if (!"HOME".equals(terminal.pageForTesting())
+						|| terminal.homeLiveToolForTesting() != TerminalTool.WEATHER.slot()) {
+					throw new AssertionError("Pinning an information tool must replace the HOME middle cards");
+				}
 			});
 			context.waitTicks(2);
-			context.takeScreenshot("r-terminal-tool-signal-summary");
+			context.takeScreenshot("r-terminal-home-weather-live-info");
+			context.runOnClient(client -> {
+				TerminalScreen terminal = (TerminalScreen) client.screen;
+				terminal.closeHomeLiveToolForTesting();
+				if (terminal.homeLiveToolForTesting() != TerminalToolService.NO_TOOL) {
+					throw new AssertionError("The live information card close control did not restore HOME recommendations");
+				}
+			});
+			context.runOnClient(client -> {
+				TerminalScreen terminal = (TerminalScreen) client.screen;
+				terminal.selectPageForTesting(1);
+				terminal.openToolForTesting(TerminalTool.NAVIGATION.slot());
+				if (terminal.selectedToolForTesting() != TerminalToolService.NO_TOOL) {
+					throw new AssertionError("A locked tool opened its detail page");
+				}
+			});
+			context.waitTicks(2);
+			context.takeScreenshot("r-terminal-locked-tool-stays-closed");
 			context.runOnClient(client -> ((TerminalScreen) client.screen).selectPageForTesting(2));
 			context.waitTicks(2);
 			context.takeScreenshot("r-terminal-records-page");
@@ -205,13 +248,21 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.waitTicks(2);
 			context.waitTicks(65);
 			context.takeScreenshot("m2-terminal-home-receiver-standby");
+			singleplayer.getServer().runOnServer(server -> {
+				var player = server.getPlayerList().getPlayers().getFirst();
+				var data = FrequencyWorldData.get(server);
+				player.getInventory().add(new ItemStack(Items.CRIMSON_PLANKS, SurvivalProgressService.REQUIRED_WOOD));
+				SurvivalProgressService.updatePlayer(player, data);
+				TerminalRuntimeService.refresh(player);
+			});
+			context.waitTicks(4);
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
 				terminal.selectPageForTesting(1);
 				terminal.openToolForTesting(TerminalTool.NAVIGATION.slot());
 				terminal.setTuningForTesting(18);
-				if (terminal.tuningForTesting() != TerminalControlPolicy.DEFAULT_TUNING) {
-					throw new AssertionError("Signal tuning changed without a real nearby receiver target");
+				if (terminal.tuningForTesting() != 18) {
+					throw new AssertionError("The receiver dial did not provide local mechanical feedback");
 				}
 			});
 			context.waitTicks(5);
@@ -239,6 +290,8 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				com.xm.thefourthfrequency.terminal.TerminalToolService.selectResource(
 						player, TerminalResource.IRON.wireId());
 				ResourceGuidanceService.updatePlayer(player);
+				com.xm.thefourthfrequency.terminal.TerminalToolService.startGuidance(
+						player, TerminalTool.MINERALS.slot());
 				if (!data.terminalRecord(player.getUUID()).orElseThrow()
 						.getBooleanOr(TerminalData.TARGET_LOCATED, false)) {
 					throw new AssertionError("Client fixture did not locate the real iron ore");
@@ -259,6 +312,51 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				}
 			});
 			context.takeScreenshot("r-terminal-tool-minerals-real-scan");
+			context.runOnClient(client -> ((TerminalScreen) client.screen).activateSelectedToolForTesting());
+			context.waitTicks(5);
+			context.runOnClient(client -> {
+				TerminalScreen terminal = (TerminalScreen) client.screen;
+				if (terminal.guidanceToolForTesting() != TerminalToolService.NO_TOOL) {
+					throw new AssertionError("The active navigation button did not stop mineral guidance");
+				}
+				terminal.activateSelectedToolForTesting();
+				if (!"HOME".equals(terminal.pageForTesting())
+						|| terminal.homeLiveToolForTesting() != TerminalTool.MINERALS.slot()) {
+					throw new AssertionError("Restarting navigation did not create the HOME live information card");
+				}
+			});
+			context.waitTicks(5);
+			context.runOnClient(client -> {
+				if (((TerminalScreen) client.screen).guidanceToolForTesting() != TerminalTool.MINERALS.slot()) {
+					throw new AssertionError("The shared navigation button did not restart authoritative guidance");
+				}
+			});
+			context.takeScreenshot("r-terminal-home-minerals-live-info");
+			if (selection.runsToolsUi()) {
+				singleplayer.getServer().runOnServer(server -> {
+					var player = server.getPlayerList().getPlayers().getFirst();
+					TerminalSignalService.record(player, com.xm.thefourthfrequency.terminal.SignalBand.UNKNOWN,
+							"signature_anomaly", 0, 1, true);
+				});
+				context.waitTicks(2);
+				context.runOnClient(client -> {
+					TerminalScreen terminal = (TerminalScreen) client.screen;
+					if (terminal.unreadCountForTesting() < 1 || !terminal.unreadFlashOnForTesting()) {
+						throw new AssertionError("A new record did not activate the top-bar unread alert");
+					}
+				});
+				context.takeScreenshot("r-terminal-unread-top-bar-alert");
+				context.waitTicks(45);
+				context.runOnClient(client -> {
+					TerminalScreen terminal = (TerminalScreen) client.screen;
+					if (terminal.unreadCountForTesting() < 1 || terminal.unreadFlashOnForTesting()) {
+						throw new AssertionError("The unread marker must remain after its short flash has stopped");
+					}
+				});
+				context.takeScreenshot("r-terminal-unread-top-bar-settled");
+				closeTerminal(context);
+				return;
+			}
 			closeTerminal(context);
 			singleplayer.getServer().runOnServer(server -> {
 				var player = server.getPlayerList().getPlayers().getFirst();
@@ -467,6 +565,8 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 
 			singleplayer.getServer().runOnServer(M0ClientGameTest::beginM6NetherCrossing);
 			context.waitTicks(20);
+			assertLockedRenderDistance(context, Level.NETHER,
+					DimensionViewDistancePolicy.NETHER_CHUNKS);
 			BlockPos netherRift = singleplayer.getServer().computeOnServer(M0ClientGameTest::observeM6NetherRift);
 			context.waitTicks(8);
 			context.runOnClient(client -> {
@@ -488,7 +588,11 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				if (!terminal.toolAvailableForTesting(TerminalTool.PORTAL.slot()))
 					throw new AssertionError("A real Nether arrival did not unlock the portal tool");
 				terminal.openToolForTesting(TerminalTool.PORTAL.slot());
-				terminal.startGuidanceForTesting(TerminalTool.PORTAL.slot());
+				terminal.activateSelectedToolForTesting();
+				if (!"HOME".equals(terminal.pageForTesting())
+						|| terminal.homeLiveToolForTesting() != TerminalTool.PORTAL.slot()) {
+					throw new AssertionError("Starting portal navigation did not create the HOME live information card");
+				}
 			});
 			context.waitTicks(5);
 			context.runOnClient(client -> {
@@ -500,9 +604,24 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.takeScreenshot("r-terminal-tool-portal-real-arrival");
 			context.runOnClient(client -> ((TerminalScreen) client.screen).selectPageForTesting(0));
 			context.takeScreenshot("m6-terminal-capability-model");
+			context.runOnClient(client -> {
+				TerminalScreen terminal = (TerminalScreen) client.screen;
+				terminal.openToolForTesting(TerminalTool.PORTAL.slot());
+				terminal.activateSelectedToolForTesting();
+			});
+			context.waitTicks(5);
+			context.runOnClient(client -> {
+				TerminalScreen terminal = (TerminalScreen) client.screen;
+				if (terminal.guidanceToolForTesting() != TerminalToolService.NO_TOOL
+						|| terminal.homeLiveToolForTesting() != TerminalToolService.NO_TOOL) {
+					throw new AssertionError("The same portal navigation button did not stop active navigation");
+				}
+			});
 			closeTerminal(context);
 			singleplayer.getServer().runOnServer(M0ClientGameTest::finishM6ReturnCrossing);
 			context.waitTicks(8);
+			assertLockedRenderDistance(context, Level.OVERWORLD,
+					DimensionViewDistancePolicy.OVERWORLD_CHUNKS);
 			context.runOnClient(client -> {
 				client.getToastManager().clear();
 				client.gui.getChat().clearMessages(true);
@@ -518,7 +637,11 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				if (!terminal.toolAvailableForTesting(TerminalTool.STRONGHOLD.slot()))
 					throw new AssertionError("The verified Eye of Ender sample fixture did not unlock the stronghold tool");
 				terminal.openToolForTesting(TerminalTool.STRONGHOLD.slot());
-				terminal.startGuidanceForTesting(TerminalTool.STRONGHOLD.slot());
+				terminal.activateSelectedToolForTesting();
+				if (!"HOME".equals(terminal.pageForTesting())
+						|| terminal.homeLiveToolForTesting() != TerminalTool.STRONGHOLD.slot()) {
+					throw new AssertionError("Starting stronghold navigation did not create the HOME live information card");
+				}
 			});
 			context.waitTicks(5);
 			context.runOnClient(client -> {
@@ -757,10 +880,8 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 					throw new AssertionError("M6 Nether fracture state or physical core changed after restart");
 				}
 				var correction = CorrectionState.get(data);
-				if (correction.getIntOr("dismantle_count", 0) < terminalProof.correctionDismantles()
-						|| correction.getIntOr("maximum_tick_work", 0)
-								> RuntimeServices.config().limits().correctionWorkBudgetPerTick()) {
-					throw new AssertionError("Correction organ state or configured budget changed after restart");
+				if (correction.getIntOr("dismantle_count", 0) < terminalProof.correctionDismantles()) {
+					throw new AssertionError("Correction organ state changed after restart");
 				}
 				try {
 					if (!correction.contains("rework_entity_pos")) {
@@ -783,13 +904,25 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 		context.waitForScreen(TitleScreen.class);
 	}
 
-	private static void assertFixedRenderDistance(ClientGameTestContext context) {
+	/**
+	 * Focused visual suites still clear the mandatory notice, but leave its full localization and
+	 * layout audit to the mainline and notice-entry suites. This keeps an unrelated notice-layout
+	 * change from preventing the selected renderer suite from reaching its own fixtures.
+	 */
+	private static void acknowledgeFirstRunNoticeForFocusedSuite(ClientGameTestContext context) {
+		context.waitFor(client -> client.screen instanceof FirstRunNoticeScreen, 120);
+		context.waitFor(client -> client.screen instanceof FirstRunNoticeScreen notice
+				&& notice.acknowledgementAvailableForTesting(), 160);
+		context.runOnClient(client -> ((FirstRunNoticeScreen) client.screen).acknowledgeForTesting());
+	}
+
+	private static void assertInitialOverworldRenderDistance(ClientGameTestContext context) {
 		context.runOnClient(client -> {
-			int fixed = AtmosphericFogProfile.FIXED_RENDER_DISTANCE_CHUNKS;
+			int fixed = DimensionViewDistancePolicy.OVERWORLD_CHUNKS;
 			int stored = client.options.renderDistance().get();
 			int effective = client.options.getEffectiveRenderDistance();
 			if (stored != fixed || effective != fixed) {
-				throw new AssertionError("Render distance was not initialized to the locked three-chunk value"
+				throw new AssertionError("Render distance was not initialized to the locked Overworld value"
 						+ " (stored=" + stored + ", effective=" + effective + ")");
 			}
 			client.options.renderDistance().set(12);
@@ -829,6 +962,22 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 		context.waitForScreen(TitleScreen.class);
 	}
 
+	private static void assertLockedRenderDistance(ClientGameTestContext context,
+			net.minecraft.resources.ResourceKey<Level> dimension, int expected) {
+		context.waitFor(client -> client.level != null && client.level.dimension() == dimension
+				&& client.options.renderDistance().get().equals(expected)
+				&& client.options.getEffectiveRenderDistance() == expected, 100);
+		context.runOnClient(client -> {
+			int rejected = expected == 12 ? 2 : 12;
+			client.options.renderDistance().set(rejected);
+			if (!client.options.renderDistance().get().equals(expected)
+					|| client.options.getEffectiveRenderDistance() != expected) {
+				throw new AssertionError("Render-distance setter bypassed the dimension lock for "
+						+ dimension.identifier() + " (expected=" + expected + ")");
+			}
+		});
+	}
+
 	private static void assertAndAcknowledgeFirstRunNotice(ClientGameTestContext context) {
 		context.waitFor(client -> client.screen instanceof FirstRunNoticeScreen, 120);
 		context.runOnClient(client -> {
@@ -843,24 +992,28 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			notice.onClose();
 			if (client.screen != notice || FirstRunNoticeController.acknowledgedForTesting())
 				throw new AssertionError("First-run notice was bypassed through its ordinary close path");
-			client.options.languageCode = "zh_cn";
-			client.getLanguageManager().setSelected("zh_cn");
-			client.reloadResourcePacks();
-			notice.reinitializeForTesting();
+			if (notice.presentationPhaseForTesting() != FirstRunNoticeScreen.PresentationPhase.CALIBRATION
+					|| notice.acknowledgementAvailableForTesting())
+				throw new AssertionError("First-run notice did not begin with a non-bypassable calibration screen");
+		});
+		context.takeScreenshot("m1-first-run-band-calibration");
+		switchFirstRunNoticeLanguage(context, "zh_cn");
+		context.runOnClient(client -> {
+			FirstRunNoticeScreen notice = (FirstRunNoticeScreen) client.screen;
 			if (notice.openingSoundPlayCountForTesting() != 1)
 				throw new AssertionError("First-run notice replayed startup audio when its widgets were rebuilt");
 		});
-		context.takeScreenshot("m1-first-run-safety-notice-noise");
 		context.waitFor(client -> client.screen instanceof FirstRunNoticeScreen notice
-				&& notice.entrancePhaseForTesting() == FirstRunNoticeScreen.EntrancePhase.LOCKED
+				&& notice.presentationPhaseForTesting() == FirstRunNoticeScreen.PresentationPhase.NOTICE
+				&& notice.acknowledgementAvailableForTesting()
 				&& client.getLanguageManager().getSelected().equals("zh_cn")
-				&& notice.getTitle().getString().equals("给第一次进入者的告示"), 160);
-		context.waitFor(client -> client.getOverlay() == null, 160);
+				&& notice.getTitle().getString().equals("继续前，请阅读"), 160);
+		context.takeScreenshot("m1-first-run-safety-notice-zh-cn");
 		context.runOnClient(client -> {
 			FirstRunNoticeScreen notice = (FirstRunNoticeScreen) client.screen;
 			if (!client.getLanguageManager().getSelected().equals("zh_cn"))
 				throw new AssertionError("First-run notice resource reload did not select Chinese");
-			if (!notice.getTitle().getString().equals("给第一次进入者的告示"))
+			if (!notice.getTitle().getString().equals("继续前，请阅读"))
 				throw new AssertionError("First-run notice title was not localized in Chinese");
 			if (!notice.acknowledgementLabelForTesting().getString().equals("我已了解"))
 				throw new AssertionError("First-run notice acknowledgement label changed");
@@ -878,15 +1031,38 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 					|| notice.openingSoundPlayCountForTesting() != 1
 					|| notice.stableSoundPlayCountForTesting() != 1
 					|| TerminalClientAudio.lockPlaysForTesting() != 0)
-				throw new AssertionError("First-run notice did not lock once at tick 24");
+				throw new AssertionError("First-run notice did not appear after one complete band calibration");
 			notice.reinitializeForTesting();
 			if (!notice.acknowledgementAvailableForTesting()
 					|| notice.openingSoundPlayCountForTesting() != 1
 					|| notice.stableSoundPlayCountForTesting() != 1)
 				throw new AssertionError("First-run notice replayed audio or disabled itself after reinitialization");
 		});
-		context.takeScreenshot("m1-first-run-safety-notice-locked");
+		switchFirstRunNoticeLanguage(context, "en_us");
+		context.waitFor(client -> client.screen instanceof FirstRunNoticeScreen notice
+				&& client.getLanguageManager().getSelected().equals("en_us")
+				&& notice.getTitle().getString().equals("READ BEFORE CONTINUING")
+				&& notice.acknowledgementLabelForTesting().getString().equals("I Understand"), 160);
+		context.runOnClient(client -> {
+			FirstRunNoticeScreen notice = (FirstRunNoticeScreen) client.screen;
+			if (!notice.dedicatedLayoutFitsForTesting() || !notice.allElementsAlignedForTesting()
+					|| !notice.allTextInsideGlassForTesting() || !notice.avoidsOrphanPunctuationForTesting())
+				throw new AssertionError("English first-run notice layout does not fit the compact window");
+		});
+		context.takeScreenshot("m1-first-run-safety-notice-en-us");
+		switchFirstRunNoticeLanguage(context, "zh_cn");
+		context.waitFor(client -> client.screen instanceof FirstRunNoticeScreen notice
+				&& client.getLanguageManager().getSelected().equals("zh_cn")
+				&& notice.getTitle().getString().equals("继续前，请阅读"), 160);
 		context.runOnClient(client -> ((FirstRunNoticeScreen) client.screen).acknowledgeForTesting());
+		context.waitFor(client -> client.screen instanceof FirstRunNoticeScreen notice
+				&& notice.presentationPhaseForTesting() == FirstRunNoticeScreen.PresentationPhase.TRANSITION
+				&& notice.zoomProgressForTesting() >= 0.30F, 60);
+		context.runOnClient(client -> {
+			if (FirstRunNoticeController.acknowledgedForTesting())
+				throw new AssertionError("First-run acknowledgement persisted before the entry transition finished");
+		});
+		context.takeScreenshot("m1-first-run-terminal-entry-transition");
 		context.waitForScreen(TitleScreen.class);
 		context.runOnClient(client -> {
 			if (client.level != null || client.player != null)
@@ -897,6 +1073,20 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			if (!FirstRunNoticeController.acknowledgedForTesting())
 				throw new AssertionError("Persisted first-run acknowledgement could not be reloaded");
 		});
+	}
+
+	private static void switchFirstRunNoticeLanguage(ClientGameTestContext context, String languageCode) {
+		java.util.concurrent.atomic.AtomicBoolean reloaded = new java.util.concurrent.atomic.AtomicBoolean();
+		context.runOnClient(client -> {
+			FirstRunNoticeScreen notice = (FirstRunNoticeScreen) client.screen;
+			client.options.languageCode = languageCode;
+			client.getLanguageManager().setSelected(languageCode);
+			client.reloadResourcePacks().thenRun(() -> reloaded.set(true));
+			notice.reinitializeForTesting();
+		});
+		context.waitFor(client -> reloaded.get(), 240);
+		context.waitFor(client -> client.getOverlay() == null, 160);
+		context.waitTicks(20);
 	}
 
 	private static void openTerminalThroughClientCallback(ClientGameTestContext context) {

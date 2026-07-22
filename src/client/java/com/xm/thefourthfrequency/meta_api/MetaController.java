@@ -5,6 +5,7 @@ import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.meta_windows.WindowsTrustedMetaAdapter;
 import com.xm.thefourthfrequency.networking.MetaEventPayload;
 import com.xm.thefourthfrequency.client_ui.AnomalyPresentationController;
+import com.xm.thefourthfrequency.client_ui.WorldInterfaceEndingClient;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
@@ -47,7 +48,9 @@ public final class MetaController {
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
 			if (anomalyController != null) anomalyController.tick(client);
 			while (toggleKey.consumeClick()) {
-				setEnabled(!enabled());
+				if (WorldInterfaceEndingClient.replayResetAvailable()) {
+					WorldInterfaceEndingClient.requestRecoveryConfirmation(client);
+				}
 			}
 		});
 		TheFourthFrequency.LOGGER.info("Trusted Meta controller ready (enabled={}, adapter={})",

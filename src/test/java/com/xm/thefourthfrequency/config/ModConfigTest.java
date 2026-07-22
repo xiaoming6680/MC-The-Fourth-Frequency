@@ -9,51 +9,48 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ModConfigTest {
 	@Test
-	void defaultsKeepProductionAndDevelopmentPacingSeparate() {
+	void defaultsContainOnlyLiveSettings() {
 		ModConfig defaults = ModConfig.defaults();
-		assertTrue(defaults.pacing().productionHours() >= 6
-				&& defaults.pacing().productionHours() <= 10);
-		assertTrue(defaults.pacing().acceleratedMinutes()
-				< defaults.pacing().productionHours() * 60);
-		assertTrue(defaults.meta().subtitlesEnabled());
+		assertTrue(defaults.meta().enabled());
 		assertEquals(0.8D, defaults.meta().peakVolume());
-		assertFalse(defaults.clientState().safetyNoticeAcknowledged());
+		assertFalse(defaults.pacing().developerAcceleration());
 		assertFalse(defaults.clientState().alphaDowngradeComplete());
+		assertFalse(defaults.clientState().viewDistanceUnlocked());
 	}
 
 	@Test
-	void validationClampsUnsafeValues() {
+	void validationClampsUnsafeVolume() {
 		ModConfig validated = new ModConfig(
-				new ModConfig.Meta(true, true, Double.NaN),
-				new ModConfig.Pacing(true, 100, 0, -1, -1),
-				new ModConfig.Limits(10_000),
+				new ModConfig.Meta(true, Double.NaN),
+				new ModConfig.Pacing(true),
 				new ModConfig.ClientState(false, false)
 		).validated();
-		assertEquals(10, validated.pacing().productionHours());
-		assertEquals(1, validated.pacing().acceleratedMinutes());
 		assertEquals(1.0D, validated.meta().peakVolume());
-		assertEquals(512, validated.limits().correctionWorkBudgetPerTick());
-		assertEquals(5, validated.pacing().ambientAnomalyMinMinutes());
-		assertEquals(10, validated.pacing().ambientAnomalyMaxMinutes());
+		assertTrue(validated.pacing().developerAcceleration());
 
 		ModConfig muted = new ModConfig(
-				new ModConfig.Meta(true, true, -2.0D),
-				new ModConfig.Pacing(false, 8, 3, 5, 10),
-				new ModConfig.Limits(64),
+				new ModConfig.Meta(true, -2.0D),
+				new ModConfig.Pacing(false),
 				new ModConfig.ClientState(false, false)
 		).validated();
 		assertEquals(0.0D, muted.meta().peakVolume());
 	}
 
 	@Test
-	void jsonUsesOneGroupedConfigurationContract() {
+	void jsonUsesMinimalGroupedConfigurationContractAndIgnoresRetiredFields() {
 		Gson gson = new Gson();
 		String encoded = gson.toJson(ModConfig.defaults());
 		assertTrue(encoded.contains("\"meta\":{\"enabled\":true"));
 		assertTrue(encoded.contains("\"pacing\":{"));
-		assertTrue(encoded.contains("\"limits\":{"));
 		assertTrue(encoded.contains("\"clientState\":{"));
-		assertFalse(encoded.contains("\"meta.enabled\""));
+		assertFalse(encoded.contains("subtitlesEnabled"));
+		assertFalse(encoded.contains("productionHours"));
+		assertFalse(encoded.contains("acceleratedMinutes"));
+		assertFalse(encoded.contains("ambientAnomalyMinMinutes"));
+		assertFalse(encoded.contains("ambientAnomalyMaxMinutes"));
+		assertFalse(encoded.contains("correctionWorkBudgetPerTick"));
+		assertFalse(encoded.contains("\"limits\""));
+		assertFalse(encoded.contains("safetyNoticeAcknowledged"));
 
 		ModConfig decoded = gson.fromJson("""
 				{
@@ -73,20 +70,26 @@ class ModConfigTest {
 				}
 				""", ModConfig.class).validated();
 		assertFalse(decoded.meta().enabled());
-		assertEquals(9, decoded.pacing().productionHours());
-		assertEquals(96, decoded.limits().correctionWorkBudgetPerTick());
-		assertTrue(decoded.clientState().safetyNoticeAcknowledged());
+		assertEquals(0.5D, decoded.meta().peakVolume());
+		assertTrue(decoded.pacing().developerAcceleration());
+		assertFalse(decoded.clientState().viewDistanceUnlocked());
+
+		String normalized = gson.toJson(decoded);
+		assertFalse(normalized.contains("subtitlesEnabled"));
+		assertFalse(normalized.contains("productionHours"));
+		assertFalse(normalized.contains("correctionWorkBudgetPerTick"));
+		assertFalse(normalized.contains("\"limits\""));
+		assertFalse(normalized.contains("safetyNoticeAcknowledged"));
 	}
 
 	@Test
 	void clientStateTransitionsPreserveTheOtherFlag() {
-		ModConfig.ClientState acknowledged = ModConfig.defaults().clientState()
-				.acknowledgeSafetyNotice();
-		assertTrue(acknowledged.safetyNoticeAcknowledged());
-		assertFalse(acknowledged.alphaDowngradeComplete());
-
-		ModConfig.ClientState completed = acknowledged.completeAlphaDowngrade();
-		assertTrue(completed.safetyNoticeAcknowledged());
+		ModConfig.ClientState completed = ModConfig.defaults().clientState().completeAlphaDowngrade();
 		assertTrue(completed.alphaDowngradeComplete());
+		assertFalse(completed.viewDistanceUnlocked());
+
+		ModConfig.ClientState unlocked = completed.unlockViewDistance();
+		assertTrue(unlocked.alphaDowngradeComplete());
+		assertTrue(unlocked.viewDistanceUnlocked());
 	}
 }

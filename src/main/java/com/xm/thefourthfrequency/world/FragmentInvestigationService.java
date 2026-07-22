@@ -147,10 +147,13 @@ public final class FragmentInvestigationService {
 		if (storedKey.equals(nextKey)) return;
 		data.updateTerminalRecord(player.getUUID(), tag -> {
 			tag.putString(NEAR_KEY, nextKey);
-			if (found != null) TerminalSignalLog.append(tag, bandForFragment(found.candidate().fragment()),
-					"fragment_near_" + (found.candidate().fragment() + 1), player.level().getGameTime(),
-					player.level().getDayTime(), found.candidate().dimension(), found.candidate().position().asLong(),
-					found.candidate().group().code, 1, true);
+			if (found != null) {
+				String type = "fragment_near_" + (found.candidate().fragment() + 1);
+				if (!TerminalSignalLog.containsType(tag, type)) TerminalSignalLog.append(tag,
+						bandForFragment(found.candidate().fragment()), type, player.level().getGameTime(),
+						player.level().getDayTime(), found.candidate().dimension(),
+						found.candidate().position().asLong(), found.candidate().group().code, 1, true);
+			}
 		});
 		if (found != null || previous != null) {
 			TerminalLifecycleService.ensureCarried(player, false);
