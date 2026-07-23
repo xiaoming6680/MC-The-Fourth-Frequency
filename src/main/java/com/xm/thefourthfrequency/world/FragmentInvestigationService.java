@@ -3,7 +3,7 @@ package com.xm.thefourthfrequency.world;
 import com.mojang.datafixers.util.Pair;
 import com.xm.thefourthfrequency.audio.AudioService;
 import com.xm.thefourthfrequency.content.TerminalData;
-import com.xm.thefourthfrequency.facility.FacilityService;
+import com.xm.thefourthfrequency.narrative.HiddenFilePolicy;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
 import com.xm.thefourthfrequency.networking.PrivateAnomalyPayload;
 import com.xm.thefourthfrequency.state.NavigationState;
@@ -48,17 +48,13 @@ public final class FragmentInvestigationService {
 	private static final String ALLOCATION_COMPLETE = "allocation_complete";
 	private static final String NEAR_KEY = "fragment_near_candidate";
 	private static final int STATE_VERSION = 1;
-	private static final int FRAGMENT_COUNT = 4;
+	private static final int FRAGMENT_COUNT = HiddenFilePolicy.FILE_COUNT;
 	private static final int GROUPS_PER_FRAGMENT = 4;
 	private static final int MAX_CANDIDATES_PER_FRAGMENT = 3;
 	private static final int LOCATE_RADIUS_CHUNKS = 256;
 	private static final int ENTER_CHECK_INTERVAL = 10;
 	private static final SignalBand[] SIGNAL_BANDS = {
 			SignalBand.WEATHER, SignalBand.MINING, SignalBand.PUBLIC, SignalBand.UNKNOWN
-	};
-	private static final String[] FILE_IDS = {
-			"surface_shelter_record", "field_observation_record",
-			"underground_mine_record", "abandoned_warehouse_record"
 	};
 	private static final Group[][] POOLS = {
 			{Group.MINESHAFT, Group.SHIPWRECK, Group.TRAIL_RUINS, Group.STRONGHOLD},
@@ -217,7 +213,7 @@ public final class FragmentInvestigationService {
 	public static boolean ensureSignalMarkers(CompoundTag record, ServerPlayer player) {
 		boolean changed = normalizeSignalBands(record);
 		for (int fragment = 0; fragment < FRAGMENT_COUNT; fragment++) {
-			if (TerminalFileState.discovered(record, FILE_IDS[fragment])) continue;
+			if (TerminalFileState.discovered(record, HiddenFilePolicy.fileId(fragment))) continue;
 			String type = "fragment_marker_" + (fragment + 1);
 			if (TerminalSignalLog.containsType(record, type)) continue;
 			TerminalSignalLog.append(record, bandForFragment(fragment), type, player.level().getGameTime(),
@@ -276,25 +272,23 @@ public final class FragmentInvestigationService {
 			List<SharedReceipt> receipts) {
 		boolean changed = false;
 		ListTag discoveries = state(data).getListOrEmpty(DISCOVERIES);
-		boolean allComplete = discoveredFragments(data).size() == FRAGMENT_COUNT;
 		for (int index = 0; index < discoveries.size(); index++) {
 			CompoundTag discovery = discoveries.getCompoundOrEmpty(index);
 			int fragment = discovery.getIntOr("fragment", -1);
-			if (fragment < 0 || fragment >= FRAGMENT_COUNT || TerminalFileState.discovered(record, FILE_IDS[fragment])) continue;
+			if (fragment < 0 || fragment >= FRAGMENT_COUNT
+					|| TerminalFileState.discovered(record, HiddenFilePolicy.fileId(fragment))) continue;
 			long gameTime = discovery.getLongOr("game_time", player.level().getGameTime());
 			long dayTime = discovery.getLongOr("day_time", player.level().getDayTime());
 			String discovererName = discovery.getStringOr("discoverer_name", "?");
 			String discovererId = discovery.getStringOr("discoverer_id", "");
 			boolean own = player.getUUID().toString().equals(discovererId);
-			TerminalFileState.discover(record, FILE_IDS[fragment], gameTime, dayTime, true);
+			TerminalFileState.discover(record, HiddenFilePolicy.fileId(fragment), gameTime, dayTime, true);
 			TerminalSignalLog.append(record, bandForFragment(fragment),
 					(own ? "fragment_shared_" : "fragment_received_") + (fragment + 1), gameTime, dayTime,
 					discovererName, discovery.getLongOr("position", 0L), fragment, 1, true);
 			receipts.add(new SharedReceipt(fragment + 1, discovererName, own));
 			changed = true;
 		}
-		if (!discoveries.isEmpty()) changed |= TerminalFileState.discover(record, "encrypted_witness_file",
-				player.level().getGameTime(), player.level().getDayTime(), allComplete);
 		return changed;
 	}
 
@@ -384,12 +378,10 @@ public final class FragmentInvestigationService {
 		});
 		NEARBY.entrySet().removeIf(entry -> entry.getValue().candidate().fragment() == candidate.fragment());
 		FORCED_NEARBY_FOR_TESTS.entrySet().removeIf(entry -> entry.getValue().candidate().fragment() == candidate.fragment());
-		boolean allComplete = discoveredFragments(data).size() == FRAGMENT_COUNT;
 		for (UUID owner : data.terminalOwnerIds()) {
 			boolean isDiscoverer = owner.equals(discoverer.getUUID());
 			data.updateTerminalRecord(owner, tag -> {
-				TerminalFileState.discover(tag, FILE_IDS[candidate.fragment()], now, dayTime, true);
-				TerminalFileState.discover(tag, "encrypted_witness_file", now, dayTime, allComplete);
+				TerminalFileState.discover(tag, HiddenFilePolicy.fileId(candidate.fragment()), now, dayTime, true);
 				TerminalSignalLog.append(tag, bandForFragment(candidate.fragment()),
 						(isDiscoverer ? "fragment_shared_" : "fragment_received_") + (candidate.fragment() + 1),
 						now, dayTime, discovererName, candidate.position().asLong(), candidate.fragment(), 1, true);
@@ -409,15 +401,13 @@ public final class FragmentInvestigationService {
 		for (ServerPlayer online : discoverer.level().getServer().getPlayerList().getPlayers()) {
 			if (data.terminalRecord(online.getUUID()).isEmpty()) continue;
 			Component message = online.getUUID().equals(discoverer.getUUID())
-					? Component.translatable("message.thefourthfrequency.fragment.shared", candidate.fragment() + 1)
-					: Component.translatable("message.thefourthfrequency.fragment.received", discovererName,
-							candidate.fragment() + 1);
+					? Component.translatable("message.thefourthfrequency.fragment.shared")
+					: Component.translatable("message.thefourthfrequency.fragment.received", discovererName);
 			online.displayClientMessage(message, true);
 			TerminalLifecycleService.ensureCarried(online, false);
 			TerminalRuntimeService.synchronizeProjection(online);
 			TerminalRuntimeService.refresh(online);
 		}
-		if (allComplete) FacilityService.unlockArchiveFromFragments(discoverer);
 		return true;
 	}
 
@@ -448,13 +438,11 @@ public final class FragmentInvestigationService {
 	}
 
 	public static boolean isFragmentFile(String id) {
-		for (String file : FILE_IDS) if (file.equals(id)) return true;
-		return false;
+		return HiddenFilePolicy.isHiddenFile(id);
 	}
 
 	public static int fragmentForFile(String id) {
-		for (int index = 0; index < FILE_IDS.length; index++) if (FILE_IDS[index].equals(id)) return index;
-		return -1;
+		return HiddenFilePolicy.indexOf(id);
 	}
 
 	public static int receiverTuning(Candidate candidate) {

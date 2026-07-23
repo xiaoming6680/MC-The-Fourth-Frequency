@@ -53,12 +53,12 @@
 
 | 验证 | 结果 | 边界 |
 | --- | --- | --- |
-| JUnit/资源契约 | 139/139 通过；0 失败、0 错误、0 跳过 | 最近完整构建基线 |
+| JUnit/资源契约 | 138/138 通过；0 失败、0 错误、0 跳过 | 最近完整构建基线 |
 | 服务端 GameTest | 53/53 通过 | 最近完整服务器定向运行 |
-| 客户端 `end-boss` | `BUILD SUCCESSFUL` | 覆盖形态、攻击、祭坛、诗篇、返程、视距与 Mixin 加载 |
+| 完整客户端 GameTest | `BUILD SUCCESSFUL` | 覆盖破损文件渐进解锁、主线、异象、加载画面、终局、返程与视距 |
 | remap JAR | 成功 | 最近完整构建基线 |
 
-这些结果是当前代码基线的已完成证据，不表示每次纯文档编辑都重新运行耗时的客户端套件。本轮同时修改了本地化资源，因此已重新执行资源装配和静态资源检查；游戏逻辑没有变化。
+这些结果是当前代码基线的已完成证据。本轮已执行未筛选的完整客户端套件、服务端 GameTest、JUnit/资源契约与完整 `build`。
 
 ## 世界接口关键不变量
 
@@ -87,5 +87,5 @@
 
 | 文件 | 当前结果 |
 | --- | --- |
-| `build/libs/thefourthfrequency-0.2.0-beta.jar` | 15,472,045 字节；SHA-256 `0E8C2B4A9F7AE831C63E89587BBF997D102F35DAAE1C27969AB052BFA627E9FE` |
-| `build/libs/thefourthfrequency-0.2.0-beta-sources.jar` | 14,746,122 字节；SHA-256 `09C095E095EEB90E9B372E2D015AADD701C2E0EC3FC44DB10866B492E4F1BA4C` |
+| `build/libs/thefourthfrequency-0.2.0-beta.jar` | 15,466,198 字节；SHA-256 `3A552861478E6847EC856C372D7E1BCEB9FC3A138D20905A12DC1C071B1D2CDF` |
+| `build/libs/thefourthfrequency-0.2.0-beta-sources.jar` | 14,743,222 字节；SHA-256 `52263907E8F2E54C01755854807CBAE09C93AF03119D522446DC9544DA0D08D6` |

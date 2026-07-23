@@ -25,10 +25,6 @@ public final class TerminalClientAudio {
 		playContact(ModSounds.TERMINAL_CLICK, 0.92F, 0.50F);
 	}
 
-	public static void passwordKey() {
-		playContact(ModSounds.TERMINAL_PASSWORD, 1.14F, 0.32F);
-	}
-
 	public static void tuningInput() {
 		Minecraft client = Minecraft.getInstance();
 		if (client.level == null) return;

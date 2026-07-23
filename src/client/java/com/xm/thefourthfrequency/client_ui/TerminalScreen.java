@@ -1,8 +1,7 @@
 package com.xm.thefourthfrequency.client_ui;
 
 import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
-import com.xm.thefourthfrequency.networking.ArchivePasswordPayload;
-import com.xm.thefourthfrequency.networking.ArchivePasswordResultPayload;
+import com.xm.thefourthfrequency.narrative.HiddenFilePolicy;
 import com.xm.thefourthfrequency.networking.TerminalControlPayload;
 import com.xm.thefourthfrequency.networking.TerminalLogEntryPayload;
 import com.xm.thefourthfrequency.networking.TerminalFilePayload;
@@ -56,6 +55,7 @@ public final class TerminalScreen extends Screen {
 	private static final long TRANSITION_MILLIS = 160L;
 	private static final long WAVE_MORPH_MILLIS = 260L;
 	private static final long WAVE_COLOR_MILLIS = 180L;
+	private static final long FILE_UNLOCK_FADE_MILLIS = 1_000L;
 	private static final int ROW_HEIGHT = 10;
 	private static final int SIGNAL_ROW_HEIGHT = 12;
 	private static final int WAVE_SAMPLES = 48;
@@ -104,15 +104,14 @@ public final class TerminalScreen extends Screen {
 	private int fileContentScroll;
 	private int fileContentMaxScroll;
 	private int selectedFile = -1;
+	private String selectedFileId = "";
 	private int hoveredFile = -1;
-	private boolean detailFromFragments;
+	private long diaryUnlockStartedAtMillis = -1L;
 	private String expandedSignalCard = "";
 	private int selectedSignalCard = -1;
 	private List<String> signalCardKeys = List.of();
 	private final List<SignalHit> signalHits = new ArrayList<>();
 	private final List<NavigationHit> navigationHits = new ArrayList<>();
-	private final StringBuilder password = new StringBuilder(4);
-	private int passwordResult = -1;
 
 	public TerminalScreen(TerminalSnapshotPayload payload) {
 		super(Component.translatable("screen.thefourthfrequency.terminal"));
@@ -132,6 +131,13 @@ public final class TerminalScreen extends Screen {
 
 	public void update(TerminalSnapshotPayload payload) {
 		TerminalSnapshot next = new TerminalSnapshot(payload);
+		TerminalFilePayload previousDiary = snapshot.files().stream()
+				.filter(file -> file.id().equals(HiddenFilePolicy.COMPLETE_FILE_ID)).findFirst().orElse(null);
+		TerminalFilePayload nextDiary = next.files().stream()
+				.filter(file -> file.id().equals(HiddenFilePolicy.COMPLETE_FILE_ID)).findFirst().orElse(null);
+		if (previousDiary != null && nextDiary != null && !previousDiary.unlocked() && nextDiary.unlocked()) {
+			diaryUnlockStartedAtMillis = nowMillis();
+		}
 		if (next.unreadCount() > snapshot.unreadCount()) unreadFlashStartedAt = age;
 		long nowMillis = nowMillis();
 		int nextTuning = next.tuning();
@@ -144,13 +150,16 @@ public final class TerminalScreen extends Screen {
 		}
 		targetObjectiveFraction = next.objectiveFraction();
 		snapshot = next;
+		if (!selectedFileId.isEmpty()) {
+			selectedFile = indexOfFile(selectedFileId);
+			if (detailFile != null) {
+				detailFile = snapshot.files().stream().filter(file -> file.id().equals(selectedFileId))
+						.findFirst().orElse(null);
+			}
+		}
 		mode = next.mode();
 		waveformMorphTransition.retarget(waveformMorphTarget(tuning), nowMillis);
 		retargetSignalColor(signalColor(tuning), nowMillis);
-		if (logView == LogView.FRAGMENTS && detailFile != null && detailFile.id().equals("encrypted_witness_file")) {
-			detailFile = snapshot.directoryFiles().stream().filter(file -> file.id().equals("encrypted_witness_file"))
-					.findFirst().orElse(detailFile);
-		}
 	}
 
 	public void updateNavigation(TerminalNavigationPayload payload) {
@@ -186,14 +195,6 @@ public final class TerminalScreen extends Screen {
 		long nowMillis = nowMillis();
 		waveformMorphTransition.retarget(waveformMorphTarget(tuning), nowMillis);
 		retargetSignalColor(signalColor(tuning), nowMillis);
-	}
-
-	public void acceptPasswordResult(int result) {
-		passwordResult = Math.clamp(result, ArchivePasswordResultPayload.SUCCESS, ArchivePasswordResultPayload.WRONG);
-		if (result == ArchivePasswordResultPayload.SUCCESS) {
-			logView = LogView.DETAIL;
-			scrollRow = 0;
-		}
 	}
 
 	public void closeFromServer() {
@@ -865,7 +866,7 @@ public final class TerminalScreen extends Screen {
 				TerminalUiLayout.FILE_DIVIDER.right(), TerminalUiLayout.FILE_DIVIDER.bottom(), DARK_BORDER);
 		int total = snapshot.files().size();
 		fileListScroll = Math.clamp(fileListScroll, 0, TerminalUiLayout.fileMaxScrollRow(total));
-		if (selectedFile >= 0) selectedFile = Math.clamp(selectedFile, 0, Math.max(0, total - 1));
+		if (!selectedFileId.isEmpty()) selectedFile = indexOfFile(selectedFileId);
 		for (int row = 0; row < TerminalUiLayout.FILE_LIST_VISIBLE_ROWS; row++) {
 			int index = fileListScroll + row;
 			if (index < total) drawDirectoryEntry(graphics, index, TerminalUiLayout.fileListRow(row));
@@ -883,12 +884,17 @@ public final class TerminalScreen extends Screen {
 		boolean focused = index == selectedFile || index == hoveredFile;
 		graphics.fill(cell.left(), cell.top(), cell.right(), cell.bottom(), focused ? 0xAA172A1D : 0x650C1710);
 		if (focused) graphics.fill(cell.left(), cell.top(), cell.left() + 2, cell.bottom(), pageAccent());
-		boolean fragmentParent = file.id().equals("encrypted_witness_file");
-		Component title = file.unlocked() || fragmentParent ? snapshot.fileTitle(file)
+		boolean completeDiary = file.id().equals(HiddenFilePolicy.COMPLETE_FILE_ID);
+		Component title = file.unlocked() || completeDiary || HiddenFilePolicy.isHiddenFile(file.id())
+				? snapshot.fileTitle(file)
 				: Component.translatable("terminal.thefourthfrequency.file.locked_title", snapshot.fileTitle(file));
-		int color = file.unlocked() ? GREEN : fragmentParent ? AMBER : CYAN;
-		graphics.drawString(font, ellipsize(title.getString(), cell.width() - 10), cell.left() + 5,
-				cell.top() + Math.max(4, (cell.height() - font.lineHeight) / 2), color, false);
+		int color = HiddenFilePolicy.isHiddenFile(file.id()) ? DIM
+				: completeDiary ? diaryTitleColor(file) : file.unlocked() ? GREEN : CYAN;
+		List<FormattedCharSequence> titleRows = font.split(title, cell.width() - 10);
+		if (!titleRows.isEmpty()) {
+			graphics.drawString(font, titleRows.getFirst(), cell.left() + 5,
+					cell.top() + Math.max(4, (cell.height() - font.lineHeight) / 2), color, false);
+		}
 	}
 
 	private void drawSelectedFileContent(GuiGraphics graphics) {
@@ -901,8 +907,7 @@ public final class TerminalScreen extends Screen {
 		}
 		switch (logView) {
 			case DIRECTORY, DETAIL -> drawLogDetail(graphics);
-			case FRAGMENTS -> drawFragments(graphics);
-			case PASSWORD -> drawPassword(graphics);
+			case LOCKED_DIARY -> drawLockedDiary(graphics);
 		}
 	}
 
@@ -932,53 +937,26 @@ public final class TerminalScreen extends Screen {
 		return List.copyOf(result);
 	}
 
-	private void drawFragments(GuiGraphics graphics) {
+	private void drawLockedDiary(GuiGraphics graphics) {
 		var body = TerminalUiLayout.FILE_CONTENT;
-		graphics.drawString(font, Component.translatable("terminal.thefourthfrequency.fragments.title"),
-				body.left() + 7, body.top() + 5, AMBER, false);
-		for (int fragment = 0; fragment < 4; fragment++) {
-			TerminalUiLayout.Bounds row = fragmentBounds(fragment);
-			TerminalFilePayload file = snapshot.fragmentFile(fragment);
-			boolean received = file != null;
-			graphics.fill(row.left(), row.top(), row.right(), row.bottom(), received ? 0xA514281B : 0x75101511);
-			graphics.renderOutline(row.left(), row.top(), row.width(), row.height(), received ? GREEN : DARK_BORDER);
-			graphics.drawString(font, Component.translatable("terminal.thefourthfrequency.fragments.row", fragment + 1),
-					row.left() + 6, row.top() + 5, received ? GREEN : DIM, false);
-			Component status = Component.translatable(received
-					? "terminal.thefourthfrequency.fragments.received" : "terminal.thefourthfrequency.fragments.missing");
-			graphics.drawString(font, status, row.right() - 6 - font.width(status), row.top() + 5,
-					received ? AMBER : DIM, false);
+		if (detailFile != null && detailFile.unlocked()) {
+			drawLogDetail(graphics);
+			return;
 		}
-		drawCenteredFitted(graphics, Component.translatable("terminal.thefourthfrequency.fragments.waiting"),
-				fragmentCompleteBounds(), DIM);
-	}
-
-	private void drawPassword(GuiGraphics graphics) {
-		var body = TerminalUiLayout.FILE_CONTENT;
-		graphics.drawCenteredString(font, Component.translatable("terminal.thefourthfrequency.password.title"),
-				(body.left() + body.right()) / 2, body.top() + 4, CYAN);
-		for (int index = 0; index < 4; index++) {
-			int x = body.left() + 6 + (index % 2) * 103;
-			int y = body.top() + 17 + (index / 2) * 11;
-			boolean found = snapshot.evidence(index) >= 0;
-			graphics.drawString(font, Component.translatable("terminal.thefourthfrequency.password.clue." + index
-					+ (found ? ".found" : ".missing")), x, y, found ? GREEN : DIM, false);
-		}
-		String shown = password + "_".repeat(4 - password.length());
-		graphics.drawCenteredString(font, Component.literal(shown), (body.left() + body.right()) / 2, body.top() + 43, AMBER);
-		for (int digit = 0; digit < 4; digit++) drawKey(graphics, digitBounds(digit), Integer.toString(digit), CYAN);
-		drawKey(graphics, clearBounds(), Component.translatable("terminal.thefourthfrequency.password.clear").getString(), DIM);
-		drawKey(graphics, submitBounds(), Component.translatable("terminal.thefourthfrequency.password.submit").getString(), AMBER);
-		if (passwordResult >= 0 && passwordResult != ArchivePasswordResultPayload.SUCCESS) {
-			graphics.drawCenteredString(font, Component.translatable("terminal.thefourthfrequency.password.result."
-					+ passwordResult), (body.left() + body.right()) / 2, body.bottom() - 10, HOT);
-		}
-	}
-
-	private void drawKey(GuiGraphics graphics, TerminalUiLayout.Bounds bounds, String label, int color) {
-		graphics.fill(bounds.left(), bounds.top(), bounds.right(), bounds.bottom(), 0xFF15241A);
-		graphics.renderOutline(bounds.left(), bounds.top(), bounds.width(), bounds.height(), color);
-		graphics.drawCenteredString(font, label, (bounds.left() + bounds.right()) / 2, bounds.top() + 4, color);
+		int centerX = (body.left() + body.right()) / 2;
+		int centerY = (body.top() + body.bottom()) / 2;
+		int percent = snapshot.hiddenFileReadPercent();
+		graphics.drawCenteredString(font, Component.translatable("terminal.thefourthfrequency.file.locked"),
+				centerX, centerY - 25, DIM);
+		graphics.drawCenteredString(font, Component.literal(percent + "%"), centerX, centerY - 8, AMBER);
+		int barLeft = body.left() + 24;
+		int barRight = body.right() - 24;
+		int barTop = centerY + 8;
+		graphics.fill(barLeft, barTop, barRight, barTop + 10, 0xFF08100B);
+		graphics.renderOutline(barLeft, barTop, barRight - barLeft, 10, DARK_BORDER);
+		int fillWidth = Math.round((barRight - barLeft - 4) * percent / 100.0F);
+		graphics.fill(barLeft + 2, barTop + 2, barLeft + 2 + fillWidth, barTop + 8,
+				percent == 100 ? GREEN : AMBER);
 	}
 
 	private void drawFooter(GuiGraphics graphics, Component hint, boolean ignored) {
@@ -1337,9 +1315,6 @@ public final class TerminalScreen extends Screen {
 			openDirectoryEntry(index);
 			return true;
 		}
-		if (logView == LogView.PASSWORD && TerminalUiLayout.FILE_CONTENT.contains(x, y)) {
-			return handlePasswordClick(x, y);
-		}
 		return TerminalUiLayout.FILE_BODY.contains(x, y);
 	}
 
@@ -1347,27 +1322,32 @@ public final class TerminalScreen extends Screen {
 		if (index < 0 || index >= snapshot.files().size()) return;
 		selectedFile = index;
 		TerminalFilePayload file = snapshot.files().get(index);
+		selectedFileId = file.id();
 		detailFile = file;
 		fileContentScroll = 0;
-		if (file.id().equals("encrypted_witness_file")) {
-			logView = file.unlocked() ? LogView.DETAIL : allFragmentsReceived() ? LogView.PASSWORD : LogView.FRAGMENTS;
+		if (file.id().equals(HiddenFilePolicy.COMPLETE_FILE_ID)) {
+			logView = file.unlocked() ? LogView.DETAIL : LogView.LOCKED_DIARY;
 			if (file.unlocked()) send(TerminalControlPayload.READ_TRUTH_FILE, 0);
-		} else logView = LogView.DETAIL;
+		} else {
+			logView = LogView.DETAIL;
+			int hiddenIndex = HiddenFilePolicy.indexOf(file.id());
+			if (hiddenIndex >= 0) send(TerminalControlPayload.READ_HIDDEN_FILE, hiddenIndex);
+		}
 		TerminalClientAudio.click();
 	}
 
 	private void openDetail(TerminalFilePayload file) {
 		logView = LogView.DETAIL;
 		detailFile = file;
+		selectedFileId = file.id();
+		selectedFile = indexOfFile(file.id());
 		fileContentScroll = 0;
-		if (file.id().equals("encrypted_witness_file") && file.unlocked()) {
+		int hiddenIndex = HiddenFilePolicy.indexOf(file.id());
+		if (hiddenIndex >= 0) {
+			send(TerminalControlPayload.READ_HIDDEN_FILE, hiddenIndex);
+		} else if (file.id().equals(HiddenFilePolicy.COMPLETE_FILE_ID) && file.unlocked()) {
 			send(TerminalControlPayload.READ_TRUTH_FILE, 0);
 		}
-	}
-
-	private boolean allFragmentsReceived() {
-		for (int fragment = 0; fragment < 4; fragment++) if (!snapshot.fragmentReceived(fragment)) return false;
-		return true;
 	}
 
 	private boolean handleSignalClick(double x, double y) {
@@ -1387,39 +1367,6 @@ public final class TerminalScreen extends Screen {
 			}
 		}
 		return false;
-	}
-
-	private boolean handlePasswordClick(double x, double y) {
-		for (int digit = 0; digit < 4; digit++) {
-			if (digitBounds(digit).contains(x, y)) {
-				if (password.length() < 4) password.append(digit);
-				passwordResult = -1;
-				TerminalClientAudio.passwordKey();
-				return true;
-			}
-		}
-		if (clearBounds().contains(x, y)) {
-			password.setLength(0);
-			passwordResult = -1;
-			TerminalClientAudio.passwordKey();
-			return true;
-		}
-		if (submitBounds().contains(x, y)) {
-			submitPassword();
-			return true;
-		}
-		return false;
-	}
-
-	private void submitPassword() {
-		if (password.length() != 4) {
-			passwordResult = ArchivePasswordResultPayload.INVALID;
-			return;
-		}
-		if (ClientPlayNetworking.canSend(ArchivePasswordPayload.TYPE)) {
-			ClientPlayNetworking.send(new ArchivePasswordPayload(password.toString()));
-			TerminalClientAudio.passwordKey();
-		}
 	}
 
 	@Override
@@ -1569,6 +1516,7 @@ public final class TerminalScreen extends Screen {
 		if (total == 0) return;
 		selectedFile = selectedFile < 0 ? (delta < 0 ? total - 1 : 0)
 				: Math.clamp(selectedFile + delta, 0, total - 1);
+		selectedFileId = snapshot.files().get(selectedFile).id();
 		if (selectedFile < fileListScroll) fileListScroll = selectedFile;
 		if (selectedFile >= fileListScroll + TerminalUiLayout.FILE_LIST_VISIBLE_ROWS) {
 			fileListScroll = selectedFile - TerminalUiLayout.FILE_LIST_VISIBLE_ROWS + 1;
@@ -1577,16 +1525,38 @@ public final class TerminalScreen extends Screen {
 		TerminalClientAudio.click();
 	}
 
+	private int indexOfFile(String id) {
+		for (int index = 0; index < snapshot.files().size(); index++) {
+			if (snapshot.files().get(index).id().equals(id)) return index;
+		}
+		return -1;
+	}
+
+	private int diaryTitleColor(TerminalFilePayload file) {
+		if (!file.unlocked()) return DIM;
+		if (diaryUnlockStartedAtMillis < 0L) return GREEN;
+		long now = renderNowMillis > 0L ? renderNowMillis : nowMillis();
+		float progress = Math.clamp((now - diaryUnlockStartedAtMillis) / (float) FILE_UNLOCK_FADE_MILLIS, 0.0F, 1.0F);
+		if (progress >= 1.0F) diaryUnlockStartedAtMillis = -1L;
+		return interpolateColor(DIM, GREEN, progress);
+	}
+
+	private static int interpolateColor(int from, int to, float progress) {
+		int alpha = Math.round(((from >>> 24) & 0xFF) + (((to >>> 24) & 0xFF) - ((from >>> 24) & 0xFF)) * progress);
+		int red = Math.round(((from >>> 16) & 0xFF) + (((to >>> 16) & 0xFF) - ((from >>> 16) & 0xFF)) * progress);
+		int green = Math.round(((from >>> 8) & 0xFF) + (((to >>> 8) & 0xFF) - ((from >>> 8) & 0xFF)) * progress);
+		int blue = Math.round((from & 0xFF) + ((to & 0xFF) - (from & 0xFF)) * progress);
+		return alpha << 24 | red << 16 | green << 8 | blue;
+	}
+
 	private void resetLogView() {
 		logView = LogView.DIRECTORY;
 		fileListScroll = 0;
 		fileContentScroll = 0;
 		fileContentMaxScroll = 0;
 		selectedFile = -1;
+		selectedFileId = "";
 		detailFile = null;
-		detailFromFragments = false;
-		password.setLength(0);
-		passwordResult = -1;
 	}
 
 	private void scrollBy(int delta) {
@@ -1646,18 +1616,13 @@ public final class TerminalScreen extends Screen {
 	}
 	public void openFragmentForTesting(int fragment) {
 		TerminalFilePayload file = snapshot.fragmentFile(fragment);
-		if (file != null) {
-			detailFromFragments = true;
-			openDetail(file);
-		}
+		if (file != null) openDetail(file);
 	}
 	public void openCompleteFileForTesting() {
 		TerminalFilePayload parent = snapshot.directoryFiles().stream()
-				.filter(file -> file.id().equals("encrypted_witness_file") && file.unlocked()).findFirst().orElse(null);
-		if (parent != null) {
-			detailFromFragments = false;
-			openDetail(parent);
-		}
+				.filter(file -> file.id().equals(HiddenFilePolicy.COMPLETE_FILE_ID) && file.unlocked())
+				.findFirst().orElse(null);
+		if (parent != null) openDetail(parent);
 	}
 	public void expandFirstSignalCardForTesting() {
 		if (!signalCardKeys.isEmpty()) {
@@ -1667,16 +1632,7 @@ public final class TerminalScreen extends Screen {
 		}
 	}
 	public void markAllReadForTesting() { send(TerminalControlPayload.MARK_RECORDS_READ, 0); }
-	public void enterPasswordForTesting(String digits) {
-		password.setLength(0);
-		passwordResult = -1;
-		for (int index = 0; index < digits.length() && password.length() < 4; index++) {
-			char digit = digits.charAt(index);
-			if (digit >= '0' && digit <= '3') password.append(digit);
-		}
-	}
-	public void submitPasswordForTesting() { submitPassword(); }
-	public int passwordResultForTesting() { return passwordResult; }
+	public int hiddenFileReadPercentForTesting() { return snapshot.hiddenFileReadPercent(); }
 	public int unreadCountForTesting() { return snapshot.unreadCount(); }
 	public boolean unreadFlashOnForTesting() {
 		return snapshot.unreadCount() > 0 && TerminalUiLayout.unreadFlashOn(age - unreadFlashStartedAt);
@@ -1705,6 +1661,9 @@ public final class TerminalScreen extends Screen {
 	public int fileContentScrollForTesting() { return fileContentScroll; }
 	public int fileCountForTesting() { return snapshot.files().size(); }
 	public String fileIdForTesting(int index) { return snapshot.files().get(index).id(); }
+	public String selectedFileIdForTesting() { return selectedFileId; }
+	public int discoveredHiddenFileCountForTesting() { return snapshot.discoveredHiddenFileCount(); }
+	public boolean diaryUnlockFadeActiveForTesting() { return diaryUnlockStartedAtMillis >= 0L; }
 	public double waveformMorphTargetForTesting() { return waveformMorphTarget(tuning); }
 	public boolean navigationActiveForTesting() { return navigation.navigable(); }
 	public void moveFileSelectionForTesting(int delta) { moveFileSelection(delta); }
@@ -1881,28 +1840,6 @@ public final class TerminalScreen extends Screen {
 		return cut;
 	}
 
-	private static TerminalUiLayout.Bounds digitBounds(int digit) {
-		int left = 149 + digit * 46;
-		return new TerminalUiLayout.Bounds(left, 127, left + 38, 145);
-	}
-
-	private static TerminalUiLayout.Bounds clearBounds() {
-		return new TerminalUiLayout.Bounds(149, 150, 232, 169);
-	}
-
-	private static TerminalUiLayout.Bounds submitBounds() {
-		return new TerminalUiLayout.Bounds(241, 150, 336, 169);
-	}
-
-	private static TerminalUiLayout.Bounds fragmentBounds(int fragment) {
-		int top = 94 + Math.clamp(fragment, 0, 3) * 22;
-		return new TerminalUiLayout.Bounds(143, top, 342, top + 18);
-	}
-
-	private static TerminalUiLayout.Bounds fragmentCompleteBounds() {
-		return new TerminalUiLayout.Bounds(143, 182, 342, 195);
-	}
-
 	private float panelScale() {
 		return Math.min(2.0F, Math.max(0.55F,
 				Math.min((width - 16) / (float) BASE_WIDTH, (height - 16) / (float) BASE_HEIGHT)));
@@ -1917,7 +1854,7 @@ public final class TerminalScreen extends Screen {
 
 	private static long nowMillis() { return System.nanoTime() / 1_000_000L; }
 
-	private enum LogView { DIRECTORY, DETAIL, FRAGMENTS, PASSWORD }
+	private enum LogView { DIRECTORY, DETAIL, LOCKED_DIARY }
 	private record StyledRow(FormattedCharSequence text, int color, int indent, boolean marker) { }
 	private record CardDetail(Component text, int navigation) { }
 	private record SignalRow(FormattedCharSequence text, int color, boolean marker, String cardKey,

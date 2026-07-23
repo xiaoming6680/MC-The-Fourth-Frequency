@@ -45,6 +45,7 @@ import com.xm.thefourthfrequency.ending.EndingState;
 import com.xm.thefourthfrequency.ending.FinalConfrontationService;
 import com.xm.thefourthfrequency.world.PlayerPatternService;
 import com.xm.thefourthfrequency.world.DebugPanelService;
+import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.TerminalLifecycleService;
 import com.xm.thefourthfrequency.meta_api.MetaController;
 import com.xm.thefourthfrequency.meta_api.MetaEvent;
@@ -237,12 +238,13 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
 				terminal.openLogDirectoryForTesting();
-				if (terminal.fileCountForTesting() != 0 || terminal.selectedFileForTesting() != -1
+				if (terminal.fileCountForTesting() != 1 || terminal.selectedFileForTesting() != -1
+						|| !terminal.fileIdForTesting(0).equals("encrypted_witness_file")
 						|| !"FILES".equals(terminal.pageForTesting())) {
-					throw new AssertionError("A new terminal must keep FILES empty until a real stage or facility is reached");
+					throw new AssertionError("A new terminal must expose only the locked complete diary in FILES");
 				}
 			});
-			context.takeScreenshot("r86-file-directory-initial-empty");
+			context.takeScreenshot("r86-file-directory-initial-locked-diary");
 			setTerminalView(context, TerminalControlPolicy.Mode.SIGNAL.ordinal(),
 					TerminalControlPolicy.DEFAULT_TUNING, 0);
 			context.waitTicks(2);
@@ -470,13 +472,44 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
 				terminal.openWitnessFragmentsForTesting();
-				if (!"FRAGMENTS".equals(terminal.logViewForTesting())) {
-					throw new AssertionError("Witness parent did not open the four fixed fragment rows");
+				if (!"LOCKED_DIARY".equals(terminal.logViewForTesting())
+						|| terminal.hiddenFileReadPercentForTesting() != 0
+						|| terminal.discoveredHiddenFileCountForTesting() != 2) {
+					throw new AssertionError("Locked diary did not show 0% while its title recovered two authored segments");
 				}
 			});
-			context.takeScreenshot("m4-fragments-partially-received");
+			context.takeScreenshot("m4-diary-half-title-zero-read");
 			singleplayer.getServer().runOnServer(M0ClientGameTest::completeM4Fragments);
-			context.waitTicks(60);
+			context.waitTicks(12);
+			context.runOnClient(client -> {
+				TerminalScreen terminal = (TerminalScreen) client.screen;
+				if (!terminal.selectedFileIdForTesting().equals("encrypted_witness_file")
+						|| terminal.discoveredHiddenFileCountForTesting() != 4) {
+					throw new AssertionError("New hidden files displaced the selected stable diary id");
+				}
+				for (int fragment = 0; fragment < 3; fragment++) terminal.openFragmentForTesting(fragment);
+			});
+			context.waitTicks(12);
+			context.runOnClient(client -> {
+				TerminalScreen terminal = (TerminalScreen) client.screen;
+				terminal.openWitnessFragmentsForTesting();
+				if (!"LOCKED_DIARY".equals(terminal.logViewForTesting())
+						|| terminal.hiddenFileReadPercentForTesting() != 75) {
+					throw new AssertionError("Complete recovered title must remain locked at three personal reads");
+				}
+			});
+			context.takeScreenshot("m4-diary-complete-title-75-percent-locked");
+			context.runOnClient(client -> ((TerminalScreen) client.screen).openFragmentForTesting(3));
+			context.waitFor(client -> client.screen instanceof TerminalScreen terminal
+					&& terminal.hiddenFileReadPercentForTesting() == 100, 80);
+			context.runOnClient(client -> {
+				TerminalScreen terminal = (TerminalScreen) client.screen;
+				if (!"DETAIL".equals(terminal.logViewForTesting())
+						|| !terminal.selectedFileIdForTesting().equals("abandoned_warehouse_record")
+						|| !terminal.diaryUnlockFadeActiveForTesting()) {
+					throw new AssertionError("The fourth read did not preserve the open damaged file while fading the diary title");
+				}
+			});
 			assertArchiveUnlocked(context);
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
@@ -485,7 +518,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 					throw new AssertionError("An unlocked witness file did not open its complete text in the right pane");
 				}
 			});
-			context.takeScreenshot("m4-fragments-all-received");
+			context.takeScreenshot("m4-hidden-files-read-diary-unlocked");
 			context.waitTicks(20);
 			context.runOnClient(client -> ((TerminalScreen) client.screen).openCompleteFileForTesting());
 			context.takeScreenshot("m4-complete-witness-file");
@@ -564,7 +597,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			});
 
 			singleplayer.getServer().runOnServer(M0ClientGameTest::beginM6NetherCrossing);
-			context.waitTicks(20);
+			waitForM6NetherRift(singleplayer, context);
 			assertLockedRenderDistance(context, Level.NETHER,
 					DimensionViewDistancePolicy.NETHER_CHUNKS);
 			BlockPos netherRift = singleplayer.getServer().computeOnServer(M0ClientGameTest::observeM6NetherRift);
@@ -740,7 +773,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 						fragmentFiles++;
 					}
 				}
-				if (fragmentFiles != 4) throw new AssertionError("The FILES list did not include all four fragment files");
+				if (fragmentFiles != 4) throw new AssertionError("The FILES list did not include all four damaged files");
 			});
 			context.waitTicks(2);
 			context.takeScreenshot("m7-file-directory-grid-current");
@@ -1344,13 +1377,31 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 	private static void beginM6NetherCrossing(MinecraftServer server) {
 		var player = server.getPlayerList().getPlayers().getFirst();
 		FrequencyWorldData data = FrequencyWorldData.get(server);
-		data.updateTerminalRecord(player.getUUID(), record ->
-				record.putBoolean(TerminalData.RIFT_OBSERVED, true));
+		data.updateTerminalRecord(player.getUUID(), record -> {
+			record.putBoolean(TerminalData.RIFT_OBSERVED, true);
+			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK,
+					record.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0)
+							| SurvivalMilestone.PREPARED_NETHER.mask());
+		});
 		var nether = server.getLevel(Level.NETHER);
 		if (nether == null || !player.teleportTo(nether, 0.5, 64.0, 0.5,
 				Set.of(), 0.0F, 0.0F, true)) {
 			throw new AssertionError("M6 client fixture could not cross into the Nether");
 		}
+	}
+
+	private static void waitForM6NetherRift(TestSingleplayerContext singleplayer,
+			ClientGameTestContext context) {
+		for (int tick = 0; tick < 160; tick++) {
+			boolean complete = singleplayer.getServer().computeOnServer(server ->
+					BodyConstructionService.netherRiftState(FrequencyWorldData.get(server))
+							.getBooleanOr("complete", false));
+			if (complete) {
+				return;
+			}
+			context.waitTicks(1);
+		}
+		throw new AssertionError("M6 client fixture Nether fracture did not complete within 160 ticks");
 	}
 
 	private static BlockPos observeM6NetherRift(MinecraftServer server) {

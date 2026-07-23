@@ -101,12 +101,6 @@
       "thefourthfrequency:device/terminal/fault/02"
     ]
   },
-  "terminal_password": {
-    "subtitle": "subtitles.thefourthfrequency.terminal_password",
-    "sounds": [
-      "thefourthfrequency:device/terminal/password/01"
-    ]
-  },
   "terminal_anomaly": {
     "subtitle": "subtitles.thefourthfrequency.terminal_anomaly",
     "sounds": [

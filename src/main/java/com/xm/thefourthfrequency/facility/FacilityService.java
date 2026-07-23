@@ -2,8 +2,8 @@ package com.xm.thefourthfrequency.facility;
 
 import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.content.TerminalData;
+import com.xm.thefourthfrequency.narrative.HiddenFilePolicy;
 import com.xm.thefourthfrequency.narrative.WitnessArchive;
-import com.xm.thefourthfrequency.networking.ArchivePasswordResultPayload;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import com.xm.thefourthfrequency.world.TerminalLifecycleService;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
@@ -195,90 +195,46 @@ public final class FacilityService {
 		return false;
 	}
 
-	public static boolean tryUnlockArchive(ServerPlayer player, String code) {
-		return tryUnlockArchiveResult(player, code) == ArchivePasswordResultPayload.SUCCESS;
-	}
-
-	/** New mainline entry: four shared fragments replace the legacy facility password. */
-	public static void unlockArchiveFromFragments(ServerPlayer anchorPlayer) {
-		FrequencyWorldData data = FrequencyWorldData.get(anchorPlayer.level().getServer());
+	/** Unlocks this player's diary and creates the one shared rift for the first eligible reader. */
+	public static boolean unlockArchiveFromHiddenFiles(ServerPlayer player) {
+		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
+		CompoundTag terminal = data.terminalRecord(player.getUUID()).orElse(null);
+		if (terminal == null || !HiddenFilePolicy.allDiscovered(terminal) || !HiddenFilePolicy.allRead(terminal)) {
+			return false;
+		}
 		CompoundTag narrative = data.narrativeState();
-		if (!narrative.getBooleanOr(ARCHIVE_UNLOCKED, false)) {
-			BlockPos entrance = anchorPlayer.blockPosition().offset(24, 0, 0);
-			int availableDepth = entrance.getY() - anchorPlayer.level().getServer().overworld().getMinY() - 2;
-			int depth = Math.clamp(availableDepth, 2, 10);
-			BlockPos core = RiftLayout.corePosition(entrance, depth);
+		if (!narrative.getBooleanOr(ARCHIVE_UNLOCKED, false) || !narrative.contains(RIFT_CORE)) {
+			BlockPos entrance = narrative.contains(RIFT_ENTRANCE)
+					? BlockPos.of(narrative.getLongOr(RIFT_ENTRANCE, 0L))
+					: player.blockPosition().offset(24, 0, 0);
+			int availableDepth = entrance.getY() - player.level().getServer().overworld().getMinY() - 2;
+			int depth = narrative.contains(RIFT_DEPTH)
+					? Math.clamp(narrative.getIntOr(RIFT_DEPTH, 2), 2, 10)
+					: Math.clamp(availableDepth, 2, 10);
+			BlockPos core = narrative.contains(RIFT_CORE)
+					? BlockPos.of(narrative.getLongOr(RIFT_CORE, 0L))
+					: RiftLayout.corePosition(entrance, depth);
 			data.updateNarrativeState(tag -> {
 				tag.putBoolean(ARCHIVE_UNLOCKED, true);
 				tag.putLong(RIFT_ENTRANCE, entrance.asLong());
 				tag.putLong(RIFT_CORE, core.asLong());
 				tag.putInt(RIFT_DEPTH, depth);
-				tag.putInt(RIFT_CURSOR, 0);
-				tag.putBoolean(RIFT_COMPLETE, false);
+				if (!tag.contains(RIFT_CURSOR)) tag.putInt(RIFT_CURSOR, 0);
+				if (!tag.contains(RIFT_COMPLETE)) tag.putBoolean(RIFT_COMPLETE, false);
 			});
 		}
-		for (ServerPlayer player : anchorPlayer.level().getServer().getPlayerList().getPlayers()) {
-			synchronizeArchiveAccess(player, data);
-			TerminalLifecycleService.ensureCarried(player, false);
-		}
-	}
-
-	public static int tryUnlockArchiveResult(ServerPlayer player, String code) {
-		if (code == null || !code.matches("[0-3]{4}")) {
-			rejectUnlock(player, "message.thefourthfrequency.archive.invalid_format");
-			return ArchivePasswordResultPayload.INVALID;
-		}
-		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
-		CompoundTag terminal = data.terminalRecord(player.getUUID()).orElse(null);
-		Optional<BlockPos> lock = facilityPosition(data, "transport_node");
-		if (terminal == null || !terminal.getBooleanOr(TerminalData.BOUND, false)
-				|| lock.isEmpty()) {
-			rejectUnlock(player, "message.thefourthfrequency.archive.out_of_range");
-			return ArchivePasswordResultPayload.UNAVAILABLE;
-		}
-		if (!hasAllEvidence(terminal.getStringOr(TerminalData.FACILITY_EVIDENCE, ""))) {
-			rejectUnlock(player, "message.thefourthfrequency.archive.evidence_incomplete");
-			return ArchivePasswordResultPayload.INCOMPLETE;
-		}
-		if (!passwordFor(data).equals(code)) {
-			rejectUnlock(player, "message.thefourthfrequency.archive.wrong_code");
-			return ArchivePasswordResultPayload.WRONG;
-		}
-
-		CompoundTag narrativeBeforeUnlock = data.narrativeState();
-		BlockPos entrance = narrativeBeforeUnlock.contains(RIFT_ENTRANCE)
-				? BlockPos.of(narrativeBeforeUnlock.getLongOr(RIFT_ENTRANCE, 0L))
-				: lock.get().offset(0, 0, 7);
-		int availableDepth = entrance.getY() - player.level().getServer().overworld().getMinY() - 2;
-		int depth = narrativeBeforeUnlock.contains(RIFT_DEPTH)
-				? Math.clamp(narrativeBeforeUnlock.getIntOr(RIFT_DEPTH, 2), 2, 10)
-				: Math.clamp(availableDepth, 2, 10);
-		BlockPos core = RiftLayout.corePosition(entrance, depth);
-		boolean migrateIncompleteRift = !narrativeBeforeUnlock.contains(RIFT_CORE)
-				|| !narrativeBeforeUnlock.contains(RIFT_DEPTH);
-		data.updateNarrativeState(tag -> {
-			tag.putBoolean(ARCHIVE_UNLOCKED, true);
-			tag.putLong(RIFT_ENTRANCE, entrance.asLong());
-			tag.putLong(RIFT_CORE, core.asLong());
-			tag.putInt(RIFT_DEPTH, depth);
-			if (!tag.contains(RIFT_CURSOR) || migrateIncompleteRift) {
-				tag.putInt(RIFT_CURSOR, 0);
-				tag.putBoolean(RIFT_COMPLETE, false);
-			}
-		});
 		synchronizeArchiveAccess(player, data);
-		TerminalLifecycleService.ensureCarried(player, false);
 		player.displayClientMessage(Component.translatable("message.thefourthfrequency.archive.unlocked"), true);
-		return ArchivePasswordResultPayload.SUCCESS;
+		return true;
 	}
 
-	public static String passwordFor(FrequencyWorldData data) {
+	private static String legacyFacilityCode(FrequencyWorldData data) {
 		int hash = data.worldId().hashCode();
-		StringBuilder password = new StringBuilder(4);
+		StringBuilder layoutSignature = new StringBuilder(4);
 		for (int index = 0; index < 4; index++) {
-			password.append((hash >>> (index * 2)) & 3);
+			layoutSignature.append((hash >>> (index * 2)) & 3);
 		}
-		return password.toString();
+		return layoutSignature.toString();
 	}
 
 	public static List<FacilityDefinition> definitions() {
@@ -350,17 +306,23 @@ public final class FacilityService {
 	}
 
 	private static void synchronizeArchiveAccess(ServerPlayer player, FrequencyWorldData data) {
-		if (data.terminalRecord(player.getUUID()).isEmpty()) {
+		CompoundTag terminal = data.terminalRecord(player.getUUID()).orElse(null);
+		if (terminal == null) {
 			return;
 		}
 		CompoundTag narrative = data.narrativeState();
 		if (!narrative.getBooleanOr(ARCHIVE_UNLOCKED, false) || !narrative.contains(RIFT_CORE)) {
 			return;
 		}
+		boolean grandfathered = terminal.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false)
+				|| TerminalFileState.unlocked(terminal, HiddenFilePolicy.COMPLETE_FILE_ID);
+		if (!grandfathered
+				&& (!HiddenFilePolicy.allDiscovered(terminal) || !HiddenFilePolicy.allRead(terminal))) {
+			return;
+		}
 		BlockPos core = BlockPos.of(narrative.getLongOr(RIFT_CORE, 0L));
 		WitnessArchive archive = WitnessArchive.get();
-		boolean firstUnlock = !data.terminalRecord(player.getUUID()).orElseThrow()
-				.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false);
+		boolean firstUnlock = !terminal.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false);
 		long now = player.level().getGameTime();
 		long dayTime = player.level().getDayTime();
 		data.updateTerminalRecord(player.getUUID(), record -> {
@@ -371,9 +333,12 @@ public final class FacilityService {
 			record.putLong(TerminalData.RIFT_POSITION, core.asLong());
 			record.putString(TerminalData.RIFT_DIMENSION, "minecraft:overworld");
 			record.putInt(TerminalData.PLOT_STAGE, Math.max(4, record.getIntOr(TerminalData.PLOT_STAGE, 1)));
-			TerminalFileState.discover(record, "encrypted_witness_file", now, dayTime, true);
+			TerminalFileState.discover(record, HiddenFilePolicy.COMPLETE_FILE_ID, now, dayTime, true);
 		});
-		if (firstUnlock) TerminalSignalService.record(player, SignalBand.UNKNOWN, "witness_file_unlocked", 0, 2, true);
+		if (firstUnlock) {
+			TerminalSignalService.record(player, SignalBand.UNKNOWN, "witness_file_unlocked", 0, 2, true);
+			TerminalLifecycleService.ensureCarried(player, false);
+		}
 	}
 
 	private static void buildRift(ServerLevel level, FrequencyWorldData data) {
@@ -419,18 +384,6 @@ public final class FacilityService {
 		return true;
 	}
 
-	private static boolean rejectUnlock(ServerPlayer player, String key) {
-		player.displayClientMessage(Component.translatable(key), true);
-		return false;
-	}
-
-	private static boolean hasAllEvidence(String evidence) {
-		return evidence.contains("surface_shelter=")
-				&& evidence.contains("abandoned_warehouse=")
-				&& evidence.contains("underground_mine_station=")
-				&& evidence.contains("field_observation=");
-	}
-
 	private static String appendEntry(String entries, String value) {
 		for (String entry : entries.split(";")) {
 			if (entry.equals(value)) {
@@ -441,7 +394,7 @@ public final class FacilityService {
 	}
 
 	private static int clueDigit(FrequencyWorldData data, int clueIndex) {
-		return clueIndex < 0 ? 0 : passwordFor(data).charAt(clueIndex) - '0';
+		return clueIndex < 0 ? 0 : legacyFacilityCode(data).charAt(clueIndex) - '0';
 	}
 
 	private static String direction(int digit) {

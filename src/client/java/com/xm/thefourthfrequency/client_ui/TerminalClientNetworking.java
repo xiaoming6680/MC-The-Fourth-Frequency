@@ -4,7 +4,6 @@ import com.xm.thefourthfrequency.networking.TerminalClosedPayload;
 import com.xm.thefourthfrequency.networking.TerminalNavigationPayload;
 import com.xm.thefourthfrequency.networking.TerminalSnapshotPayload;
 import com.xm.thefourthfrequency.networking.TerminalToolSnapshotPayload;
-import com.xm.thefourthfrequency.networking.ArchivePasswordResultPayload;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
 
@@ -30,12 +29,6 @@ public final class TerminalClientNetworking {
 		ClientPlayNetworking.registerGlobalReceiver(TerminalClosedPayload.TYPE, (payload, context) ->
 				context.client().execute(() -> {
 					if (context.client().screen instanceof TerminalScreen terminal) terminal.closeFromServer();
-				}));
-		ClientPlayNetworking.registerGlobalReceiver(ArchivePasswordResultPayload.TYPE, (payload, context) ->
-				context.client().execute(() -> {
-					if (context.client().screen instanceof TerminalScreen terminal) {
-						terminal.acceptPasswordResult(payload.result());
-					}
 				}));
 	}
 

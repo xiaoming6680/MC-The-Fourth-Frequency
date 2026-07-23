@@ -1,6 +1,7 @@
 package com.xm.thefourthfrequency.client_ui;
 
 import com.xm.thefourthfrequency.narrative.WitnessArchive;
+import com.xm.thefourthfrequency.narrative.HiddenFilePolicy;
 import com.xm.thefourthfrequency.networking.TerminalNavigationPayload;
 import com.xm.thefourthfrequency.networking.TerminalSnapshotPayload;
 import com.xm.thefourthfrequency.networking.TerminalLogEntryPayload;
@@ -11,14 +12,13 @@ import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
 import com.xm.thefourthfrequency.terminal.TerminalNavigationMath;
 import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
 import net.minecraft.network.chat.Component;
+import net.minecraft.ChatFormatting;
 
 import java.util.ArrayList;
 import java.util.List;
 
 public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 	private static final String[] TARGETS = {"unresolved", "iron", "redstone", "diamond", "fragment"};
-	private static final List<String> FRAGMENT_FILES = List.of("surface_shelter_record", "field_observation_record",
-			"underground_mine_record", "abandoned_warehouse_record");
 	private static final String[] FACILITIES = {"surface_shelter", "abandoned_warehouse",
 			"underground_mine_station", "field_observation"};
 	private static final String[] ENDINGS = {"unresolved", "active", "undiscovered_truth", "prevention_failed", "prevention_succeeded"};
@@ -81,14 +81,22 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 	}
 	public List<TerminalFilePayload> files() { return payload.files(); }
 	public List<TerminalFilePayload> directoryFiles() {
-		return payload.files().stream().filter(file -> !FRAGMENT_FILES.contains(file.id())).toList();
+		return payload.files();
 	}
 	public TerminalFilePayload fragmentFile(int index) {
-		if (index < 0 || index >= FRAGMENT_FILES.size()) return null;
-		String id = FRAGMENT_FILES.get(index);
+		if (index < 0 || index >= HiddenFilePolicy.FILE_COUNT) return null;
+		String id = HiddenFilePolicy.fileId(index);
 		return payload.files().stream().filter(file -> file.id().equals(id)).findFirst().orElse(null);
 	}
 	public boolean fragmentReceived(int index) { return fragmentFile(index) != null; }
+	public int discoveredHiddenFileCount() {
+		return (int) payload.files().stream().filter(file -> HiddenFilePolicy.isHiddenFile(file.id())).count();
+	}
+	public int readHiddenFileCount() {
+		return (int) payload.files().stream()
+				.filter(file -> HiddenFilePolicy.isHiddenFile(file.id()) && file.read()).count();
+	}
+	public int hiddenFileReadPercent() { return readHiddenFileCount() * 100 / HiddenFilePolicy.FILE_COUNT; }
 	public int evidence(int index) {
 		return switch (index) {
 			case 0 -> payload.shelterEvidence();
@@ -196,6 +204,21 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 	}
 
 	public Component fileTitle(TerminalFilePayload file) {
+		if (HiddenFilePolicy.isHiddenFile(file.id())) {
+			return Component.translatable("terminal.thefourthfrequency.file.damaged.title")
+					.withStyle(ChatFormatting.DARK_GRAY, ChatFormatting.ITALIC);
+		}
+		if (file.id().equals(HiddenFilePolicy.COMPLETE_FILE_ID)) {
+			int stage = discoveredHiddenFileCount();
+			var title = Component.translatable(
+					"terminal.thefourthfrequency.file.encrypted_witness_file.revealed." + stage);
+			if (stage < HiddenFilePolicy.FILE_COUNT) {
+				title.append(Component.translatable(
+						"terminal.thefourthfrequency.file.encrypted_witness_file.masked." + stage)
+						.withStyle(ChatFormatting.OBFUSCATED));
+			}
+			return title;
+		}
 		return Component.translatable(NarrativeFileCatalog.require(file.id()).titleKey());
 	}
 
@@ -205,6 +228,7 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 		}
 		if (file.id().equals("maintenance_handoff")) return primaryCache();
 		if (file.id().equals("recovered_fragment")) return secondCache();
+		if (HiddenFilePolicy.isHiddenFile(file.id())) return damagedFileContent(file.id());
 		if (file.id().equals("encrypted_witness_file")) return file.unlocked()
 				? archive() : List.of(Component.translatable("terminal.thefourthfrequency.file.locked"));
 		if (file.id().equals("permanent_aftermath_record")) {
@@ -214,6 +238,20 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 		}
 		List<Component> lines = new ArrayList<>();
 		for (String key : NarrativeFileCatalog.require(file.id()).lineKeys()) lines.add(Component.translatable(key));
+		return List.copyOf(lines);
+	}
+
+	private static List<Component> damagedFileContent(String fileId) {
+		List<Component> lines = new ArrayList<>();
+		for (int index = 1; index <= 3; index++) {
+			Component line = Component.literal("xxxxxxxxxxxxxxxxxxxx ")
+					.withStyle(ChatFormatting.OBFUSCATED)
+					.append(Component.translatable("terminal.thefourthfrequency.file." + fileId
+							+ ".readable." + index).withStyle(ChatFormatting.GRAY))
+					.append(Component.literal(" xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+							.withStyle(ChatFormatting.OBFUSCATED));
+			lines.add(line);
+		}
 		return List.copyOf(lines);
 	}
 

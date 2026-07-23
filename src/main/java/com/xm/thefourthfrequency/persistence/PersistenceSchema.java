@@ -3,7 +3,7 @@ package com.xm.thefourthfrequency.persistence;
 import java.util.Map;
 
 public final class PersistenceSchema {
-	public static final int CURRENT_VERSION = 6;
+	public static final int CURRENT_VERSION = 7;
 
 	private PersistenceSchema() {
 	}
@@ -32,6 +32,10 @@ public final class PersistenceSchema {
 				},
 				5, document -> {
 					document.addProperty("schemaVersion", 6);
+					return document;
+				},
+				6, document -> {
+					document.addProperty("schemaVersion", 7);
 					return document;
 				}));
 	}

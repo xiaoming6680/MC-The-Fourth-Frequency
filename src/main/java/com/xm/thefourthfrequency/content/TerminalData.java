@@ -11,6 +11,7 @@ import net.minecraft.world.item.component.CustomModelData;
 import com.xm.thefourthfrequency.terminal.TerminalControlPolicy;
 import com.xm.thefourthfrequency.terminal.SignalBand;
 import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
+import com.xm.thefourthfrequency.narrative.HiddenFilePolicy;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
 
 import java.util.List;
@@ -283,6 +284,8 @@ public final class TerminalData {
 		tag.putInt(SIGNAL_EVENT_SEQUENCE, 0);
 		tag.putInt(UNREAD_SIGNAL_COUNT, 0);
 		tag.put(FILE_STATES, new ListTag());
+		TerminalFileState.discover(tag, HiddenFilePolicy.COMPLETE_FILE_ID,
+				player.level().getGameTime(), player.level().getDayTime(), false);
 		tag.putLong(ONLINE_SURVIVAL_TICKS, 0L);
 		tag.putInt(LAST_SIGNAL_WEATHER, player.level().isThundering() ? 2 : player.level().isRaining() ? 1 : 0);
 		tag.putString(LAST_SIGNAL_DIMENSION, player.level().dimension().identifier().toString());
@@ -372,14 +375,12 @@ public final class TerminalData {
 		if (!record.contains(LAST_SIGNAL_DIMENSION)) record.putString(LAST_SIGNAL_DIMENSION,
 				record.getStringOr(LAST_AMBIENT_DIMENSION, ""));
 		if (legacyFiles) migrateLegacyFiles(record);
-		boolean hasSharedFragment = TerminalFileState.discovered(record, "surface_shelter_record")
-				|| TerminalFileState.discovered(record, "field_observation_record")
-				|| TerminalFileState.discovered(record, "underground_mine_record")
-				|| TerminalFileState.discovered(record, "abandoned_warehouse_record");
-		if (!record.getBooleanOr(LOCAL_FILE_UNLOCKED, false) && !hasSharedFragment
-				&& !TerminalSignalLog.containsType(record, "facility_transport_node")) {
-			TerminalFileState.remove(record, "encrypted_witness_file");
-		}
+		boolean grandfatherUnlocked = sourceSchema < 7 && (record.getBooleanOr(LOCAL_FILE_UNLOCKED, false)
+				|| TerminalFileState.unlocked(record, HiddenFilePolicy.COMPLETE_FILE_ID));
+		long issued = Math.max(0L, record.getLongOr(ISSUED_GAME_TIME, 0L));
+		TerminalFileState.discover(record, HiddenFilePolicy.COMPLETE_FILE_ID, issued,
+				Math.floorMod(issued, 24_000L), grandfatherUnlocked);
+		TerminalFileState.migrateReadState(record, grandfatherUnlocked);
 		record.putInt(SCHEMA_VERSION, RuntimeServices.PERSISTENCE_SCHEMA_VERSION);
 		return record;
 	}

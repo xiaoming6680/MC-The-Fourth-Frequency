@@ -10,6 +10,8 @@ import com.xm.thefourthfrequency.networking.TerminalSnapshotPayload;
 import com.xm.thefourthfrequency.networking.TerminalToolSnapshotPayload;
 import com.xm.thefourthfrequency.networking.TerminalLogEntryPayload;
 import com.xm.thefourthfrequency.networking.TerminalFilePayload;
+import com.xm.thefourthfrequency.facility.FacilityService;
+import com.xm.thefourthfrequency.narrative.HiddenFilePolicy;
 import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
@@ -125,6 +127,9 @@ public final class TerminalRuntimeService {
 			case TerminalControlPayload.MARK_RECORDS_READ -> {
 				if (value != 0 || !markRecordsRead(player)) return;
 			}
+			case TerminalControlPayload.READ_HIDDEN_FILE -> {
+				if (!markHiddenFileRead(player, value)) return;
+			}
 			case TerminalControlPayload.CLOSE -> {
 				if (value != 0) return;
 				remember(player.getUUID(), view);
@@ -155,6 +160,26 @@ public final class TerminalRuntimeService {
 		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
 		if (record == null) return false;
 		data.updateTerminalRecord(player.getUUID(), TerminalSignalLog::markAllRead);
+		synchronizeProjection(player, data);
+		return true;
+	}
+
+	private static boolean markHiddenFileRead(ServerPlayer player, int index) {
+		String id = HiddenFilePolicy.fileId(index);
+		if (id.isEmpty()) return false;
+		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
+		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
+		if (record == null || !TerminalFileState.discovered(record, id)
+				|| !TerminalFileState.unlocked(record, id)) return false;
+		long now = player.level().getGameTime();
+		long dayTime = player.level().getDayTime();
+		boolean[] completed = {false};
+		data.updateTerminalRecord(player.getUUID(), tag -> {
+			TerminalFileState.markRead(tag, id, now, dayTime);
+			completed[0] = HiddenFilePolicy.allDiscovered(tag) && HiddenFilePolicy.allRead(tag)
+					&& !TerminalFileState.unlocked(tag, HiddenFilePolicy.COMPLETE_FILE_ID);
+		});
+		if (completed[0]) FacilityService.unlockArchiveFromHiddenFiles(player);
 		synchronizeProjection(player, data);
 		return true;
 	}
@@ -269,6 +294,7 @@ public final class TerminalRuntimeService {
 			return new TerminalFilePayload(definition.id(), true, file.unlocked(),
 					file.discoveredGameTime(), file.discoveredDayTime(),
 					file.unlockedGameTime(), file.unlockedDayTime(),
+					file.read(), file.readGameTime(), file.readDayTime(),
 					definition.id().equals("permanent_aftermath_record")
 							? ending(tag.getStringOr(TerminalData.ENDING_OUTCOME, "unresolved")) : 0);
 		}).toList();

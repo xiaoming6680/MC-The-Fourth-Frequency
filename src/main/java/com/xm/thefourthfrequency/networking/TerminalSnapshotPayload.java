@@ -48,7 +48,7 @@ public record TerminalSnapshotPayload(
 		int objectiveProgress,
 		int objectiveTarget
 ) implements CustomPacketPayload {
-	public static final int CURRENT_PROTOCOL_VERSION = 5;
+	public static final int CURRENT_PROTOCOL_VERSION = 6;
 	public static final Type<TerminalSnapshotPayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(
 			TheFourthFrequency.MOD_ID, "terminal_snapshot"));
 	public static final StreamCodec<RegistryFriendlyByteBuf, TerminalSnapshotPayload> CODEC = StreamCodec.of(

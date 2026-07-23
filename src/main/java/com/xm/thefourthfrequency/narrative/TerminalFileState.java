@@ -34,6 +34,9 @@ public final class TerminalFileState {
 		state.putLong("discovered_day_time", Math.max(0L, dayTime));
 		state.putLong("unlocked_game_time", unlocked ? Math.max(0L, gameTime) : 0L);
 		state.putLong("unlocked_day_time", unlocked ? Math.max(0L, dayTime) : 0L);
+		state.putBoolean("read", false);
+		state.putLong("read_game_time", 0L);
+		state.putLong("read_day_time", 0L);
 		states.add(state);
 		record.put(TerminalData.FILE_STATES, states);
 		return true;
@@ -49,7 +52,9 @@ public final class TerminalFileState {
 				NarrativeFileCatalog.require(id);
 				result.add(new State(id, state.getBooleanOr("unlocked", false),
 						state.getLongOr("discovered_game_time", 0L), state.getLongOr("discovered_day_time", 0L),
-						state.getLongOr("unlocked_game_time", 0L), state.getLongOr("unlocked_day_time", 0L)));
+						state.getLongOr("unlocked_game_time", 0L), state.getLongOr("unlocked_day_time", 0L),
+						state.getBooleanOr("read", false), state.getLongOr("read_game_time", 0L),
+						state.getLongOr("read_day_time", 0L)));
 			} catch (IllegalArgumentException ignored) { }
 		}
 		result.sort(Comparator.comparingInt(state -> order(state.id())));
@@ -62,6 +67,55 @@ public final class TerminalFileState {
 
 	public static boolean unlocked(CompoundTag record, String id) {
 		return states(record).stream().anyMatch(state -> state.id().equals(id) && state.unlocked());
+	}
+
+	public static boolean read(CompoundTag record, String id) {
+		return states(record).stream().anyMatch(state -> state.id().equals(id) && state.read());
+	}
+
+	public static boolean markRead(CompoundTag record, String id, long gameTime, long dayTime) {
+		NarrativeFileCatalog.require(id);
+		ListTag states = record.getListOrEmpty(TerminalData.FILE_STATES).copy();
+		for (int index = 0; index < states.size(); index++) {
+			CompoundTag state = states.getCompoundOrEmpty(index);
+			if (!id.equals(state.getStringOr("id", ""))) continue;
+			if (!state.getBooleanOr("unlocked", false) || state.getBooleanOr("read", false)) return false;
+			state.putBoolean("read", true);
+			state.putLong("read_game_time", Math.max(0L, gameTime));
+			state.putLong("read_day_time", Math.max(0L, dayTime));
+			states.set(index, state);
+			record.put(TerminalData.FILE_STATES, states);
+			return true;
+		}
+		return false;
+	}
+
+	public static void migrateReadState(CompoundTag record, boolean grandfatherHiddenReads) {
+		ListTag states = record.getListOrEmpty(TerminalData.FILE_STATES).copy();
+		boolean changed = false;
+		for (int index = 0; index < states.size(); index++) {
+			CompoundTag state = states.getCompoundOrEmpty(index);
+			String id = state.getStringOr("id", "");
+			boolean grandfatherThisFile = grandfatherHiddenReads && HiddenFilePolicy.isHiddenFile(id);
+			if (!state.contains("read") || grandfatherThisFile && !state.getBooleanOr("read", false)) {
+				state.putBoolean("read", grandfatherThisFile);
+				changed = true;
+			}
+			if (!state.contains("read_game_time")
+					|| grandfatherThisFile && state.getLongOr("read_game_time", 0L) == 0L) {
+				state.putLong("read_game_time", state.getBooleanOr("read", false)
+						? state.getLongOr("unlocked_game_time", 0L) : 0L);
+				changed = true;
+			}
+			if (!state.contains("read_day_time")
+					|| grandfatherThisFile && state.getLongOr("read_day_time", 0L) == 0L) {
+				state.putLong("read_day_time", state.getBooleanOr("read", false)
+						? state.getLongOr("unlocked_day_time", 0L) : 0L);
+				changed = true;
+			}
+			states.set(index, state);
+		}
+		if (changed) record.put(TerminalData.FILE_STATES, states);
 	}
 
 	public static boolean setUnlocked(CompoundTag record, String id, boolean unlocked, long gameTime, long dayTime) {
@@ -101,5 +155,5 @@ public final class TerminalFileState {
 	}
 
 	public record State(String id, boolean unlocked, long discoveredGameTime, long discoveredDayTime,
-			long unlockedGameTime, long unlockedDayTime) { }
+			long unlockedGameTime, long unlockedDayTime, boolean read, long readGameTime, long readDayTime) { }
 }

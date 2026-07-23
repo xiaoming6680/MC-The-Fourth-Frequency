@@ -148,7 +148,7 @@ final class ResourceContractTest {
 		JsonObject sounds = JsonParser.parseString(Files.readString(ASSETS.resolve("sounds.json"),
 				StandardCharsets.UTF_8)).getAsJsonObject();
 		for (String event : new String[]{"terminal_click", "terminal_tune", "terminal_lock",
-				"terminal_password", "terminal_anomaly"}) {
+				"terminal_anomaly"}) {
 			assertTrue(sounds.has(event), event);
 		}
 		for (Path path : Files.walk(ASSETS.resolve("sounds/device/terminal")).filter(Files::isRegularFile).toList()) {
@@ -156,7 +156,7 @@ final class ResourceContractTest {
 			assertTrue(header.length > 4 && header[0] == 'O' && header[1] == 'g' && header[2] == 'g' && header[3] == 'S', path.toString());
 		}
 		for (String event : new String[]{"terminal_click", "terminal_tune", "terminal_lock",
-				"terminal_fault", "terminal_password", "terminal_anomaly"}) {
+				"terminal_fault", "terminal_anomaly"}) {
 			for (var sound : sounds.getAsJsonObject(event).getAsJsonArray("sounds")) {
 				String name = sound.isJsonPrimitive() ? sound.getAsString()
 						: sound.getAsJsonObject().get("name").getAsString();
@@ -183,8 +183,20 @@ final class ResourceContractTest {
 		assertFalse(zh.toString().contains("缓存"), "The player-facing FILES system must not retain the old cache wording");
 		assertEquals("接收到新文件：%s",
 				zh.get("message.thefourthfrequency.file.discovered").getAsString());
-		assertEquals("接收到来自【%s】共享的文件：《前人留下的文件 / 碎片%s》",
+		assertEquals("接收到来自【%s】共享的一份破损文件",
 				zh.get("message.thefourthfrequency.fragment.received").getAsString());
+		assertEquals("破损的文件",
+				zh.get("terminal.thefourthfrequency.file.damaged.title").getAsString());
+		assertFalse(zh.toString().contains("碎片1"));
+		assertEquals(List.of("", "加", "加密", "加密日", "加密日记"),
+				java.util.stream.IntStream.rangeClosed(0, 4)
+						.mapToObj(stage -> zh.get("terminal.thefourthfrequency.file.encrypted_witness_file.revealed."
+								+ stage).getAsString()).toList());
+		assertEquals(List.of("", "Encrypted ", "Encrypted Witness ",
+						"Encrypted Witness Journal ", "Encrypted Witness Journal File"),
+				java.util.stream.IntStream.rangeClosed(0, 4)
+						.mapToObj(stage -> en.get("terminal.thefourthfrequency.file.encrypted_witness_file.revealed."
+								+ stage).getAsString()).toList());
 		assertEquals("近场接收器",
 				zh.get("terminal.thefourthfrequency.receiver.label").getAsString());
 		assertEquals("待机",
@@ -328,11 +340,11 @@ final class ResourceContractTest {
 				"src/main/java/com/xm/thefourthfrequency/networking/TerminalControlPayload.java"), StandardCharsets.UTF_8);
 		String runtime = Files.readString(Path.of(
 				"src/main/java/com/xm/thefourthfrequency/terminal/TerminalRuntimeService.java"), StandardCharsets.UTF_8);
-		assertTrue(snapshot.contains("CURRENT_PROTOCOL_VERSION = 5"));
+		assertTrue(snapshot.contains("CURRENT_PROTOCOL_VERSION = 6"));
 		assertTrue(navigation.contains("CURRENT_PROTOCOL_VERSION = 5"));
 		assertTrue(toolSnapshot.contains("CURRENT_PROTOCOL_VERSION = 3"));
 		for (String action : List.of("SELECT_TOOL", "START_GUIDANCE", "STOP_GUIDANCE", "SELECT_RESOURCE",
-				"REQUEST_RESCAN", "SET_HOME", "MARK_RECORDS_READ", "SELECT_STRUCTURE_TARGET",
+				"REQUEST_RESCAN", "SET_HOME", "MARK_RECORDS_READ", "READ_HIDDEN_FILE", "SELECT_STRUCTURE_TARGET",
 				"SELECT_NEAREST_UNSTABLE")) {
 			assertTrue(control.contains(action));
 			assertTrue(runtime.contains("TerminalControlPayload." + action));
@@ -641,9 +653,11 @@ final class ResourceContractTest {
 				"src/main/java/com/xm/thefourthfrequency/facility/FacilityService.java"),
 				StandardCharsets.UTF_8);
 		String updateBody = facilities.substring(facilities.indexOf("public static void updateServer"),
-				facilities.indexOf("public static void unlockArchiveFromFragments"));
+				facilities.indexOf("public static boolean unlockArchiveFromHiddenFiles"));
 		assertFalse(updateBody.contains("ensureAllocated("),
 				"New worlds must not allocate the five legacy facilities");
+		assertFalse(fragmentInvestigation.contains("unlockArchiveFromFragments"),
+				"Discovering all hidden files must not unlock the complete diary before they are read");
 	}
 
 	@Test

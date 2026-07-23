@@ -27,7 +27,6 @@ import com.xm.thefourthfrequency.world.FragmentInvestigationService;
 import com.xm.thefourthfrequency.world.WatcherService;
 import com.xm.thefourthfrequency.world.WorldDecayService;
 import com.xm.thefourthfrequency.facility.FacilityService;
-import com.xm.thefourthfrequency.networking.M4Networking;
 import com.xm.thefourthfrequency.networking.M5Networking;
 import com.xm.thefourthfrequency.networking.M6Networking;
 import com.xm.thefourthfrequency.networking.M8Networking;
@@ -57,7 +56,6 @@ public final class TheFourthFrequency implements ModInitializer {
 		WorldInterfaceBlockEntities.initialize();
 		ModItems.initialize();
 		ModEntities.initialize();
-		M4Networking.initialize();
 		M5Networking.initialize();
 		M6Networking.initialize();
 		M8Networking.initialize();

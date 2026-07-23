@@ -3,8 +3,10 @@ package com.xm.thefourthfrequency.test;
 import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.facility.FacilityService;
+import com.xm.thefourthfrequency.narrative.HiddenFilePolicy;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
 import com.xm.thefourthfrequency.narrative.WitnessArchive;
+import com.xm.thefourthfrequency.networking.TerminalControlPayload;
 import com.xm.thefourthfrequency.terminal.SignalBand;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
 import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
@@ -23,6 +25,7 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
@@ -66,6 +69,12 @@ public final class M4GameTests implements CustomTestMethodInvoker {
 		ServerPlayer early = helper.makeMockServerPlayerInLevel();
 		TerminalSignalService.updatePlayerForTesting(early);
 		var earlyRecord = data.terminalRecord(early.getUUID()).orElseThrow();
+		early.setItemInHand(InteractionHand.MAIN_HAND, TerminalData.stackFromRecord(earlyRecord));
+		TerminalRuntimeService.open(early, 0);
+		TerminalRuntimeService.control(early, TerminalControlPayload.READ_HIDDEN_FILE, 0);
+		helper.assertValueEqual(HiddenFilePolicy.readCount(data.terminalRecord(early.getUUID()).orElseThrow()), 0,
+				"A client cannot forge a read for a hidden file that has not been discovered");
+		TerminalRuntimeService.control(early, TerminalControlPayload.CLOSE, 0);
 		for (int fragment = 0; fragment < 4; fragment++) {
 			SignalBand expectedBand = FragmentInvestigationService.bandForFragment(fragment);
 			String markerType = "fragment_marker_" + (fragment + 1);
@@ -130,13 +139,14 @@ public final class M4GameTests implements CustomTestMethodInvoker {
 
 		for (ServerPlayer player : List.of(discoverer, teammate, later)) {
 			var record = data.terminalRecord(player.getUUID()).orElseThrow();
-			for (String file : List.of("surface_shelter_record", "field_observation_record",
-					"underground_mine_record", "abandoned_warehouse_record"))
-				helper.assertTrue(TerminalFileState.discovered(record, file), "Every fragment is world-shared");
-			helper.assertTrue(TerminalFileState.unlocked(record, "encrypted_witness_file"),
-					"The parent validates automatically after all four fragments");
-			helper.assertTrue(record.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false),
-					"Complete witness prose synchronizes to every terminal owner");
+			for (String file : HiddenFilePolicy.FILE_IDS)
+				helper.assertTrue(TerminalFileState.discovered(record, file), "Every hidden file is world-shared");
+			helper.assertFalse(TerminalFileState.unlocked(record, HiddenFilePolicy.COMPLETE_FILE_ID),
+					"Discovery alone must leave the complete diary locked");
+			helper.assertFalse(record.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false),
+					"Discovery alone must not synchronize complete witness prose");
+			helper.assertValueEqual(HiddenFilePolicy.readCount(record), 0,
+					"Shared discovery must not leak one player's read state to another");
 		}
 		var teammateRecord = data.terminalRecord(teammate.getUUID()).orElseThrow();
 		helper.assertTrue(TerminalSignalLog.containsType(teammateRecord, "fragment_received_1"),
@@ -144,10 +154,44 @@ public final class M4GameTests implements CustomTestMethodInvoker {
 		helper.assertFalse(TerminalSignalLog.containsType(teammateRecord, "fragment_action_1"),
 				"Discoverer's private behavior card is not shared");
 
+		readHiddenFiles(discoverer, data, helper, 3);
+		var atSeventyFive = data.terminalRecord(discoverer.getUUID()).orElseThrow();
+		helper.assertValueEqual(HiddenFilePolicy.readPercent(atSeventyFive), 75,
+				"Three personal reads produce exactly 75 percent");
+		helper.assertFalse(TerminalFileState.unlocked(atSeventyFive, HiddenFilePolicy.COMPLETE_FILE_ID),
+				"The full recovered title can coexist with a still-locked diary at 75 percent");
+
+		TerminalRuntimeService.control(discoverer, TerminalControlPayload.READ_HIDDEN_FILE, 3);
+		TerminalRuntimeService.control(discoverer, TerminalControlPayload.READ_HIDDEN_FILE, 3);
+		TerminalRuntimeService.control(discoverer, TerminalControlPayload.CLOSE, 0);
+		var discovererUnlocked = data.terminalRecord(discoverer.getUUID()).orElseThrow();
+		helper.assertValueEqual(HiddenFilePolicy.readPercent(discovererUnlocked), 100,
+				"The fourth read reaches 100 percent and duplicate opens stay idempotent");
+		helper.assertTrue(TerminalFileState.unlocked(discovererUnlocked, HiddenFilePolicy.COMPLETE_FILE_ID)
+				&& discovererUnlocked.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false),
+				"The first 4/4 reader unlocks only their complete diary");
 		var narrative = data.narrativeState();
 		helper.assertTrue(narrative.getBooleanOr("archive_unlocked", false)
 				&& narrative.contains("rift_entrance") && narrative.contains("rift_core"),
-				"Four fragments atomically allocate the retained Overworld fracture");
+				"The first 4/4 reader creates or reuses the one retained Overworld fracture");
+		long firstRiftCore = narrative.getLongOr("rift_core", 0L);
+
+		var teammateBeforeRead = data.terminalRecord(teammate.getUUID()).orElseThrow();
+		helper.assertValueEqual(HiddenFilePolicy.readCount(teammateBeforeRead), 0,
+				"A teammate retains independent unread state");
+		helper.assertFalse(TerminalFileState.unlocked(teammateBeforeRead, HiddenFilePolicy.COMPLETE_FILE_ID),
+				"A shared rift does not bypass the teammate's personal reading requirement");
+		readHiddenFiles(teammate, data, helper, 4);
+		TerminalRuntimeService.control(teammate, TerminalControlPayload.CLOSE, 0);
+		var teammateUnlocked = data.terminalRecord(teammate.getUUID()).orElseThrow();
+		helper.assertTrue(TerminalFileState.unlocked(teammateUnlocked, HiddenFilePolicy.COMPLETE_FILE_ID),
+				"The teammate unlocks only after personally reading all four files");
+		helper.assertValueEqual(data.narrativeState().getLongOr("rift_core", 0L), firstRiftCore,
+				"A later 4/4 reader must not allocate or move the shared rift");
+		helper.assertFalse(TerminalFileState.unlocked(data.terminalRecord(later.getUUID()).orElseThrow(),
+				HiddenFilePolicy.COMPLETE_FILE_ID),
+				"An unread later terminal remains locked after other players finish");
+
 		BlockPos rift = BlockPos.of(data.terminalRecord(discoverer.getUUID()).orElseThrow()
 				.getLongOr(TerminalData.RIFT_POSITION, 0L));
 		loadFixtureChunks(helper, rift);
@@ -170,6 +214,17 @@ public final class M4GameTests implements CustomTestMethodInvoker {
 	private static FragmentInvestigationService.Candidate candidate(int fragment,
 			FragmentInvestigationService.Group group, BlockPos position) {
 		return new FragmentInvestigationService.Candidate(fragment, group, position, "minecraft:overworld");
+	}
+
+	private static void readHiddenFiles(ServerPlayer player, FrequencyWorldData data, GameTestHelper helper, int count) {
+		ItemStack terminal = TerminalData.stackFromRecord(data.terminalRecord(player.getUUID()).orElseThrow());
+		player.setItemInHand(InteractionHand.MAIN_HAND, terminal);
+		TerminalRuntimeService.open(player, 0);
+		for (int index = 0; index < count; index++) {
+			TerminalRuntimeService.control(player, TerminalControlPayload.READ_HIDDEN_FILE, index);
+		}
+		helper.assertValueEqual(HiddenFilePolicy.readCount(data.terminalRecord(player.getUUID()).orElseThrow()), count,
+				"Each acquired hidden file contributes exactly one personal read");
 	}
 
 	private static void teleport(ServerPlayer player, BlockPos position) {

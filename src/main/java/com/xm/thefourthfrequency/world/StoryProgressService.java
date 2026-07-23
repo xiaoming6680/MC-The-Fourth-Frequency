@@ -2,6 +2,8 @@ package com.xm.thefourthfrequency.world;
 
 import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
 import com.xm.thefourthfrequency.content.TerminalData;
+import com.xm.thefourthfrequency.ending.EndingOutcome;
+import com.xm.thefourthfrequency.ending.EndingState;
 import com.xm.thefourthfrequency.state.PlayerPatternState;
 import com.xm.thefourthfrequency.state.StoryState;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
@@ -79,6 +81,14 @@ public final class StoryProgressService {
 	}
 
 	public static Objective objective(CompoundTag tag, FrequencyWorldData data) {
+		CompoundTag ending = EndingState.get(data);
+		if (EndingState.started(data) && EndingState.outcome(data) == EndingOutcome.ACTIVE
+				&& ending.getBooleanOr("truth_read_at_start", false)) {
+			int anchors = Math.max(1, ending.getIntOr("anchors_initial", 1));
+			int remaining = Math.clamp(tag.getIntOr(TerminalData.GROUNDING_ANCHORS_REMAINING, anchors),
+					0, anchors);
+			return new Objective("protect_anchors", remaining, anchors);
+		}
 		int milestones = tag.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0);
 		int wood = Math.clamp(tag.getIntOr(TerminalData.WOOD_MINED_COUNT, 0), 0,
 				SurvivalProgressService.REQUIRED_WOOD);

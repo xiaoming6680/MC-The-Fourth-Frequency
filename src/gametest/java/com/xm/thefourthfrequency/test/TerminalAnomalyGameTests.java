@@ -53,8 +53,12 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
 		CompoundTag initial = data.terminalRecord(player.getUUID()).orElseThrow();
 		var initialFiles = TerminalRuntimeService.visibleFiles(initial);
-		helper.assertValueEqual(initialFiles.size(), 0,
-				"A new terminal waits for a real stage or facility before receiving files");
+		helper.assertValueEqual(initialFiles.size(), 1,
+				"A new terminal starts with exactly one locked complete diary");
+		helper.assertValueEqual(initialFiles.getFirst().id(), "encrypted_witness_file",
+				"The complete diary is the initial stable FILES entry");
+		helper.assertFalse(initialFiles.getFirst().unlocked(),
+				"The initial complete diary remains locked");
 
 		TerminalSignalService.updatePlayerForTesting(player);
 		helper.assertFalse(TerminalRuntimeService.visibleFiles(data.terminalRecord(player.getUUID()).orElseThrow())
@@ -208,6 +212,8 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 		legacy.put(TerminalData.ANOMALY_LOGS, logs);
 		legacy.putInt(TerminalData.ANOMALY_LOG_SEQUENCE, 7);
 		legacy.putInt(TerminalData.UNREAD_ANOMALY_COUNT, 1);
+		CompoundTag legacyUnlocked = legacy.copy();
+		legacyUnlocked.putBoolean(TerminalData.LOCAL_FILE_UNLOCKED, true);
 
 		CompoundTag migrated = TerminalData.migrateRecord(legacy);
 		helper.assertValueEqual(migrated.getIntOr(TerminalData.SCHEMA_VERSION, 0),
@@ -223,11 +229,21 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 		helper.assertTrue(entries.getFirst().unread(), "Unread state retained");
 		var files = TerminalFileState.states(migrated);
 		helper.assertValueEqual(files.size(), 7,
-				"Legacy evidence migrates into four fragments and their locked parent without losing old files");
+				"Legacy evidence migrates into four damaged files and their locked diary without losing old files");
 		helper.assertTrue(TerminalFileState.discovered(migrated, "encrypted_witness_file"),
-				"The fragment parent is retained after the one-way legacy migration");
+				"The complete diary is retained after the one-way legacy migration");
 		helper.assertFalse(TerminalFileState.unlocked(migrated, "encrypted_witness_file"),
 				"Legacy evidence alone does not silently unlock the complete file");
+		helper.assertFalse(com.xm.thefourthfrequency.narrative.HiddenFilePolicy.FILE_IDS.stream()
+						.anyMatch(id -> TerminalFileState.read(migrated, id)),
+				"Old discovered files remain unread until this terminal owner opens them again");
+
+		CompoundTag migratedUnlocked = TerminalData.migrateRecord(legacyUnlocked);
+		helper.assertTrue(TerminalFileState.unlocked(migratedUnlocked, "encrypted_witness_file"),
+				"An old unlocked complete diary must remain unlocked after v7 migration");
+		helper.assertTrue(com.xm.thefourthfrequency.narrative.HiddenFilePolicy.FILE_IDS.stream()
+						.allMatch(id -> TerminalFileState.read(migratedUnlocked, id)),
+				"Grandfathered unlocked diaries retain completion without forcing four rereads");
 		helper.succeed();
 	}
 
@@ -369,7 +385,7 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 		legacy.putLong(TerminalData.RIFT_POSITION, BlockPos.asLong(12, 34, 56));
 		legacy.putString(TerminalData.ENDING_OUTCOME, "prevention_failed");
 		CompoundTag migrated = TerminalData.migrateRecord(legacy);
-		helper.assertValueEqual(migrated.getIntOr(TerminalData.SCHEMA_VERSION, 0), 6, "Terminal schema v6");
+		helper.assertValueEqual(migrated.getIntOr(TerminalData.SCHEMA_VERSION, 0), 7, "Terminal schema v7");
 		helper.assertValueEqual(migrated.getIntOr(TerminalData.ANOMALY_TIER, 0), 1,
 				"Bound legacy record starts at effective anomaly tier one");
 		helper.assertTrue(migrated.getBooleanOr(TerminalData.ANOMALY_LEGACY_RAMP, false),

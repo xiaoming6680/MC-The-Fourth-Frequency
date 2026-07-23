@@ -23,7 +23,6 @@ public final class ModSounds {
 	public static final SoundEvent TERMINAL_TUNE = register("terminal_tune");
 	public static final SoundEvent TERMINAL_LOCK = register("terminal_lock");
 	public static final SoundEvent TERMINAL_FAULT = register("terminal_fault");
-	public static final SoundEvent TERMINAL_PASSWORD = register("terminal_password");
 	public static final SoundEvent TERMINAL_ANOMALY = register("terminal_anomaly");
 	public static final SoundEvent WORLD_INTERFACE_ALTAR = register("world_interface_altar");
 	public static final SoundEvent WORLD_INTERFACE_TERMINAL = register("world_interface_terminal");
