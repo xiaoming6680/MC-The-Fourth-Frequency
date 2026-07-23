@@ -24,11 +24,13 @@ final class AlphaLoadTimelineTest {
 	}
 
 	@Test
-	void titleFallsInVisibleStepsAndEndsAtAlphaOnePointZero() {
+	void titleFallsInVisibleStepsAndEndsAtOnePointZeroWithoutEraLabels() {
 		assertEquals("1.21.11", AlphaLoadTimeline.versionAt(0, "1.21.11"));
 		assertEquals(0, AlphaLoadTimeline.versionStage(AlphaLoadTimeline.VERSION_STEP_TICKS - 1));
 		assertEquals(1, AlphaLoadTimeline.versionStage(AlphaLoadTimeline.VERSION_STEP_TICKS));
-		assertEquals("Alpha 1.0.0", AlphaLoadTimeline.versionAt(
+		assertEquals("1.7.3", AlphaLoadTimeline.versionAt(
+				AlphaLoadTimeline.finalVersionStage() - 1, "1.21.11"));
+		assertEquals("1.0.0", AlphaLoadTimeline.versionAt(
 				AlphaLoadTimeline.finalVersionStage(), "1.21.11"));
 		assertEquals(AlphaLoadTimeline.finalVersionStage(), AlphaLoadTimeline.versionStage(10_000));
 	}

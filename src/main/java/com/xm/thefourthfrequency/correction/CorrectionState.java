@@ -17,7 +17,6 @@ public final class CorrectionState {
 	private static final String ORGAN_POS = "nascent_organ_pos";
 	private static final String ORGAN_DISMANTLED = "nascent_organ_dismantled";
 	private static final String ANOMALY_TRACES = "anomaly_traces";
-	private static final String TERMINAL_FACILITY_POS = "terminal_facility_pos";
 	private static final String DISMANTLE_COUNT = "dismantle_count";
 	private static final int MAX_ANOMALY_TRACES = 64;
 
@@ -113,16 +112,6 @@ public final class CorrectionState {
 
 	public static boolean organDismantled(FrequencyWorldData data) {
 		return get(data).getBooleanOr(ORGAN_DISMANTLED, false);
-	}
-
-	public static Optional<BlockPos> terminalFacilityPosition(FrequencyWorldData data) {
-		CompoundTag state = get(data);
-		return state.contains(TERMINAL_FACILITY_POS)
-				? Optional.of(BlockPos.of(state.getLongOr(TERMINAL_FACILITY_POS, 0L))) : Optional.empty();
-	}
-
-	public static void setTerminalFacilityPosition(FrequencyWorldData data, BlockPos position) {
-		update(data, state -> state.putLong(TERMINAL_FACILITY_POS, position.asLong()));
 	}
 
 	public static void recordDismantle(FrequencyWorldData data, CorrectionTarget.Kind kind, BlockPos position) {

@@ -373,10 +373,6 @@ public final class FirstRunNoticeScreen extends Screen {
 				grid.contentBottom(), withAlpha(GREEN, 44));
 		drawNoticeColumn(graphics, copy.right(), grid.rightColumnLeft(), grid.contentTop(),
 				grid.columnWidth(), copy.bodyScale(), AMBER);
-
-		drawLeftScaled(graphics,
-				Component.translatable("screen.thefourthfrequency.first_run_notice.recovery_hint"),
-				grid.textLeft(), grid.recoveryHintY(), grid.textWidth(), DIM, 0.82F);
 	}
 
 	private void drawNoticeColumn(GuiGraphics graphics, List<NoticeSection> sections,
@@ -665,7 +661,7 @@ public final class FirstRunNoticeScreen extends Screen {
 				&& layout.left() >= 0 && layout.top() >= 0
 				&& layout.right() <= width && layout.bottom() <= height
 				&& copy.height() <= grid.contentHeight()
-				&& grid.recoveryHintY() + NORMAL_LINE_HEIGHT <= grid.footerY();
+				&& grid.contentBottom() + NORMAL_LINE_HEIGHT <= grid.footerY();
 	}
 	public boolean allElementsAlignedForTesting() {
 		NoticeGrid grid = NoticeGrid.from(layout());
@@ -691,7 +687,7 @@ public final class FirstRunNoticeScreen extends Screen {
 				&& grid.textLeft() >= safeLeft && grid.textRight() <= safeRight
 				&& grid.statusY() >= safeTop
 				&& grid.contentTop() > grid.headerRuleY()
-				&& grid.contentBottom() < grid.recoveryHintY()
+				&& grid.contentBottom() < grid.footerY()
 				&& grid.footerY() + NORMAL_LINE_HEIGHT < grid.buttonY()
 				&& grid.buttonY() + BUTTON_HEIGHT <= safeBottom;
 	}
@@ -755,7 +751,6 @@ public final class FirstRunNoticeScreen extends Screen {
 			int statusY,
 			int titleY, int eyebrowY, int headerRuleY,
 			int contentTop, int contentBottom,
-			int recoveryHintY,
 			int footerY, int buttonLeft, int buttonRight, int buttonY) {
 		private static NoticeGrid from(NoticeLayout layout) {
 			return new NoticeGrid(
@@ -764,7 +759,6 @@ public final class FirstRunNoticeScreen extends Screen {
 					y(layout, 126),
 					y(layout, 185), y(layout, 230), y(layout, 274),
 					y(layout, 300), y(layout, 688),
-					y(layout, 704),
 					y(layout, 742), x(layout, 520), x(layout, 1100), y(layout, 788));
 		}
 

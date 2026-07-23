@@ -35,11 +35,9 @@ def prepare(source: Path, destination: Path, size: tuple[int, int], colors: int)
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--misread-master", required=True, type=Path)
     parser.add_argument("--rework-master", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    prepare(args.misread_master, args.output / "misread_body.png", (128, 128), 36)
     prepare(args.rework_master, args.output / "rework_body.png", (64, 32), 28)
 
 

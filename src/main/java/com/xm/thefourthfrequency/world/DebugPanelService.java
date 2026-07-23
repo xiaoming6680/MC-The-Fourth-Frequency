@@ -1,9 +1,6 @@
 package com.xm.thefourthfrequency.world;
 
 import com.xm.thefourthfrequency.content.TerminalData;
-import com.xm.thefourthfrequency.ending.FinalConfrontationService;
-import com.xm.thefourthfrequency.entity.MisreadBodyEntity;
-import com.xm.thefourthfrequency.facility.FacilityService;
 import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
 import com.xm.thefourthfrequency.networking.DebugActionPayload;
@@ -19,11 +16,8 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 
-import java.util.Set;
 
 public final class DebugPanelService {
-	private static final Set<String> FACILITIES = Set.of("surface_shelter", "field_observation",
-			"underground_mine_station", "abandoned_warehouse", "transport_node", "all");
 	private DebugPanelService() { }
 
 	public static boolean setEnabled(ServerPlayer player, boolean enabled) {
@@ -119,33 +113,6 @@ public final class DebugPanelService {
 				});
 				yield "文件进度已重置，等待对应阶段或建筑触发";
 			}
-			case "facility_locate" -> {
-				validateFacility(target);
-				if (target.equals("all")) throw new IllegalArgumentException("定位时请选择单座设施");
-				var position = FacilityService.facilityPosition(data, target).orElseThrow(() -> new IllegalArgumentException("还没有确定设施位置"));
-				player.displayClientMessage(Component.literal("[第四频段测试] " + DebugNames.facility(target) + "：" + position.toShortString()), false);
-				yield "坐标已发送到聊天栏";
-			}
-			case "facility_rebuild" -> {
-				validateFacility(target);
-				if (!FacilityService.debugRebuild(data, target)) throw new IllegalArgumentException("设施还没有生成位置");
-				yield DebugNames.facility(target) + "已进入重建队列";
-			}
-			case "altar_state" -> {
-				if (value < 0 || value > 3 || !FinalConfrontationService.debugSetAltarState(player, value))
-					throw new IllegalArgumentException("祭坛状态只允许 0..3");
-				yield "祭坛测试状态已设为 " + value;
-			}
-			case "ending_state" -> {
-				if (value < 0 || value > 3 || !FinalConfrontationService.debugSetEnding(player, value))
-					throw new IllegalArgumentException("结局状态只允许 0..3");
-				yield "结局测试状态已设为 " + value;
-			}
-			case "boss_health" -> {
-				int percent = Math.clamp(value, 1, 100);
-				boss(player).setHealth(boss(player).getMaxHealth() * percent / 100.0F);
-				yield "最终怪物生命已设为 " + percent + "%";
-			}
 			case "decay" -> {
 				int stage = Math.clamp(value, 0, 5);
 				data.updateNarrativeState(tag -> tag.putInt("decay_stage_override", stage));
@@ -162,7 +129,7 @@ public final class DebugPanelService {
 	private static void resetProgress(ServerPlayer player, FrequencyWorldData data) {
 		data.updateTerminalRecord(player.getUUID(), tag -> {
 			tag.putBoolean(TerminalData.BOUND, false); tag.putInt(TerminalData.BAND_STAGE, 0); tag.putInt(TerminalData.PLOT_STAGE, 1);
-			tag.putBoolean(TerminalData.SECOND_CACHE_UNLOCKED, false); tag.putString(TerminalData.FACILITY_EVIDENCE, "");
+			tag.putBoolean(TerminalData.SECOND_CACHE_UNLOCKED, false);
 			tag.putBoolean(TerminalData.LOCAL_FILE_UNLOCKED, false); tag.putBoolean(TerminalData.RIFT_OBSERVED, false);
 			tag.putBoolean(TerminalData.CONTINUITY_LEARNED, false); tag.putBoolean(TerminalData.NETHER_RIFT_OBSERVED, false);
 			tag.putInt(TerminalData.BODY_PROGRESS, 0); tag.putInt(TerminalData.BODY_STAGE, 0);
@@ -170,7 +137,6 @@ public final class DebugPanelService {
 			tag.putInt(TerminalData.SIGNATURE_SCENE_MASK, 0); tag.putLong(TerminalData.TOOLS_DISABLED_UNTIL, 0L);
 			tag.putBoolean(TerminalData.TRUTH_READ, false); tag.putBoolean(TerminalData.PORTAL_ROOM_FOUND, false);
 			tag.putLong(TerminalData.PORTAL_ROOM_POSITION, 0L); tag.putString(TerminalData.PORTAL_ROOM_DIMENSION, "");
-			tag.putBoolean(TerminalData.ALTAR_STARTED, false); tag.putInt(TerminalData.GROUNDING_ANCHORS_REMAINING, 0);
 			tag.putBoolean(TerminalData.NIGHT_ENTERED, false);
 			tag.putBoolean(TerminalData.NIGHT_WITNESSED, false); tag.putInt(TerminalData.PRELUDE_ANOMALY_MASK, 0);
 			 tag.putBoolean(TerminalData.WATCHER_WITNESSED, false); tag.putString(TerminalData.PROOF_ROUTE, "none");
@@ -181,13 +147,6 @@ public final class DebugPanelService {
 		});
 	}
 
-	private static MisreadBodyEntity boss(ServerPlayer player) {
-		for (var level : player.level().getServer().getAllLevels()) for (var entity : level.getAllEntities())
-			if (entity instanceof MisreadBodyEntity body && body.isAlive()) return body;
-		throw new IllegalArgumentException("当前没有存活的最终怪物");
-	}
-
-	private static void validateFacility(String id) { if (!FACILITIES.contains(id)) throw new IllegalArgumentException("未知设施"); }
 	private static String anomalyFailureReason(ServerPlayer player, String id,
 			AmbientAnomalyService.TriggerFailure failure) {
 		return switch (failure) {
@@ -222,19 +181,14 @@ public final class DebugPanelService {
 		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
 		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(new CompoundTag());
 		var files = TerminalFileState.states(record);
-		MisreadBodyEntity boss = null;
-		try { boss = boss(player); } catch (IllegalArgumentException ignored) { }
-		int evidence = record.getStringOr(TerminalData.FACILITY_EVIDENCE, "").isBlank() ? 0
-				: record.getStringOr(TerminalData.FACILITY_EVIDENCE, "").split(";").length;
 		long now = player.level().getGameTime();
 		ServerPlayNetworking.send(player, new DebugStatusPayload(DebugStatusPayload.CURRENT_PROTOCOL_VERSION, true,
 				player.getGameProfile().name(), record.getIntOr(TerminalData.PLOT_STAGE, 1),
 				record.getIntOr(TerminalData.BAND_STAGE, 0), record.getBooleanOr(TerminalData.BOUND, false),
-				files.size(), (int) files.stream().filter(TerminalFileState.State::unlocked).count(), evidence,
+				files.size(), (int) files.stream().filter(TerminalFileState.State::unlocked).count(),
 				record.getIntOr(TerminalData.BODY_PROGRESS, 0), record.getIntOr(TerminalData.BODY_STAGE, 0),
-				record.getStringOr(TerminalData.ENDING_OUTCOME, "unresolved"), WorldDecayService.stage(data, record),
-				!data.narrativeState().contains("decay_stage_override"), boss != null,
-				boss == null ? 0 : Math.round(boss.getHealth()), boss == null ? 0 : Math.round(boss.getMaxHealth()),
+				WorldDecayService.stage(data, record),
+				!data.narrativeState().contains("decay_stage_override"),
 				record.getIntOr(TerminalData.ANOMALY_TIER, 0), record.getIntOr(TerminalData.ANOMALY_STORY_CEILING, 0),
 				record.getIntOr(TerminalData.ANOMALY_HEAT, 0), record.getStringOr(TerminalData.ACTIVE_ANOMALY_ID, "none"),
 				seconds(record.getLongOr(TerminalData.ACTIVE_ANOMALY_UNTIL, 0L) - now),
@@ -246,7 +200,7 @@ public final class DebugPanelService {
 
 	private static DebugStatusPayload denied(String message) {
 		return new DebugStatusPayload(DebugStatusPayload.CURRENT_PROTOCOL_VERSION, false, "", 0, 0, false,
-				0, 0, 0, 0, 0, "", 0, true, false, 0, 0,
+				0, 0, 0, 0, 0, true,
 				0, 0, 0, "none", 0, 0, 0, 0, false, message);
 	}
 

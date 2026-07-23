@@ -1,7 +1,7 @@
 package com.xm.thefourthfrequency.terminal;
 
 import com.xm.thefourthfrequency.content.TerminalData;
-import com.xm.thefourthfrequency.ending.EndingState;
+import com.xm.thefourthfrequency.ending.FinaleRuntimePolicy;
 import com.xm.thefourthfrequency.networking.AnomalyCompleteC2S;
 import com.xm.thefourthfrequency.networking.AnomalyPhaseS2C;
 import com.xm.thefourthfrequency.networking.AnomalyStartS2C;
@@ -99,7 +99,7 @@ public final class AnomalyRuntimeService {
 	}
 
 	private static void tick(MinecraftServer server) {
-		if (!EndingState.activeAnomaliesAllowed(FrequencyWorldData.get(server))) {
+		if (!FinaleRuntimePolicy.backgroundSystemsAllowed(FrequencyWorldData.get(server))) {
 			interruptAll(server);
 			return;
 		}
@@ -130,8 +130,11 @@ public final class AnomalyRuntimeService {
 	private static void finalizeEntry(ServerPlayer player, RuntimeEntry entry) {
 		ACTIVE.remove(player);
 		clearProjection(player);
-		if (entry.anomaly.markTerminalRecorded())
+		if (entry.anomaly.markTerminalRecorded()) {
+			FrequencyWorldData.get(player.level().getServer()).updateTerminalRecord(player.getUUID(),
+					tag -> AnomalyHistory.recordSuccess(tag, entry.anomaly.anomalyId()));
 			TerminalAnomalyLogService.recordCompleted(player, entry.anomaly);
+		}
 	}
 
 	private static void clearProjection(ServerPlayer player) {

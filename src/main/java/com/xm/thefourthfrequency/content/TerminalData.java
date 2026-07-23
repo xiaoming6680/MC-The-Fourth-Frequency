@@ -11,8 +11,11 @@ import net.minecraft.world.item.component.CustomModelData;
 import com.xm.thefourthfrequency.terminal.TerminalControlPolicy;
 import com.xm.thefourthfrequency.terminal.SignalBand;
 import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
+import com.xm.thefourthfrequency.terminal.TerminalTaskService;
 import com.xm.thefourthfrequency.narrative.HiddenFilePolicy;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
+import com.xm.thefourthfrequency.world.SurvivalMilestone;
+import com.xm.thefourthfrequency.world.SurvivalProgressService;
 
 import java.util.List;
 import java.util.UUID;
@@ -54,7 +57,6 @@ public final class TerminalData {
 	public static final String ACCEPTED_ADVICE = "accepted_advice";
 	public static final String VISITED_DIMENSIONS = "visited_dimensions";
 	public static final String RECOVERY_COUNT = "recovery_count";
-	public static final String FACILITY_EVIDENCE = "facility_evidence";
 	public static final String LOCAL_FILE_UNLOCKED = "local_file_unlocked";
 	public static final String LOCAL_FILE_VERSION = "local_file_version";
 	public static final String LOCAL_FILE_HASH = "local_file_hash";
@@ -92,8 +94,6 @@ public final class TerminalData {
 	public static final String TERMINAL_CAPTURED = "terminal_captured";
 	public static final String TERMINAL_CAPTURED_TICK = "terminal_captured_tick";
 	public static final String PURSUIT_GRACE_UNTIL = "pursuit_grace_until";
-	public static final String ENDING_VERSION = "ending_version";
-	public static final String ENDING_OUTCOME = "ending_outcome";
 	public static final String ANOMALY_LOGS = "anomaly_logs";
 	public static final String ANOMALY_LOG_SEQUENCE = "anomaly_log_sequence";
 	public static final String UNREAD_ANOMALY_COUNT = "unread_anomaly_count";
@@ -109,6 +109,9 @@ public final class TerminalData {
 	public static final String ANOMALY_STORY_CEILING = "anomaly_story_ceiling";
 	public static final String ANOMALY_TIER_ONLINE_TICKS = "anomaly_tier_online_ticks";
 	public static final String ANOMALY_HEAT = "anomaly_heat";
+	public static final String ANOMALY_SEEN_MASK = "anomaly_seen_mask";
+	public static final String ANOMALY_RECENT_IDS = "anomaly_recent_ids";
+	public static final String ANOMALY_STAGE_SUCCESSES = "anomaly_stage_successes";
 	public static final String NEXT_STRONG_ANOMALY_TICK = "next_strong_anomaly_tick";
 	public static final String NEXT_COMPOSITE_ANOMALY_TICK = "next_composite_anomaly_tick";
 	public static final String ANOMALY_LEGACY_RAMP = "anomaly_legacy_ramp";
@@ -130,6 +133,7 @@ public final class TerminalData {
 	public static final String AUTO_TUNING = "auto_tuning";
 	public static final String ACTIVE_GUIDANCE_TOOL = "active_guidance_tool";
 	public static final String SELECTED_RESOURCE = "selected_resource";
+	public static final String MINERAL_SCAN_READY_GAME_TIME = "mineral_scan_ready_game_time";
 	public static final String TOOLS_DISABLED_UNTIL = "tools_disabled_until";
 	public static final String HOME_POSITION = "home_position";
 	public static final String HOME_DIMENSION = "home_dimension";
@@ -140,15 +144,48 @@ public final class TerminalData {
 	public static final String STRONGHOLD_DIMENSION = "stronghold_dimension";
 	public static final String SURVIVAL_MILESTONE_MASK = "survival_milestone_mask";
 	public static final String WOOD_MINED_COUNT = "wood_mined_count";
+	public static final String IRON_SAMPLE_COUNT = "iron_sample_count";
 	public static final String BLAZE_ROD_SAMPLE_COUNT = "blaze_rod_sample_count";
+	public static final String CRAFTED_EYE_COUNT = "crafted_eye_count";
+	public static final String TERMINAL_PAGE_VISIT_MASK = "terminal_page_visit_mask";
+	public static final String TASK_REWARD_CLAIMED_MASK = "task_reward_claimed_mask";
+	public static final String TASK_COMPLETION_NOTIFIED_MASK = "task_completion_notified_mask";
+	public static final String UNREAD_ALERT_ACTIVE = "unread_alert_active";
 	public static final String BREACH_MASK = "breach_mask";
 	public static final String SIGNATURE_SCENE_MASK = "signature_scene_mask";
 	public static final String TRUTH_READ = "truth_read";
 	public static final String PORTAL_ROOM_FOUND = "portal_room_found";
 	public static final String PORTAL_ROOM_POSITION = "portal_room_position";
 	public static final String PORTAL_ROOM_DIMENSION = "portal_room_dimension";
-	public static final String ALTAR_STARTED = "altar_started";
-	public static final String GROUNDING_ANCHORS_REMAINING = "grounding_anchors_remaining";
+	public static final String COMPLETED_STRUCTURE_TARGETS_MASK = "completed_structure_targets_mask";
+	public static final String NAVIGATION_COMPLETION_ACTIVE = "navigation_completion_active";
+	public static final String NAVIGATION_COMPLETION_UNREAD = "navigation_completion_unread";
+	public static final String NAVIGATION_COMPLETION_POSITION = "navigation_completion_position";
+	public static final String NAVIGATION_COMPLETION_DIMENSION = "navigation_completion_dimension";
+	public static final String NAVIGATION_COMPLETION_DIRECTION = "navigation_completion_direction";
+	public static final String PURSUIT_RESOLVED_CHASES = "pursuit_resolved_chases";
+	public static final String PURSUIT_ALLOWED_FORM = "pursuit_allowed_form";
+	public static final String PURSUIT_TUTORIAL_DEMO_MASK = "pursuit_tutorial_demo_mask";
+	public static final String PURSUIT_TUTORIAL_WARNING_MASK = "pursuit_tutorial_warning_mask";
+	public static final String PURSUIT_TUTORIAL_ARCHIVE_MASK = "pursuit_tutorial_archive_mask";
+	public static final String PURSUIT_PENDING = "pursuit_pending";
+	public static final String PURSUIT_NEXT_ELIGIBLE_TICK = "pursuit_next_eligible_tick";
+	public static final String PURSUIT_EFFECTIVE_ACTIVITY_TICKS = "pursuit_effective_activity_ticks";
+	public static final String PURSUIT_EXPLORATION_DISTANCE = "pursuit_exploration_distance";
+	public static final String PURSUIT_ACTIVITY_PROOF_MASK = "pursuit_activity_proof_mask";
+	public static final String PURSUIT_ACTIVE = "pursuit_active";
+	public static final String PURSUIT_SESSION_ID = "pursuit_session_id";
+	public static final String PURSUIT_SESSION_PHASE = "pursuit_session_phase";
+	public static final String PURSUIT_SESSION_FORM = "pursuit_session_form";
+	public static final String PURSUIT_SOURCE_DIMENSION = "pursuit_source_dimension";
+	public static final String PURSUIT_SOURCE_POSITION = "pursuit_source_position";
+	public static final String PURSUIT_SOURCE_YAW = "pursuit_source_yaw";
+	public static final String PURSUIT_SOURCE_PITCH = "pursuit_source_pitch";
+	public static final String PURSUIT_MIRROR_DIMENSION = "pursuit_mirror_dimension";
+	public static final String PURSUIT_MIRROR_SLOT = "pursuit_mirror_slot";
+	public static final String PURSUIT_SESSION_STARTED_TICK = "pursuit_session_started_tick";
+	public static final String PURSUIT_REFUND_LEDGER = "pursuit_refund_ledger";
+	public static final String PURSUIT_RECOVERY_QUEUE = "pursuit_recovery_queue";
 
 	private TerminalData() {
 	}
@@ -197,7 +234,6 @@ public final class TerminalData {
 		tag.putString(ACCEPTED_ADVICE, "");
 		tag.putString(VISITED_DIMENSIONS, player.level().dimension().identifier().toString());
 		tag.putInt(RECOVERY_COUNT, 0);
-		tag.putString(FACILITY_EVIDENCE, "");
 		tag.putBoolean(LOCAL_FILE_UNLOCKED, false);
 		tag.putInt(LOCAL_FILE_VERSION, 1);
 		tag.putString(LOCAL_FILE_HASH, "TFF-WF-01-A91C");
@@ -230,8 +266,6 @@ public final class TerminalData {
 		tag.putBoolean(TERMINAL_CAPTURED, false);
 		tag.putLong(TERMINAL_CAPTURED_TICK, 0L);
 		tag.putLong(PURSUIT_GRACE_UNTIL, 0L);
-		tag.putInt(ENDING_VERSION, 0);
-		tag.putString(ENDING_OUTCOME, "unresolved");
 		tag.put(ANOMALY_LOGS, new ListTag());
 		tag.putInt(ANOMALY_LOG_SEQUENCE, 0);
 		tag.putInt(UNREAD_ANOMALY_COUNT, 0);
@@ -240,6 +274,9 @@ public final class TerminalData {
 		tag.putInt(ANOMALY_STORY_CEILING, 0);
 		tag.putLong(ANOMALY_TIER_ONLINE_TICKS, 0L);
 		tag.putInt(ANOMALY_HEAT, 0);
+		tag.putLong(ANOMALY_SEEN_MASK, 0L);
+		tag.put(ANOMALY_RECENT_IDS, new ListTag());
+		tag.putInt(ANOMALY_STAGE_SUCCESSES, 0);
 		tag.putLong(NEXT_STRONG_ANOMALY_TICK, 0L);
 		tag.putLong(NEXT_COMPOSITE_ANOMALY_TICK, 0L);
 		tag.putBoolean(ANOMALY_LEGACY_RAMP, false);
@@ -261,6 +298,7 @@ public final class TerminalData {
 		tag.putBoolean(AUTO_TUNING, false);
 		tag.putInt(ACTIVE_GUIDANCE_TOOL, 6);
 		tag.putInt(SELECTED_RESOURCE, 3);
+		tag.putLong(MINERAL_SCAN_READY_GAME_TIME, 0L);
 		tag.putLong(TOOLS_DISABLED_UNTIL, 0L);
 		tag.putLong(HOME_POSITION, 0L);
 		tag.putString(HOME_DIMENSION, "");
@@ -271,15 +309,48 @@ public final class TerminalData {
 		tag.putString(STRONGHOLD_DIMENSION, "");
 		tag.putInt(SURVIVAL_MILESTONE_MASK, 0);
 		tag.putInt(WOOD_MINED_COUNT, 0);
+		tag.putInt(IRON_SAMPLE_COUNT, 0);
 		tag.putInt(BLAZE_ROD_SAMPLE_COUNT, 0);
+		tag.putInt(CRAFTED_EYE_COUNT, 0);
+		tag.putInt(TERMINAL_PAGE_VISIT_MASK, 0);
+		tag.putInt(TASK_REWARD_CLAIMED_MASK, 0);
+		tag.putInt(TASK_COMPLETION_NOTIFIED_MASK, 0);
+		tag.putBoolean(UNREAD_ALERT_ACTIVE, false);
 		tag.putInt(BREACH_MASK, 0);
 		tag.putInt(SIGNATURE_SCENE_MASK, 0);
 		tag.putBoolean(TRUTH_READ, false);
 		tag.putBoolean(PORTAL_ROOM_FOUND, false);
 		tag.putLong(PORTAL_ROOM_POSITION, 0L);
 		tag.putString(PORTAL_ROOM_DIMENSION, "");
-		tag.putBoolean(ALTAR_STARTED, false);
-		tag.putInt(GROUNDING_ANCHORS_REMAINING, 0);
+		tag.putInt(COMPLETED_STRUCTURE_TARGETS_MASK, 0);
+		tag.putBoolean(NAVIGATION_COMPLETION_ACTIVE, false);
+		tag.putBoolean(NAVIGATION_COMPLETION_UNREAD, false);
+		tag.putLong(NAVIGATION_COMPLETION_POSITION, 0L);
+		tag.putString(NAVIGATION_COMPLETION_DIMENSION, "");
+		tag.putInt(NAVIGATION_COMPLETION_DIRECTION, 0);
+		tag.putInt(PURSUIT_RESOLVED_CHASES, 0);
+		tag.putInt(PURSUIT_ALLOWED_FORM, 0);
+		tag.putInt(PURSUIT_TUTORIAL_DEMO_MASK, 0);
+		tag.putInt(PURSUIT_TUTORIAL_WARNING_MASK, 0);
+		tag.putInt(PURSUIT_TUTORIAL_ARCHIVE_MASK, 0);
+		tag.putBoolean(PURSUIT_PENDING, false);
+		tag.putLong(PURSUIT_NEXT_ELIGIBLE_TICK, 0L);
+		tag.putLong(PURSUIT_EFFECTIVE_ACTIVITY_TICKS, 0L);
+		tag.putDouble(PURSUIT_EXPLORATION_DISTANCE, 0.0D);
+		tag.putInt(PURSUIT_ACTIVITY_PROOF_MASK, 0);
+		tag.putBoolean(PURSUIT_ACTIVE, false);
+		tag.putString(PURSUIT_SESSION_ID, "");
+		tag.putString(PURSUIT_SESSION_PHASE, "none");
+		tag.putInt(PURSUIT_SESSION_FORM, 0);
+		tag.putString(PURSUIT_SOURCE_DIMENSION, "");
+		tag.putLong(PURSUIT_SOURCE_POSITION, 0L);
+		tag.putDouble(PURSUIT_SOURCE_YAW, 0.0D);
+		tag.putDouble(PURSUIT_SOURCE_PITCH, 0.0D);
+		tag.putString(PURSUIT_MIRROR_DIMENSION, "");
+		tag.putInt(PURSUIT_MIRROR_SLOT, -1);
+		tag.putLong(PURSUIT_SESSION_STARTED_TICK, 0L);
+		tag.put(PURSUIT_REFUND_LEDGER, new ListTag());
+		tag.put(PURSUIT_RECOVERY_QUEUE, new ListTag());
 		tag.put(SIGNAL_EVENTS, new ListTag());
 		tag.putInt(SIGNAL_EVENT_SEQUENCE, 0);
 		tag.putInt(UNREAD_SIGNAL_COUNT, 0);
@@ -309,6 +380,9 @@ public final class TerminalData {
 				record.getBooleanOr(BOUND, false) ? 1 : 0);
 		if (!record.contains(ANOMALY_TIER_ONLINE_TICKS)) record.putLong(ANOMALY_TIER_ONLINE_TICKS, 0L);
 		if (!record.contains(ANOMALY_HEAT)) record.putInt(ANOMALY_HEAT, 0);
+		if (!record.contains(ANOMALY_SEEN_MASK)) record.putLong(ANOMALY_SEEN_MASK, 0L);
+		if (!record.contains(ANOMALY_RECENT_IDS)) record.put(ANOMALY_RECENT_IDS, new ListTag());
+		if (!record.contains(ANOMALY_STAGE_SUCCESSES)) record.putInt(ANOMALY_STAGE_SUCCESSES, 0);
 		if (!record.contains(NEXT_STRONG_ANOMALY_TICK)) record.putLong(NEXT_STRONG_ANOMALY_TICK, 0L);
 		if (!record.contains(NEXT_COMPOSITE_ANOMALY_TICK)) record.putLong(NEXT_COMPOSITE_ANOMALY_TICK, 0L);
 		if (!record.contains(ANOMALY_LEGACY_RAMP)) record.putBoolean(ANOMALY_LEGACY_RAMP,
@@ -336,6 +410,7 @@ public final class TerminalData {
 				isLegacyNavigation(record.getStringOr(TARGET_KIND, "unresolved")) ? 1 : 6);
 		if (!record.contains(SELECTED_RESOURCE)) record.putInt(SELECTED_RESOURCE,
 				resourceWire(record.getStringOr(TARGET_KIND, "unresolved")));
+		if (!record.contains(MINERAL_SCAN_READY_GAME_TIME)) record.putLong(MINERAL_SCAN_READY_GAME_TIME, 0L);
 		if (!record.contains(GUIDANCE_OBJECTIVE_ID)) record.putString(GUIDANCE_OBJECTIVE_ID, "");
 		if (!record.contains(GUIDANCE_OBJECTIVE_PROGRESS)) record.putInt(GUIDANCE_OBJECTIVE_PROGRESS, 0);
 		if (!record.contains(GUIDANCE_STALLED_TICKS)) record.putLong(GUIDANCE_STALLED_TICKS, 0L);
@@ -351,8 +426,18 @@ public final class TerminalData {
 				legacySurvivalMilestones(record));
 		if (!record.contains(WOOD_MINED_COUNT)) record.putInt(WOOD_MINED_COUNT,
 				record.getIntOr(SURVIVAL_MILESTONE_MASK, 0) == 0 ? 0 : 7);
+		if (!record.contains(IRON_SAMPLE_COUNT)) record.putInt(IRON_SAMPLE_COUNT,
+				SurvivalMilestone.IRON.present(record.getIntOr(SURVIVAL_MILESTONE_MASK, 0))
+						? SurvivalProgressService.REQUIRED_IRON : 0);
 		if (!record.contains(BLAZE_ROD_SAMPLE_COUNT)) record.putInt(BLAZE_ROD_SAMPLE_COUNT,
 				(record.getIntOr(SURVIVAL_MILESTONE_MASK, 0) & (1 << 5 | 1 << 6 | 1 << 7)) == 0 ? 0 : 6);
+		if (!record.contains(CRAFTED_EYE_COUNT)) record.putInt(CRAFTED_EYE_COUNT,
+				SurvivalMilestone.CRAFTED_EYE.present(record.getIntOr(SURVIVAL_MILESTONE_MASK, 0))
+						? SurvivalProgressService.REQUIRED_CRAFTED_EYES : 0);
+		if (!record.contains(TERMINAL_PAGE_VISIT_MASK)) record.putInt(TERMINAL_PAGE_VISIT_MASK, 0);
+		if (!record.contains(TASK_REWARD_CLAIMED_MASK)) record.putInt(TASK_REWARD_CLAIMED_MASK, 0);
+		if (!record.contains(TASK_COMPLETION_NOTIFIED_MASK)) record.putInt(TASK_COMPLETION_NOTIFIED_MASK, 0);
+		if (!record.contains(UNREAD_ALERT_ACTIVE)) record.putBoolean(UNREAD_ALERT_ACTIVE, false);
 		if (!record.contains(BREACH_MASK)) record.putInt(BREACH_MASK, 0);
 		if (!record.contains(SIGNATURE_SCENE_MASK)) record.putInt(SIGNATURE_SCENE_MASK, 0);
 		if (!record.contains(TRUTH_READ)) record.putBoolean(TRUTH_READ,
@@ -360,8 +445,35 @@ public final class TerminalData {
 		if (!record.contains(PORTAL_ROOM_FOUND)) record.putBoolean(PORTAL_ROOM_FOUND, false);
 		if (!record.contains(PORTAL_ROOM_POSITION)) record.putLong(PORTAL_ROOM_POSITION, 0L);
 		if (!record.contains(PORTAL_ROOM_DIMENSION)) record.putString(PORTAL_ROOM_DIMENSION, "");
-		if (!record.contains(ALTAR_STARTED)) record.putBoolean(ALTAR_STARTED, false);
-		if (!record.contains(GROUNDING_ANCHORS_REMAINING)) record.putInt(GROUNDING_ANCHORS_REMAINING, 0);
+		if (!record.contains(COMPLETED_STRUCTURE_TARGETS_MASK)) record.putInt(COMPLETED_STRUCTURE_TARGETS_MASK, 0);
+		if (!record.contains(NAVIGATION_COMPLETION_ACTIVE)) record.putBoolean(NAVIGATION_COMPLETION_ACTIVE, false);
+		if (!record.contains(NAVIGATION_COMPLETION_UNREAD)) record.putBoolean(NAVIGATION_COMPLETION_UNREAD, false);
+		if (!record.contains(NAVIGATION_COMPLETION_POSITION)) record.putLong(NAVIGATION_COMPLETION_POSITION, 0L);
+		if (!record.contains(NAVIGATION_COMPLETION_DIMENSION)) record.putString(NAVIGATION_COMPLETION_DIMENSION, "");
+		if (!record.contains(NAVIGATION_COMPLETION_DIRECTION)) record.putInt(NAVIGATION_COMPLETION_DIRECTION, 0);
+		if (!record.contains(PURSUIT_RESOLVED_CHASES)) record.putInt(PURSUIT_RESOLVED_CHASES, 0);
+		if (!record.contains(PURSUIT_ALLOWED_FORM)) record.putInt(PURSUIT_ALLOWED_FORM, 0);
+		if (!record.contains(PURSUIT_TUTORIAL_DEMO_MASK)) record.putInt(PURSUIT_TUTORIAL_DEMO_MASK, 0);
+		if (!record.contains(PURSUIT_TUTORIAL_WARNING_MASK)) record.putInt(PURSUIT_TUTORIAL_WARNING_MASK, 0);
+		if (!record.contains(PURSUIT_TUTORIAL_ARCHIVE_MASK)) record.putInt(PURSUIT_TUTORIAL_ARCHIVE_MASK, 0);
+		if (!record.contains(PURSUIT_PENDING)) record.putBoolean(PURSUIT_PENDING, false);
+		if (!record.contains(PURSUIT_NEXT_ELIGIBLE_TICK)) record.putLong(PURSUIT_NEXT_ELIGIBLE_TICK, 0L);
+		if (!record.contains(PURSUIT_EFFECTIVE_ACTIVITY_TICKS)) record.putLong(PURSUIT_EFFECTIVE_ACTIVITY_TICKS, 0L);
+		if (!record.contains(PURSUIT_EXPLORATION_DISTANCE)) record.putDouble(PURSUIT_EXPLORATION_DISTANCE, 0.0D);
+		if (!record.contains(PURSUIT_ACTIVITY_PROOF_MASK)) record.putInt(PURSUIT_ACTIVITY_PROOF_MASK, 0);
+		if (!record.contains(PURSUIT_ACTIVE)) record.putBoolean(PURSUIT_ACTIVE, false);
+		if (!record.contains(PURSUIT_SESSION_ID)) record.putString(PURSUIT_SESSION_ID, "");
+		if (!record.contains(PURSUIT_SESSION_PHASE)) record.putString(PURSUIT_SESSION_PHASE, "none");
+		if (!record.contains(PURSUIT_SESSION_FORM)) record.putInt(PURSUIT_SESSION_FORM, 0);
+		if (!record.contains(PURSUIT_SOURCE_DIMENSION)) record.putString(PURSUIT_SOURCE_DIMENSION, "");
+		if (!record.contains(PURSUIT_SOURCE_POSITION)) record.putLong(PURSUIT_SOURCE_POSITION, 0L);
+		if (!record.contains(PURSUIT_SOURCE_YAW)) record.putDouble(PURSUIT_SOURCE_YAW, 0.0D);
+		if (!record.contains(PURSUIT_SOURCE_PITCH)) record.putDouble(PURSUIT_SOURCE_PITCH, 0.0D);
+		if (!record.contains(PURSUIT_MIRROR_DIMENSION)) record.putString(PURSUIT_MIRROR_DIMENSION, "");
+		if (!record.contains(PURSUIT_MIRROR_SLOT)) record.putInt(PURSUIT_MIRROR_SLOT, -1);
+		if (!record.contains(PURSUIT_SESSION_STARTED_TICK)) record.putLong(PURSUIT_SESSION_STARTED_TICK, 0L);
+		if (!record.contains(PURSUIT_REFUND_LEDGER)) record.put(PURSUIT_REFUND_LEDGER, new ListTag());
+		if (!record.contains(PURSUIT_RECOVERY_QUEUE)) record.put(PURSUIT_RECOVERY_QUEUE, new ListTag());
 		if (!record.contains(SIGNAL_EVENTS)) migrateLegacyAnomalyLogs(record);
 		if (!record.contains(SIGNAL_EVENT_SEQUENCE)) record.putInt(SIGNAL_EVENT_SEQUENCE, 0);
 		if (!record.contains(UNREAD_SIGNAL_COUNT))
@@ -386,13 +498,14 @@ public final class TerminalData {
 	}
 
 	private static boolean isLegacyNavigation(String kind) {
-		return kind.equals("iron") || kind.equals("redstone") || kind.equals("diamond");
+		return kind.equals("iron") || kind.equals("coal") || kind.equals("gold") || kind.equals("diamond");
 	}
 
 	private static int resourceWire(String kind) {
 		return switch (kind) {
 			case "iron" -> 0;
-			case "redstone" -> 1;
+			case "coal" -> 4;
+			case "gold" -> 5;
 			case "diamond" -> 2;
 			default -> 3;
 		};
@@ -430,18 +543,7 @@ public final class TerminalData {
 		TerminalFileState.discover(record, "maintenance_handoff", issued, dayTime, true);
 		if (record.getBooleanOr(SECOND_CACHE_UNLOCKED, false))
 			TerminalFileState.discover(record, "recovered_fragment", issued, dayTime, true);
-		String evidence = record.getStringOr(FACILITY_EVIDENCE, "");
-		if (evidence.contains("surface_shelter="))
-			TerminalFileState.discover(record, "surface_shelter_record", issued, dayTime, true);
-		if (evidence.contains("field_observation="))
-			TerminalFileState.discover(record, "field_observation_record", issued, dayTime, true);
-		if (evidence.contains("underground_mine_station="))
-			TerminalFileState.discover(record, "underground_mine_record", issued, dayTime, true);
-		if (evidence.contains("abandoned_warehouse="))
-			TerminalFileState.discover(record, "abandoned_warehouse_record", issued, dayTime, true);
-		boolean allEvidence = evidence.contains("surface_shelter=") && evidence.contains("field_observation=")
-				&& evidence.contains("underground_mine_station=") && evidence.contains("abandoned_warehouse=");
-		if (allEvidence || record.getBooleanOr(LOCAL_FILE_UNLOCKED, false))
+		if (record.getBooleanOr(LOCAL_FILE_UNLOCKED, false))
 			TerminalFileState.discover(record, "encrypted_witness_file", issued, dayTime,
 					record.getBooleanOr(LOCAL_FILE_UNLOCKED, false));
 	}
@@ -460,19 +562,24 @@ public final class TerminalData {
 			stack.set(DataComponents.CUSTOM_DATA, CustomData.of(projected));
 			changed = true;
 		}
-		int milestones = record.getIntOr(SURVIVAL_MILESTONE_MASK, 0);
-		int survivalVisualStage = (milestones & 1 << 7) != 0 ? 3
-				: (milestones & 1 << 4) != 0 ? 2
-				: (milestones & 1 << 1) != 0 ? 1 : 0;
-		int stage = TerminalControlPolicy.visualStage(record.getIntOr(PLOT_STAGE, 1), survivalVisualStage);
-		boolean unread = record.getIntOr(UNREAD_SIGNAL_COUNT, 0) > 0;
+		return applyAttentionProjection(stack, record) || changed;
+	}
+
+	public static boolean applyAttentionProjection(ItemStack stack, CompoundTag record) {
+		int stage = TerminalControlPolicy.pursuitVisualStage(
+				record.getIntOr(PURSUIT_RESOLVED_CHASES, 0),
+				record.getIntOr(PURSUIT_ALLOWED_FORM, 0),
+				record.getIntOr(ANOMALY_TIER, 0));
+		boolean unread = record.getIntOr(UNREAD_SIGNAL_COUNT, 0) > 0
+				|| record.getBooleanOr(NAVIGATION_COMPLETION_UNREAD, false)
+				|| TerminalTaskService.hasClaimableReward(record);
 		CustomModelData model = new CustomModelData(List.of((float) (stage * 2 + (unread ? 1 : 0))),
 				List.of(), List.of(), List.of());
 		if (!model.equals(stack.get(DataComponents.CUSTOM_MODEL_DATA))) {
 			stack.set(DataComponents.CUSTOM_MODEL_DATA, model);
-			changed = true;
+			return true;
 		}
-		return changed;
+		return false;
 	}
 
 	private static String personalityTemplate(long seed) {

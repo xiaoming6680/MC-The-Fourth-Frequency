@@ -21,6 +21,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -29,10 +30,10 @@ import java.util.Set;
 import java.util.UUID;
 
 public final class ResourceGuidanceService {
-	private static final int MAX_SCAN_RADIUS = 48;
+	private static final int MAX_SCAN_RADIUS = 24;
 	private static final int BLOCKS_PER_PLAYER_TICK = 1_024;
 	private static final int MAX_PLAYERS_PER_SERVER_TICK = 4;
-	private static final List<HorizontalOffset> SEARCH_OFFSETS = createSearchOffsets();
+	private static final List<SearchOffset> SEARCH_OFFSETS = createSearchOffsets();
 	private static final Map<MinecraftServer, Map<UUID, ScanState>> ACTIVE_SCANS = new IdentityHashMap<>();
 	private static final Map<MinecraftServer, Integer> PLAYER_CURSORS = new IdentityHashMap<>();
 
@@ -80,27 +81,25 @@ public final class ResourceGuidanceService {
 				&& !containsEntry(PlayerPatternState.read(record).acceptedAdvice(), need.id)) {
 			completeAdvice(player, data, need);
 		}
+		long now = player.level().getGameTime();
+		long revealAt = record.getLongOr(TerminalData.MINERAL_SCAN_READY_GAME_TIME, 0L);
 		NavigationState navigation = NavigationState.read(record);
-		if (navigation.located()) {
-			boolean sameDimension = player.level().dimension().identifier().toString()
-					.equals(navigation.dimension());
-			BlockPos target = BlockPos.of(navigation.position());
-			boolean withinRefreshArea = sameDimension
-					&& ResourceScanRefreshPolicy.contains(player.getBlockX(), player.getBlockZ(),
-							target.getX(), target.getZ(), MAX_SCAN_RADIUS);
-			if (withinRefreshArea && targetStillPresent(player.level(), navigation)) return;
+		boolean targetValid = navigation.kind().equals(need.id) && navigation.located()
+				&& player.level().dimension().identifier().toString().equals(navigation.dimension())
+				&& targetStillPresent(player.level(), navigation);
+		if (navigation.located() && !targetValid) {
 			data.updateTerminalRecord(player.getUUID(), tag -> clearLocatedTarget(tag));
+			scans.remove(player.getUUID());
 		}
 
 		ScanState scan = scans.get(player.getUUID());
-		if (scan == null || scan.need != need || !scan.dimension.equals(player.level().dimension().identifier().toString())
-				|| scan.origin.distManhattan(player.blockPosition()) > 24) {
-			scan = new ScanState(need, player.blockPosition(), player.level().dimension().identifier().toString());
+		String dimension = player.level().dimension().identifier().toString();
+		if (scan == null || scan.need != need || !scan.dimension.equals(dimension)
+				|| scan.origin.distManhattan(player.blockPosition()) > 0) {
+			scan = new ScanState(need, player.blockPosition(), dimension, !targetValid);
 			scans.put(player.getUUID(), scan);
 		}
-		if (scan(player, data, scan)) {
-			scans.remove(player.getUUID());
-		}
+		if (!scan.finished) scan(player, data, scan, revealAt);
 	}
 
 	public static void requestRescan(ServerPlayer player) {
@@ -128,38 +127,57 @@ public final class ResourceGuidanceService {
 	}
 
 	private static ResourceNeed resolveNeed(ServerPlayer player, CompoundTag record) {
-		NavigationState navigation = NavigationState.read(record);
-		TerminalResource selected = TerminalResource.fromId(navigation.kind());
-		if (selected == TerminalResource.NONE) selected = TerminalResource.fromWire(
+		TerminalResource selected = TerminalResource.fromWire(
 				record.getIntOr(TerminalData.SELECTED_RESOURCE, TerminalResource.NONE.wireId()));
+		NavigationState navigation = NavigationState.read(record);
+		TerminalResource navigationResource = TerminalResource.fromId(navigation.kind());
+		if (navigationResource != selected) return null;
 		return TerminalToolService.resourceAvailable(record, selected) ? ResourceNeed.byId(selected.id()) : null;
 	}
 
-	private static boolean scan(ServerPlayer player, FrequencyWorldData data, ScanState scan) {
+	private static void scan(ServerPlayer player, FrequencyWorldData data, ScanState scan, long revealAt) {
 		ServerLevel level = player.level();
-		for (int checked = 0; checked < BLOCKS_PER_PLAYER_TICK; checked++) {
-			if (scan.horizontalIndex >= SEARCH_OFFSETS.size()) {
-				return true;
-			}
-			HorizontalOffset offset = SEARCH_OFFSETS.get(scan.horizontalIndex);
-			BlockPos candidate = new BlockPos(scan.origin.getX() + offset.x, scan.y, scan.origin.getZ() + offset.z);
-			scan.advance();
-			if (!level.hasChunkAt(candidate)) {
-				continue;
-			}
-			Block block = level.getBlockState(candidate).getBlock();
-			if (!scan.need.blocks.contains(block)) {
-				continue;
-			}
-			String blockId = BuiltInRegistries.BLOCK.getKey(block).toString();
-			data.updateTerminalRecord(player.getUUID(), record -> {
-				NavigationState.read(record).locate(blockId, candidate, scan.dimension, level.getGameTime()).writeTo(record);
-			});
-			player.displayClientMessage(Component.translatable("message.thefourthfrequency.guidance.ready"), true);
-			TerminalRuntimeService.refresh(player);
-			return true;
+		long now = level.getGameTime();
+		if (scan.found != null) {
+			if (now >= revealAt) commit(player, data, scan, now);
+			return;
 		}
-		return false;
+		for (int checked = 0; checked < BLOCKS_PER_PLAYER_TICK; checked++) {
+			if (scan.index >= SEARCH_OFFSETS.size()) {
+				if (now >= revealAt) {
+					scan.finished = true;
+					com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+							Component.translatable("message.thefourthfrequency.guidance.not_found"));
+					TerminalRuntimeService.refresh(player);
+				}
+				return;
+			}
+			SearchOffset offset = SEARCH_OFFSETS.get(scan.index++);
+			BlockPos candidate = scan.mutable.setWithOffset(scan.origin, offset.x, offset.y, offset.z).immutable();
+			if (level.isOutsideBuildHeight(candidate) || !level.hasChunkAt(candidate)) continue;
+			Block block = level.getBlockState(candidate).getBlock();
+			if (!scan.need.blocks.contains(block)) continue;
+			scan.found = candidate;
+			scan.blockId = BuiltInRegistries.BLOCK.getKey(block).toString();
+			if (now >= revealAt) commit(player, data, scan, now);
+			return;
+		}
+	}
+
+	private static void commit(ServerPlayer player, FrequencyWorldData data, ScanState scan, long now) {
+		BlockPos found = scan.found;
+		String blockId = scan.blockId;
+		data.updateTerminalRecord(player.getUUID(), record -> {
+			if (TerminalResource.fromWire(record.getIntOr(TerminalData.SELECTED_RESOURCE,
+					TerminalResource.NONE.wireId())).id().equals(scan.need.id)) {
+				NavigationState.read(record).locate(blockId, found, scan.dimension, now).writeTo(record);
+			}
+		});
+		scan.finished = true;
+		if (scan.announceReady)
+			com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+					Component.translatable("message.thefourthfrequency.guidance.ready"));
+		TerminalRuntimeService.refresh(player);
 	}
 
 	private static void completeAdvice(ServerPlayer player, FrequencyWorldData data, ResourceNeed need) {
@@ -168,7 +186,8 @@ public final class ResourceGuidanceService {
 			pattern.withAcceptedAdvice(appendEntry(pattern.acceptedAdvice(), need.id)).writeTo(record);
 		});
 		TerminalLifecycleService.ensureCarried(player, false);
-		player.displayClientMessage(Component.translatable("message.thefourthfrequency.guidance.accepted"), true);
+		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+				Component.translatable("message.thefourthfrequency.guidance.accepted"));
 		TerminalRuntimeService.refresh(player);
 	}
 
@@ -181,22 +200,18 @@ public final class ResourceGuidanceService {
 		return false;
 	}
 
-	private static List<HorizontalOffset> createSearchOffsets() {
-		List<HorizontalOffset> offsets = new ArrayList<>();
-		for (int radius = 0; radius <= MAX_SCAN_RADIUS; radius++) {
-			if (radius == 0) {
-				offsets.add(new HorizontalOffset(0, 0));
-				continue;
-			}
-			for (int x = -radius; x <= radius; x++) {
-				offsets.add(new HorizontalOffset(x, -radius));
-				offsets.add(new HorizontalOffset(x, radius));
-			}
-			for (int z = -radius + 1; z < radius; z++) {
-				offsets.add(new HorizontalOffset(-radius, z));
-				offsets.add(new HorizontalOffset(radius, z));
+	private static List<SearchOffset> createSearchOffsets() {
+		List<SearchOffset> offsets = new ArrayList<>();
+		int radiusSquared = MAX_SCAN_RADIUS * MAX_SCAN_RADIUS;
+		for (int x = -MAX_SCAN_RADIUS; x <= MAX_SCAN_RADIUS; x++) {
+			for (int y = -MAX_SCAN_RADIUS; y <= MAX_SCAN_RADIUS; y++) {
+				for (int z = -MAX_SCAN_RADIUS; z <= MAX_SCAN_RADIUS; z++) {
+					int distanceSquared = x * x + y * y + z * z;
+					if (distanceSquared <= radiusSquared) offsets.add(new SearchOffset(x, y, z, distanceSquared));
+				}
 			}
 		}
+		offsets.sort(Comparator.comparingInt(SearchOffset::distanceSquared));
 		return List.copyOf(offsets);
 	}
 
@@ -218,20 +233,18 @@ public final class ResourceGuidanceService {
 	}
 
 	private enum ResourceNeed {
-		IRON("iron", -64, 64, Set.of(Blocks.IRON_ORE, Blocks.DEEPSLATE_IRON_ORE), List.of(Items.RAW_IRON, Items.IRON_INGOT)),
-		REDSTONE("redstone", -64, 16, Set.of(Blocks.REDSTONE_ORE, Blocks.DEEPSLATE_REDSTONE_ORE), List.of(Items.REDSTONE)),
-		DIAMOND("diamond", -64, 16, Set.of(Blocks.DIAMOND_ORE, Blocks.DEEPSLATE_DIAMOND_ORE), List.of(Items.DIAMOND));
+		IRON("iron", Set.of(Blocks.IRON_ORE, Blocks.DEEPSLATE_IRON_ORE), List.of(Items.RAW_IRON, Items.IRON_INGOT)),
+		COAL("coal", Set.of(Blocks.COAL_ORE, Blocks.DEEPSLATE_COAL_ORE), List.of(Items.COAL)),
+		GOLD("gold", Set.of(Blocks.GOLD_ORE, Blocks.DEEPSLATE_GOLD_ORE, Blocks.NETHER_GOLD_ORE),
+				List.of(Items.RAW_GOLD, Items.GOLD_INGOT)),
+		DIAMOND("diamond", Set.of(Blocks.DIAMOND_ORE, Blocks.DEEPSLATE_DIAMOND_ORE), List.of(Items.DIAMOND));
 
 		private final String id;
-		private final int minY;
-		private final int maxY;
 		private final Set<Block> blocks;
 		private final List<Item> bindingItems;
 
-		ResourceNeed(String id, int minY, int maxY, Set<Block> blocks, List<Item> bindingItems) {
+		ResourceNeed(String id, Set<Block> blocks, List<Item> bindingItems) {
 			this.id = id;
-			this.minY = minY;
-			this.maxY = maxY;
 			this.blocks = blocks;
 			this.bindingItems = bindingItems;
 		}
@@ -250,25 +263,21 @@ public final class ResourceGuidanceService {
 		private final ResourceNeed need;
 		private final BlockPos origin;
 		private final String dimension;
-		private int horizontalIndex;
-		private int y;
+		private final BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
+		private int index;
+		private BlockPos found;
+		private String blockId = "";
+		private boolean finished;
+		private final boolean announceReady;
 
-		private ScanState(ResourceNeed need, BlockPos origin, String dimension) {
+		private ScanState(ResourceNeed need, BlockPos origin, String dimension, boolean announceReady) {
 			this.need = need;
 			this.origin = origin.immutable();
 			this.dimension = dimension;
-			this.y = need.minY;
-		}
-
-		private void advance() {
-			y++;
-			if (y > need.maxY) {
-				y = need.minY;
-				horizontalIndex++;
-			}
+			this.announceReady = announceReady;
 		}
 	}
 
-	private record HorizontalOffset(int x, int z) {
+	private record SearchOffset(int x, int y, int z, int distanceSquared) {
 	}
 }

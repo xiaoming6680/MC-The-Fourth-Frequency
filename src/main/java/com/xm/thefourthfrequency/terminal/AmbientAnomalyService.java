@@ -2,17 +2,21 @@ package com.xm.thefourthfrequency.terminal;
 
 import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
 import com.xm.thefourthfrequency.content.TerminalData;
-import com.xm.thefourthfrequency.ending.EndingState;
+import com.xm.thefourthfrequency.ending.FinaleRuntimePolicy;
 import com.xm.thefourthfrequency.state.AnomalyState;
 import com.xm.thefourthfrequency.state.StoryState;
+import com.xm.thefourthfrequency.pursuit.PursuitDimensions;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /** Server-authoritative single-anomaly scheduler. The historical class name is retained for compatibility. */
 public final class AmbientAnomalyService {
@@ -31,7 +35,8 @@ public final class AmbientAnomalyService {
 			ServerPlayer player = handler.getPlayer();
 			FrequencyWorldData data = FrequencyWorldData.get(server);
 			if (data.terminalRecord(player.getUUID()).isPresent()) data.updateTerminalRecord(player.getUUID(), tag -> {
-				tag.putLong(TerminalData.NEXT_AMBIENT_ANOMALY_TICK, player.level().getGameTime() + 200L);
+				tag.putLong(TerminalData.NEXT_AMBIENT_ANOMALY_TICK,
+						player.level().getGameTime() + AnomalyIntensity.LOGIN_GRACE_TICKS);
 				tag.putString(TerminalData.LAST_AMBIENT_DIMENSION, player.level().dimension().identifier().toString());
 			});
 		});
@@ -46,34 +51,39 @@ public final class AmbientAnomalyService {
 	private static void updatePlayer(ServerPlayer player, FrequencyWorldData data) {
 		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
 		if (record == null) return;
+		if (PursuitDimensions.isMirror(player.level())
+				|| record.getBooleanOr(TerminalData.PURSUIT_ACTIVE, false)) return;
 		StoryState story = StoryState.read(record);
 		AnomalyState anomaly = AnomalyState.read(record);
-		if (!story.bound() || !EndingState.activeAnomaliesAllowed(data) || anomaly.suspended()) return;
+		if (!story.bound() || !FinaleRuntimePolicy.backgroundSystemsAllowed(data) || anomaly.suspended()) return;
 		long now = player.level().getGameTime();
-		boolean endingActive = EndingState.endingPressureActive(data);
-		int ceiling = AnomalyIntensity.survivalStoryCeiling(story.bound(), story.bandStage(),
-				story.localFileUnlocked() || story.riftObserved(),
-				story.continuityLearned() || record.getBooleanOr(TerminalData.NETHER_RIFT_OBSERVED, false),
-				record.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0), endingActive);
+		boolean endingActive = FinaleRuntimePolicy.pressureActive(data);
+		int ceiling = AnomalyIntensity.progressionCeiling(story.bound(), story.bandStage(),
+				record.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0),
+				record.getIntOr(TerminalData.EYE_SAMPLE_COUNT, 0),
+				record.getIntOr(TerminalData.PURSUIT_ACTIVITY_PROOF_MASK, 0),
+				record.getLongOr(TerminalData.PURSUIT_EFFECTIVE_ACTIVITY_TICKS, 0L), endingActive);
 		int oldTier = anomaly.tier();
-		boolean legacy = record.getBooleanOr(TerminalData.ANOMALY_LEGACY_RAMP, false);
-		long legacyTicks = Math.max(0L, record.getLongOr(TerminalData.ANOMALY_LEGACY_RAMP_TICKS, 0L));
-		int tier = legacy ? Math.min(ceiling, 1 + (int) (legacyTicks / AnomalyIntensity.LEGACY_TIER_RAMP_TICKS)) : ceiling;
-		long tierTicks = tier == oldTier ? anomaly.tierOnlineTicks() + CHECK_INTERVAL : 0L;
+		boolean activityCounts = effectiveActivity(player, record);
+		long exposedTicks = anomaly.tierOnlineTicks() + (activityCounts ? CHECK_INTERVAL : 0L);
+		int stageSuccesses = record.getIntOr(TerminalData.ANOMALY_STAGE_SUCCESSES, 0);
+		int tier = AnomalyIntensity.progressedStage(oldTier, ceiling, exposedTicks, stageSuccesses);
+		boolean stageAdvanced = tier != oldTier;
+		long tierTicks = stageAdvanced ? 0L : exposedTicks;
 		int heat = AnomalyIntensity.heatPercent(tierTicks);
-		long storedLegacyTicks = legacyTicks + CHECK_INTERVAL;
 		data.updateTerminalRecord(player.getUUID(), tag -> {
 			new AnomalyState(tier, ceiling, tierTicks, heat, anomaly.nextAmbientTick(),
 					anomaly.suspended(), anomaly.activeId(), anomaly.activeUntil()).writeTo(tag);
-			if (legacy) tag.putLong(TerminalData.ANOMALY_LEGACY_RAMP_TICKS, storedLegacyTicks);
-			if (legacy && tier >= ceiling) tag.putBoolean(TerminalData.ANOMALY_LEGACY_RAMP, false);
+			if (stageAdvanced) tag.putInt(TerminalData.ANOMALY_STAGE_SUCCESSES, 0);
+			tag.putBoolean(TerminalData.ANOMALY_LEGACY_RAMP, false);
 		});
 
 		String dimension = player.level().dimension().identifier().toString();
 		if (!dimension.equals(record.getStringOr(TerminalData.LAST_AMBIENT_DIMENSION, ""))) {
 			data.updateTerminalRecord(player.getUUID(), tag -> {
 				tag.putString(TerminalData.LAST_AMBIENT_DIMENSION, dimension);
-				tag.putLong(TerminalData.NEXT_AMBIENT_ANOMALY_TICK, now + 200L);
+				tag.putLong(TerminalData.NEXT_AMBIENT_ANOMALY_TICK,
+						now + AnomalyIntensity.DIMENSION_GRACE_TICKS);
 			});
 			return;
 		}
@@ -85,7 +95,7 @@ public final class AmbientAnomalyService {
 		if (now < next) return;
 		if (!eligible(player, record)) {
 			data.updateTerminalRecord(player.getUUID(), tag ->
-					tag.putLong(TerminalData.NEXT_AMBIENT_ANOMALY_TICK, now + 200L));
+					tag.putLong(TerminalData.NEXT_AMBIENT_ANOMALY_TICK, now + 60L * 20L));
 			return;
 		}
 		triggerSelected(player, record, Math.max(1, tier), now);
@@ -93,15 +103,16 @@ public final class AmbientAnomalyService {
 	}
 
 	private static void triggerSelected(ServerPlayer player, CompoundTag record, int tier, long now) {
-		boolean strongAllowed = tier >= 5 && now >= record.getLongOr(TerminalData.NEXT_STRONG_ANOMALY_TICK, 0L);
-		List<AnomalyDefinition> candidates = AnomalyCatalog.unlocked(tier).stream()
-				.filter(value -> strongAllowed || !value.strong()).toList();
+		boolean strongAllowed = now >= record.getLongOr(TerminalData.NEXT_STRONG_ANOMALY_TICK, 0L);
+		List<AnomalyDefinition> candidates = AnomalyCatalog.weightedPool(tier, recentIds(record), strongAllowed);
 		if (candidates.isEmpty()) return;
 		long baseSeed = record.getLongOr(TerminalData.PERSONALITY_SEED, 0L) ^ now
 				^ record.getIntOr(TerminalData.ANOMALY_LOG_SEQUENCE, 0);
 		int start = Math.floorMod((int) baseSeed, candidates.size());
+		Set<String> attempted = new HashSet<>();
 		for (int offset = 0; offset < candidates.size(); offset++) {
 			AnomalyDefinition selected = candidates.get((start + offset) % candidates.size());
+			if (!attempted.add(selected.id())) continue;
 			long seed = baseSeed + offset * 0x9E3779B97F4A7C15L;
 			if (!trigger(player, selected.id(), false, seed)) continue;
 			if (selected.strong()) {
@@ -173,7 +184,7 @@ public final class AmbientAnomalyService {
 	public static void resume(ServerPlayer player) {
 		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
 		data.updateTerminalRecord(player.getUUID(), tag -> AnomalyState.read(tag)
-				.suspended(false, player.level().getGameTime() + 200L).writeTo(tag));
+				.suspended(false, player.level().getGameTime() + AnomalyIntensity.LOGIN_GRACE_TICKS).writeTo(tag));
 	}
 
 	private static boolean eligible(ServerPlayer player, CompoundTag record) {
@@ -181,6 +192,23 @@ public final class AmbientAnomalyService {
 				&& !TerminalRuntimeService.isOpen(player)
 				&& !record.getBooleanOr(TerminalData.EMPTY_SEGMENT_ACTIVE, false)
 				&& AnomalyRuntimeService.active(player) == null;
+	}
+
+	private static boolean effectiveActivity(ServerPlayer player, CompoundTag record) {
+		return player.isAlive() && !player.isSpectator() && !player.isSleeping()
+				&& !TerminalRuntimeService.isOpen(player)
+				&& !record.getBooleanOr(TerminalData.EMPTY_SEGMENT_ACTIVE, false)
+				&& !record.getBooleanOr(TerminalData.PURSUIT_ACTIVE, false);
+	}
+
+	private static Set<String> recentIds(CompoundTag record) {
+		ListTag recent = record.getListOrEmpty(TerminalData.ANOMALY_RECENT_IDS);
+		Set<String> result = new HashSet<>();
+		for (int index = 0; index < recent.size(); index++) {
+			String id = recent.getString(index).orElse("");
+			if (AnomalyCatalog.contains(id)) result.add(id);
+		}
+		return result;
 	}
 
 	private static void schedule(FrequencyWorldData data, ServerPlayer player, long now, int tier, int heat,

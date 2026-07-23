@@ -1,8 +1,7 @@
 package com.xm.thefourthfrequency.world;
 
 import com.xm.thefourthfrequency.content.TerminalData;
-import com.xm.thefourthfrequency.ending.EndingOutcome;
-import com.xm.thefourthfrequency.ending.EndingState;
+import com.xm.thefourthfrequency.ending.FinaleRuntimePolicy;
 import com.xm.thefourthfrequency.networking.WorldDecayPayload;
 import com.xm.thefourthfrequency.networking.MenuErosionStageS2C;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -35,14 +34,13 @@ public final class WorldDecayService {
 			CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
 			int ceiling = record == null ? 1 : record.getIntOr(TerminalData.ANOMALY_STORY_CEILING,
 					record.getIntOr(TerminalData.ANOMALY_TIER, 1));
-			int menuStage = MenuErosionStageS2C.stageFor(ceiling,
-					EndingState.outcome(data) == EndingOutcome.SUCCESS);
+			int menuStage = MenuErosionStageS2C.stageFor(ceiling, FinaleRuntimePolicy.succeeded(data));
 			ServerPlayNetworking.send(player, new MenuErosionStageS2C(menuStage));
 		}
 	}
 
 	public static int stage(FrequencyWorldData data, CompoundTag record) {
-		if (EndingState.outcome(data) == EndingOutcome.SUCCESS) return 0;
+		if (FinaleRuntimePolicy.succeeded(data)) return 0;
 		if (data.narrativeState().contains("decay_stage_override"))
 			return Math.clamp(data.narrativeState().getIntOr("decay_stage_override", 0), 0, 5);
 		int anomaly = Math.clamp(record.getIntOr(TerminalData.ANOMALY_TIER, 0), 0, 5);
@@ -51,7 +49,7 @@ public final class WorldDecayService {
 				: SurvivalMilestone.RETURNED_NETHER.present(milestones) ? 4
 				: SurvivalMilestone.IRON.present(milestones) ? 3
 				: SurvivalMilestone.HOME.present(milestones) ? 2 : 0;
-		if (EndingState.endingPressureActive(data)) return 5;
+		if (FinaleRuntimePolicy.pressureActive(data)) return 5;
 		return Math.max(anomaly, survival);
 	}
 }

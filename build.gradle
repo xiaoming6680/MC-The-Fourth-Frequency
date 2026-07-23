@@ -149,16 +149,26 @@ def clientAnomaly = providers.gradleProperty("tffAnomaly").orElse("")
 tasks.named("runClientGameTest") {
 	doFirst {
 		def suite = clientTestSuite.get().trim().toLowerCase(Locale.ROOT)
-		def allowed = ["all", "default", "mainline", "tools-ui", "notice-entry", "alpha-relaunch", "anomalies", "anomaly-meta-smoke", "rework-forms", "watcher-model", "end-boss"]
+		def allowed = ["all", "default", "mainline", "tools-ui", "notice-entry", "alpha-relaunch", "anomalies", "anomaly-meta-smoke", "rework-forms", "watcher-model", "world-interface"]
 		if (!allowed.contains(suite)) throw new GradleException("Unknown -PtffClientTestSuite=${suite}")
 		def anomaly = clientAnomaly.get().trim()
 		if (!anomaly.isEmpty() && suite != "anomalies")
 			throw new GradleException("-PtffAnomaly requires -PtffClientTestSuite=anomalies")
+		if (suite == "alpha-relaunch") {
+			// The runner deletes its run directory before every invocation. Seed only the two
+			// markers that a real second launch would inherit from the completed first launch.
+			def configDir = layout.buildDirectory.dir("run/clientGameTest/config").get().asFile
+			configDir.mkdirs()
+			new File(configDir, "thefourthfrequency.json").setText(
+					'{\n  "clientState": {\n    "alphaDowngradeComplete": true,\n    "viewDistanceUnlocked": false\n  }\n}\n',
+					"UTF-8")
+			new File(configDir, "thefourthfrequency-safety-notice.version").setText("3\n", "UTF-8")
+		}
 	}
 	jvmArgs "-Dthefourthfrequency.clientTestSuite=${clientTestSuite.get()}",
 			"-Dthefourthfrequency.anomaly=${clientAnomaly.get()}",
 			"-Dthefourthfrequency.projectDir=${project.projectDir.absolutePath}"
-	if (["rework-forms", "watcher-model", "end-boss"].contains(clientTestSuite.get().trim().toLowerCase(Locale.ROOT))) {
+	if (["rework-forms", "watcher-model", "world-interface"].contains(clientTestSuite.get().trim().toLowerCase(Locale.ROOT))) {
 		jvmArgs "-Dfabric.client.gametest.disableNetworkSynchronizer=true"
 	}
 }

@@ -12,9 +12,6 @@ public final class ModSounds {
 	public static final SoundEvent EMPTY_EXPERIENCE = register("empty_experience");
 	public static final SoundEvent FOURTH_BAND = register("fourth_band");
 	public static final SoundEvent REWORK_JOINT = register("rework_joint");
-	public static final SoundEvent MISREAD_BODY = register("misread_body");
-	public static final SoundEvent MISREAD_ADAPTATION = register("misread_adaptation");
-	public static final SoundEvent TERMINATION = register("termination");
 	public static final SoundEvent ANOMALY_ECHO = register("anomaly_echo");
 	public static final SoundEvent WINDOW_GLITCH = register("window_glitch");
 	public static final SoundEvent DOOR_CASCADE = register("door_cascade");

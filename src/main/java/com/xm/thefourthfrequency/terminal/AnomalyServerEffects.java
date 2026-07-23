@@ -1,7 +1,5 @@
 package com.xm.thefourthfrequency.terminal;
 
-import com.xm.thefourthfrequency.facility.FacilityDefinition;
-import com.xm.thefourthfrequency.facility.FacilityService;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import com.xm.thefourthfrequency.world.WatcherService;
 import com.xm.thefourthfrequency.entity.WatcherEntity;
@@ -268,11 +266,6 @@ public final class AnomalyServerEffects {
 		if (namespace.equals("thefourthfrequency")) return true;
 		BlockPos station = data.stationPosition().orElse(null);
 		if (station != null && within(pos, station, 6, 7, 5)) return true;
-		for (FacilityDefinition definition : FacilityService.definitions()) {
-			BlockPos origin = FacilityService.facilityPosition(data, definition.id()).orElse(null);
-			if (origin != null && within(pos, origin, definition.width() / 2 + 2,
-					definition.height() + 2, definition.length() / 2 + 2)) return true;
-		}
 		var narrative = data.narrativeState();
 		if (narrative.contains("rift_core")) {
 			BlockPos core = BlockPos.of(narrative.getLongOr("rift_core", 0L));

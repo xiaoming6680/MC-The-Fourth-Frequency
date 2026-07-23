@@ -4,7 +4,6 @@
     "thefourthfrequency:resonance_core",
     "thefourthfrequency:stability_anchor_cage",
     "thefourthfrequency:warp_gate_core",
-    "thefourthfrequency:world_interface_exit_portal",
-    "#thefourthfrequency:end_boss_immune"
+    "thefourthfrequency:world_interface_exit_portal"
   ]
 }

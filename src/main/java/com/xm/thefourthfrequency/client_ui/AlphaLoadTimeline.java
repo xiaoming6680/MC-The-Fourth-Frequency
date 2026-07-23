@@ -20,7 +20,7 @@ public final class AlphaLoadTimeline {
 	public static final int MAX_RESOURCE_RELOAD_WAIT_TICKS = MIN_LOADING_SCREEN_TICKS + 64;
 	public static final int VERSION_STEP_TICKS = 28;
 	private static final List<String> DOWNGRADE_VERSIONS = List.of(
-			"1.20.1", "1.16.5", "1.12.2", "1.8.9", "Beta 1.7.3", "Alpha 1.0.0");
+			"1.20.1", "1.16.5", "1.12.2", "1.8.9", "1.7.3", "1.0.0");
 
 	private AlphaLoadTimeline() {
 	}

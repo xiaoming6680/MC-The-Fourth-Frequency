@@ -33,7 +33,31 @@ public final class TerminalNavigationMath {
 		return (dz >= 0 ? "south" : "north") + (dx >= 0 ? "east" : "west");
 	}
 
+	public static int relativeDirection(int dx, int dz, float playerYaw) {
+		double angle = targetNeedleDegrees(dx, dz, playerYaw);
+		if (Math.abs(angle) <= 45.0D) return 0;
+		if (angle > 45.0D && angle < 135.0D) return 1;
+		if (angle < -45.0D && angle > -135.0D) return 3;
+		return 2;
+	}
+
+	public static String relativeDirectionId(int direction) {
+		return switch (Math.clamp(direction, 0, 3)) {
+			case 1 -> "right";
+			case 2 -> "behind";
+			case 3 -> "left";
+			default -> "ahead";
+		};
+	}
+
 	public static int distance(int dx, int dz) {
 		return (int) Math.round(Math.hypot(dx, dz));
+	}
+
+	public static boolean withinHorizontalRadius(int playerX, int playerZ, int targetX, int targetZ, int radius) {
+		long dx = (long) targetX - playerX;
+		long dz = (long) targetZ - playerZ;
+		long safeRadius = Math.max(0, radius);
+		return dx * dx + dz * dz <= safeRadius * safeRadius;
 	}
 }

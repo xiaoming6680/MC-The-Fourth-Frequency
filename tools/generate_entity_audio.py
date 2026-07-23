@@ -37,38 +37,6 @@ def rework_joint(seed: int, duration: float) -> list[float]:
     return result
 
 
-def misread_body(seed: int, duration: float) -> list[float]:
-    rng = random.Random(900 + seed)
-    result: list[float] = []
-    breath = 0.0
-    for index in range(round(RATE * duration)):
-        t = index / RATE
-        breath = breath * 0.975 + (rng.random() * 2.0 - 1.0) * 0.025
-        inhale = max(0.0, math.sin(2.0 * math.pi * (0.72 + seed * 0.04) * t)) ** 1.8
-        pulse_phase = t % (0.47 - seed * 0.025)
-        pulse = math.exp(-pulse_phase * 19.0) * math.sin(2.0 * math.pi * (44.0 + seed * 3.0) * t)
-        carrier = math.sin(2.0 * math.pi * (96.0 + 7.0 * math.sin(t * 2.2)) * t) * 0.20
-        result.append((breath * inhale * 0.72 + pulse * 0.64 + carrier)
-                      * envelope(t, duration, 0.08, 0.22))
-    return result
-
-
-def adaptation(seed: int, duration: float) -> list[float]:
-    rng = random.Random(1100 + seed)
-    result: list[float] = []
-    grit = 0.0
-    base = (128.0, 82.0, 54.0)[seed - 1]
-    for index in range(round(RATE * duration)):
-        t = index / RATE
-        grit = grit * 0.93 + (rng.random() * 2.0 - 1.0) * 0.07
-        rising = math.sin(2.0 * math.pi * (base + t * (210.0 + seed * 35.0)) * t)
-        warning = math.sin(2.0 * math.pi * (4.0 + seed) * t) ** 5
-        low = math.sin(2.0 * math.pi * (38.0 + seed * 5.0) * t)
-        result.append((rising * 0.42 + low * warning * 0.55 + grit * 0.28)
-                      * envelope(t, duration, 0.025, 0.13))
-    return result
-
-
 def write_wave(path: Path, samples: list[float]) -> None:
     maximum = max(1.0e-9, max(abs(value) for value in samples))
     scale = PEAK / maximum
@@ -102,11 +70,6 @@ def main() -> None:
         temporary = Path(temporary_name)
         encode(args.ffmpeg, args.output / "rework/joint/01.ogg", rework_joint(1, 0.72), temporary)
         encode(args.ffmpeg, args.output / "rework/joint/02.ogg", rework_joint(2, 0.84), temporary)
-        encode(args.ffmpeg, args.output / "misread/body/01.ogg", misread_body(1, 1.55), temporary)
-        encode(args.ffmpeg, args.output / "misread/body/02.ogg", misread_body(2, 1.72), temporary)
-        encode(args.ffmpeg, args.output / "misread/adaptation/operator.ogg", adaptation(1, 0.92), temporary)
-        encode(args.ffmpeg, args.output / "misread/adaptation/builder.ogg", adaptation(2, 1.02), temporary)
-        encode(args.ffmpeg, args.output / "misread/adaptation/miner.ogg", adaptation(3, 1.10), temporary)
 
 
 if __name__ == "__main__":

@@ -23,7 +23,8 @@ public record TerminalToolSnapshot(TerminalToolSnapshotPayload payload) {
 				TerminalToolService.NO_TOOL, TerminalToolService.NO_TOOL,
 				TerminalTool.WEATHER.slot(), TerminalTool.HOME.slot(), 0, 0,
 				TerminalStructureTarget.NONE.wireId(), false,
-				false, 0, TerminalResource.NONE.wireId(), 0, 0L, 13_000, 0,
+				false, 0, TerminalResource.NONE.wireId(), 0, false, 0,
+				0, 0L, 13_000, 0,
 				false, false, false, 0, 0, 0, "",
 				false, false, 0, 0, 0, "",
 				0, false, 0, 0, 0,
@@ -76,6 +77,24 @@ public record TerminalToolSnapshot(TerminalToolSnapshotPayload payload) {
 		return TerminalResource.fromWire(payload.selectedResource());
 	}
 
+	public boolean mineralScanning() {
+		return payload.mineralScanTicks() > 0;
+	}
+
+	public int mineralScanTicks() {
+		return Math.clamp(payload.mineralScanTicks(), 0, 60);
+	}
+
+	public boolean navigationCompletionAvailable() {
+		return payload.navigationCompletionAvailable();
+	}
+
+	public Component navigationCompletionLine() {
+		return Component.translatable("terminal.thefourthfrequency.navigation.completed",
+				Component.translatable("terminal.thefourthfrequency.relative_direction."
+						+ TerminalNavigationMath.relativeDirectionId(payload.navigationCompletionDirection())));
+	}
+
 	public Component disabledLine() {
 		int seconds = Math.max(1, (payload.toolsDisabledTicks() + 19) / 20);
 		return Component.translatable("terminal.thefourthfrequency.tool.disabled", seconds);
@@ -109,12 +128,6 @@ public record TerminalToolSnapshot(TerminalToolSnapshotPayload payload) {
 		if (!payload.portalKnown()) return Component.translatable("terminal.thefourthfrequency.tool.portal.none");
 		return locationLine(payload.portalSameDimension(), payload.portalDx(), payload.portalDz(),
 				payload.portalY(), payload.portalDimension());
-	}
-
-	public Component navigationSummaryLine() {
-		return Component.translatable("terminal.thefourthfrequency.tool.navigation.summary_counts",
-				Math.max(0, payload.nearbySignalCount()), Math.max(0, payload.specialFileCount()),
-				Math.max(0, payload.storySignalCount()));
 	}
 
 	public Component lockedLine(TerminalTool tool) {

@@ -43,13 +43,13 @@ public final class M5GameTests implements CustomTestMethodInvoker {
 		resetReworkFixture(worldData);
 		buildReworkIsolationPlatform(level, helper);
 		BlockPos organ = helper.absolutePos(new BlockPos(5, REWORK_TEST_Y, 5));
-		BlockPos terminalFacility = helper.absolutePos(new BlockPos(9, REWORK_TEST_Y, 5));
+		BlockPos secondaryOrgan = helper.absolutePos(new BlockPos(9, REWORK_TEST_Y, 5));
 		ServerPlayer terminalCarrier = helper.makeMockServerPlayerInLevel();
 		terminalCarrier.gameMode.changeGameModeForPlayer(GameType.SURVIVAL);
 		terminalCarrier.setHealth(terminalCarrier.getMaxHealth());
 		terminalCarrier.snapTo(organ.getX() + 14.5, organ.getY(), organ.getZ() + 6.5, 0.0F, 0.0F);
 		CorrectionTargetService.setOrganForTest(server, organ);
-		CorrectionTargetService.setTerminalFacilityForTest(server, terminalFacility);
+		CorrectionTargetService.setOrganForTest(server, secondaryOrgan);
 
 		Cow cow = add(level, EntityType.COW, organ.offset(5, 0, 0));
 		Villager villager = add(level, EntityType.VILLAGER, organ.offset(9, 0, 0));
@@ -102,16 +102,16 @@ public final class M5GameTests implements CustomTestMethodInvoker {
 			helper.assertTrue(false, "M5 stage-chain watchdog: count="
 					+ CorrectionState.dismantleCount(worldData) + ", stage=" + activeBody[0].formStage()
 					+ ", morph=" + activeBody[0].morphTicks() + ", pos=" + activeBody[0].blockPosition()
-					+ ", terminal=" + level.getBlockState(terminalFacility).getBlock()
+					+ ", secondary=" + level.getBlockState(secondaryOrgan).getBlock()
 					+ ", corridor=" + level.getBlockState(corridorTarget).getBlock());
 		});
 		waitForMorphingDismantle(helper, level, organ, worldData, body, 1, 1, 2, () -> {
-			helper.assertTrue(level.getBlockState(terminalFacility).is(ModBlocks.ARCHIVE_LOCK),
-					"Lower-priority terminal facility must remain while organ work and morph complete");
-			waitForMorphingDismantle(helper, level, terminalFacility, worldData, body, 2, 2, 3, () -> {
+			helper.assertTrue(level.getBlockState(secondaryOrgan).is(ModBlocks.NASCENT_BODY_ORGAN),
+					"The second anomaly trace must remain while the first organ work and morph complete");
+			waitForMorphingDismantle(helper, level, secondaryOrgan, worldData, body, 2, 2, 3, () -> {
 				boolean bracePresent = false;
 				for (var direction : net.minecraft.core.Direction.Plane.HORIZONTAL) {
-					bracePresent |= level.getBlockState(terminalFacility.relative(direction)).is(ModBlocks.REWORK_BRACE);
+					bracePresent |= level.getBlockState(secondaryOrgan.relative(direction)).is(ModBlocks.REWORK_BRACE);
 				}
 				helper.assertTrue(bracePresent,
 						"Dismantling must include an actual purposeful placement action");
@@ -123,19 +123,19 @@ public final class M5GameTests implements CustomTestMethodInvoker {
 					helper.assertValueEqual(terminalCarrier.getHealth(), carrierHealth[0],
 							"A correction entity with no work target must not hunt a terminal carrier");
 					helper.assertTrue(body.isAlive(), "The stage fixture must keep its correction entity alive");
-					CorrectionTargetService.setOrganForTest(server, terminalFacility);
-					waitForMorphingDismantle(helper, level, terminalFacility, worldData, body,
+					CorrectionTargetService.setOrganForTest(server, secondaryOrgan);
+					waitForMorphingDismantle(helper, level, secondaryOrgan, worldData, body,
 							3, 3, 4, () -> {
-						CorrectionTargetService.setOrganForTest(server, terminalFacility);
-						waitForMorphingDismantle(helper, level, terminalFacility, worldData, body,
+						CorrectionTargetService.setOrganForTest(server, secondaryOrgan);
+						waitForMorphingDismantle(helper, level, secondaryOrgan, worldData, body,
 								4, 4, 5, () -> {
 							helper.assertValueEqual(body.formStage(), 5,
 									"The normal dismantle flow must reach stage 5");
-							CorrectionTargetService.setOrganForTest(server, terminalFacility);
-							waitForCappedDismantle(helper, level, terminalFacility, worldData, body, 5, () -> {
+							CorrectionTargetService.setOrganForTest(server, secondaryOrgan);
+							waitForCappedDismantle(helper, level, secondaryOrgan, worldData, body, 5, () -> {
 								body.setInvulnerable(false);
 								body.kill(level);
-								ReworkEntity reborn = CorrectionOrganService.spawnReworkBody(level, terminalFacility);
+								ReworkEntity reborn = CorrectionOrganService.spawnReworkBody(level, secondaryOrgan);
 								reborn.setInvulnerable(true);
 								activeBody[0] = reborn;
 								helper.assertValueEqual(reborn.formStage(), 5,
@@ -307,7 +307,7 @@ public final class M5GameTests implements CustomTestMethodInvoker {
 		CorrectionState.update(data, state -> {
 			for (String key : new String[] {
 					"active", "nascent_organ_pos", "nascent_organ_dismantled", "anomaly_traces",
-					"terminal_facility_pos", "last_dismantled_target", "rework_entity_uuid",
+					"last_dismantled_target", "rework_entity_uuid",
 					"rework_entity_pos", "last_rework_spawn_tick", "rework_spawn_count"
 			}) state.remove(key);
 			state.putInt("dismantle_count", 0);

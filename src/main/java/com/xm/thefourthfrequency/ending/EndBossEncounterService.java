@@ -6,7 +6,6 @@ import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.content.ModEntities;
 import com.xm.thefourthfrequency.content.ResonanceCoreBlockEntity;
 import com.xm.thefourthfrequency.content.TerminalData;
-import com.xm.thefourthfrequency.entity.MisreadBodyEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfacePartEntity;
 import com.xm.thefourthfrequency.networking.AltarActionC2S;
@@ -65,8 +64,7 @@ import java.util.WeakHashMap;
 /**
  * Authoritative orchestrator for the dedicated final boss, its ritual and both endings.
  *
- * <p>The old End-specific {@link MisreadBodyEntity} path is intentionally retired.  This class is
- * the only owner of encounter stage transitions, the virtual health pool and the collapse clock;
+ * <p>This class is the only owner of encounter stage transitions, the virtual health pool and the collapse clock;
  * entities, blocks and packets are projections or narrowly validated inputs.</p>
  */
 public final class EndBossEncounterService {
@@ -123,7 +121,6 @@ public final class EndBossEncounterService {
 		MinecraftServer server = sourceLevel.getServer();
 		ServerLevel end = server.getLevel(Level.END);
 		if (end == null) return;
-		FinalConfrontationService.retireLegacyAltar(server);
 
 		WorldInterfaceState.Snapshot existing = WorldInterfaceState.snapshot(server);
 		if (!existing.valid()) {
@@ -1007,7 +1004,6 @@ public final class EndBossEncounterService {
 		if (!RECOVERED_SERVERS.add(server)) return;
 		ServerLevel level = server.getLevel(Level.END);
 		WorldInterfaceState.Snapshot before = WorldInterfaceState.snapshot(server);
-		if (before.present()) FinalConfrontationService.retireLegacyAltar(server);
 		if (level == null || !before.valid() || !before.present()) return;
 		EndBossArenaService.PreparedArena arena = EndBossArenaService.prepare(level);
 		EndBossArenaService.restoreAuthoritativeAnchors(level, before, !before.stage().isCombat());
@@ -1399,7 +1395,6 @@ public final class EndBossEncounterService {
 		FrequencyWorldData data = FrequencyWorldData.get(level.getServer());
 		if (data.terminalRecord(player.getUUID()).isPresent()) {
 			data.updateTerminalRecord(player.getUUID(), record -> {
-				record.putBoolean(TerminalData.ALTAR_STARTED, true);
 				record.putBoolean(TerminalData.PORTAL_ROOM_FOUND, true);
 				record.putLong(TerminalData.PORTAL_ROOM_POSITION, center.asLong());
 				record.putString(TerminalData.PORTAL_ROOM_DIMENSION, level.dimension().identifier().toString());
@@ -1430,10 +1425,4 @@ public final class EndBossEncounterService {
 		}
 	}
 
-	/* Prelude compatibility: the former Misread End boss is deliberately unreachable. */
-	@Deprecated public static boolean isEncounterBoss(MisreadBodyEntity body) { return false; }
-	@Deprecated public static Optional<ServerPlayer> selectTarget(MisreadBodyEntity body) { return Optional.empty(); }
-	@Deprecated public static void delayNextAttack(MisreadBodyEntity body, int ticks) { }
-	@Deprecated public static void onBossDefeated(MisreadBodyEntity body, ServerPlayer victor) { }
-	@Deprecated public static Optional<MisreadBodyEntity> findEncounterBoss(ServerLevel level) { return Optional.empty(); }
 }

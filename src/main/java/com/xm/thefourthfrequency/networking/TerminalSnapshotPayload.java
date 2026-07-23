@@ -25,17 +25,11 @@ public record TerminalSnapshotPayload(
 		int bodyProgress,
 		int bodyStage,
 		int capabilityMask,
-		int shelterEvidence,
-		int warehouseEvidence,
-		int mineEvidence,
-		int observationEvidence,
 		boolean localFileUnlocked,
 		boolean riftLocated,
 		int riftDx,
 		int riftDz,
 		int riftY,
-		int endingVersion,
-		int endingOutcome,
 		boolean terminalCaptured,
 		long gameTime,
 		int unreadCount,
@@ -46,9 +40,13 @@ public record TerminalSnapshotPayload(
 		int reminderBand,
 		String objectiveId,
 		int objectiveProgress,
-		int objectiveTarget
+		int objectiveTarget,
+		int objectiveIndex,
+		boolean objectiveClaimable,
+		String objectiveRewardItem,
+		int objectiveRewardCount
 ) implements CustomPacketPayload {
-	public static final int CURRENT_PROTOCOL_VERSION = 6;
+	public static final int CURRENT_PROTOCOL_VERSION = 8;
 	public static final Type<TerminalSnapshotPayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(
 			TheFourthFrequency.MOD_ID, "terminal_snapshot"));
 	public static final StreamCodec<RegistryFriendlyByteBuf, TerminalSnapshotPayload> CODEC = StreamCodec.of(
@@ -71,17 +69,11 @@ public record TerminalSnapshotPayload(
 		buf.writeVarInt(value.bodyProgress);
 		buf.writeVarInt(value.bodyStage);
 		buf.writeVarInt(value.capabilityMask);
-		buf.writeVarInt(value.shelterEvidence);
-		buf.writeVarInt(value.warehouseEvidence);
-		buf.writeVarInt(value.mineEvidence);
-		buf.writeVarInt(value.observationEvidence);
 		buf.writeBoolean(value.localFileUnlocked);
 		buf.writeBoolean(value.riftLocated);
 		buf.writeVarInt(value.riftDx);
 		buf.writeVarInt(value.riftDz);
 		buf.writeVarInt(value.riftY);
-		buf.writeVarInt(value.endingVersion);
-		buf.writeVarInt(value.endingOutcome);
 		buf.writeBoolean(value.terminalCaptured);
 		buf.writeVarLong(value.gameTime);
 		buf.writeVarInt(value.unreadCount);
@@ -95,6 +87,10 @@ public record TerminalSnapshotPayload(
 		buf.writeUtf(value.objectiveId, 32);
 		buf.writeVarInt(value.objectiveProgress);
 		buf.writeVarInt(value.objectiveTarget);
+		buf.writeVarInt(value.objectiveIndex);
+		buf.writeBoolean(value.objectiveClaimable);
+		buf.writeUtf(value.objectiveRewardItem, 128);
+		buf.writeVarInt(value.objectiveRewardCount);
 	}
 
 	private static TerminalSnapshotPayload read(RegistryFriendlyByteBuf buf) {
@@ -102,12 +98,12 @@ public record TerminalSnapshotPayload(
 				buf.readVarInt(), buf.readVarInt(),
 				buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
 				buf.readBoolean(), buf.readVarInt(), buf.readVarInt(), buf.readBoolean(), buf.readVarInt(),
-				buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
-				buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
+				buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
 				buf.readBoolean(), buf.readBoolean(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
-				buf.readVarInt(), buf.readVarInt(), buf.readBoolean(),
+				buf.readBoolean(),
 				buf.readVarLong(), buf.readVarInt(), readLogs(buf), buf.readUtf(64), buf.readVarInt(),
-				readFiles(buf), buf.readVarInt(), buf.readUtf(32), buf.readVarInt(), buf.readVarInt());
+				readFiles(buf), buf.readVarInt(), buf.readUtf(32), buf.readVarInt(), buf.readVarInt(),
+				buf.readVarInt(), buf.readBoolean(), buf.readUtf(128), buf.readVarInt());
 	}
 
 	private static List<TerminalLogEntryPayload> readLogs(RegistryFriendlyByteBuf buf) {

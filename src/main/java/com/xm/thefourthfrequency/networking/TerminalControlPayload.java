@@ -26,6 +26,9 @@ public record TerminalControlPayload(int action, int value) implements CustomPac
 	public static final int SELECT_STRUCTURE_TARGET = 14;
 	public static final int SELECT_NEAREST_UNSTABLE = 15;
 	public static final int READ_HIDDEN_FILE = 16;
+	public static final int VISIT_PAGE = 17;
+	public static final int CLAIM_TASK_REWARD = 18;
+	public static final int DISMISS_NAVIGATION_COMPLETION = 19;
 
 	public static final Type<TerminalControlPayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(
 			TheFourthFrequency.MOD_ID, "terminal_control"));

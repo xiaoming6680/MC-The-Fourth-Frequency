@@ -31,7 +31,7 @@ public final class AlphaLoadSessionController {
 	private static final String JAVA_ICON_RESOURCE =
 			"/assets/thefourthfrequency/textures/gui/alpha_java_icon.png";
 	private static final String MENU_VERSION_TEXT = "Minecraft 1.0.0";
-	private static final String MENU_WINDOW_TITLE = "Minecraft Alpha 1.0.0";
+	private static final String MENU_WINDOW_TITLE = "Minecraft 1.0.0";
 	private static boolean initialized;
 	private static boolean active;
 	private static boolean corruptionEverPlayed;

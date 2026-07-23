@@ -3,9 +3,11 @@ package com.xm.thefourthfrequency.test;
 import com.xm.thefourthfrequency.content.ModItems;
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.networking.TerminalControlPayload;
+import com.xm.thefourthfrequency.state.NavigationState;
 import com.xm.thefourthfrequency.terminal.TerminalControlPolicy;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
 import com.xm.thefourthfrequency.terminal.TerminalResource;
+import com.xm.thefourthfrequency.terminal.TerminalStructureTarget;
 import com.xm.thefourthfrequency.terminal.TerminalTool;
 import com.xm.thefourthfrequency.terminal.TerminalToolService;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
@@ -14,11 +16,13 @@ import com.xm.thefourthfrequency.world.ZeroStationLayout;
 import com.xm.thefourthfrequency.world.ZeroStationService;
 import com.xm.thefourthfrequency.world.ResourceGuidanceService;
 import com.xm.thefourthfrequency.world.StoryProgressService;
+import com.xm.thefourthfrequency.world.StructureNavigationService;
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.SurvivalProgressService;
 import com.xm.thefourthfrequency.world.TerminalLifecycleService;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
+import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
@@ -140,7 +144,12 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		helper.getLevel().setBlockAndUpdate(orePosition, Blocks.IRON_ORE.defaultBlockState());
 		data.updateTerminalRecord(player.getUUID(), record -> {
 			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, SurvivalMilestone.MINED_LOGS.mask());
+			record.putInt(TerminalData.SELECTED_RESOURCE, TerminalResource.IRON.wireId());
+			record.putLong(TerminalData.MINERAL_SCAN_READY_GAME_TIME, player.level().getGameTime());
 			record.putString(TerminalData.TARGET_KIND, "iron");
+			// Keep this navigation/binding contract independent from the separately tested signature scene,
+			// whose intentional correction window temporarily disables every convenience tool.
+			record.putInt(TerminalData.SIGNATURE_SCENE_MASK, 0b111);
 		});
 		ResourceGuidanceService.requestRescan(player);
 		ResourceGuidanceService.updatePlayer(player);
@@ -166,7 +175,7 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		helper.assertTrue(TerminalToolService.startGuidance(player, TerminalTool.MINERALS.slot()),
 				"The explicit mineral navigation toggle must accept the located iron target");
 		var navigation = TerminalRuntimeService.navigationSnapshot(player);
-		helper.assertValueEqual(navigation.protocolVersion(), 5, "Navigation protocol version");
+		helper.assertValueEqual(navigation.protocolVersion(), 6, "Navigation protocol version");
 		helper.assertValueEqual(TerminalRuntimeService.navigationSyncTicks(), 4, "Navigation cadence");
 		helper.assertValueEqual(navigation.targetKind(), 1, "Iron navigation kind");
 		helper.assertTrue(navigation.located() && navigation.navigable(),
@@ -245,7 +254,7 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest
-	public void resourceSelectionIsExplicitAndIgnoresInventoryGuessing(GameTestHelper helper) {
+	public void mineralRefreshIsWeightedServerOnlyAndHasAThreeSecondCooldown(GameTestHelper helper) {
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
 		ServerPlayer miner = helper.makeMockServerPlayerInLevel();
 		data.updateTerminalRecord(miner.getUUID(), record -> record.putInt(
@@ -253,31 +262,80 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 				SurvivalMilestone.MINED_LOGS.mask() | SurvivalMilestone.RETURNED_NETHER.mask()));
 		miner.getInventory().add(new ItemStack(Items.IRON_INGOT));
 		miner.getInventory().add(new ItemStack(Items.IRON_PICKAXE));
-		helper.assertTrue(TerminalToolService.selectResource(miner, TerminalResource.DIAMOND.wireId()),
-				"Diamond must be an accepted fixed resource control value");
-		helper.assertValueEqual(data.terminalRecord(miner.getUUID()).orElseThrow()
-				.getStringOr(TerminalData.TARGET_KIND, ""), "diamond",
-				"The chosen diamond target must not be replaced by an inventory guess");
-		helper.assertValueEqual(data.terminalRecord(miner.getUUID()).orElseThrow()
-				.getIntOr(TerminalData.ACTIVE_GUIDANCE_TOOL, TerminalToolService.NO_TOOL),
-				TerminalToolService.NO_TOOL, "Choosing a target must wait for the separate navigation toggle");
-		helper.assertTrue(TerminalToolService.startGuidance(miner, TerminalTool.MINERALS.slot()),
-				"The single navigation toggle can start the chosen resource target");
+		helper.assertFalse(TerminalToolService.selectResource(miner, TerminalResource.DIAMOND.wireId()),
+				"Clients can no longer force a mineral category");
+		helper.assertTrue(TerminalToolService.requestRescan(miner),
+				"The unlocked mineral tool accepts one authoritative refresh");
+		var refreshed = data.terminalRecord(miner.getUUID()).orElseThrow();
+		TerminalResource selected = TerminalResource.fromWire(
+				refreshed.getIntOr(TerminalData.SELECTED_RESOURCE, TerminalResource.NONE.wireId()));
+		helper.assertTrue(Set.of(TerminalResource.IRON, TerminalResource.COAL,
+				TerminalResource.GOLD, TerminalResource.DIAMOND).contains(selected),
+				"Refresh must select one of the four published weighted categories");
+		helper.assertValueEqual(refreshed.getLongOr(TerminalData.MINERAL_SCAN_READY_GAME_TIME, 0L)
+				- miner.level().getGameTime(), 60L, "Refresh must create an exact three-second probe window");
+		helper.assertFalse(refreshed.getBooleanOr(TerminalData.TARGET_LOCATED, false),
+				"The previous concrete ore target must be hidden during the probe window");
+		helper.assertFalse(TerminalToolService.requestRescan(miner),
+				"The server rejects another refresh during the three-second cooldown");
+		helper.assertFalse(TerminalToolService.startGuidance(miner, TerminalTool.MINERALS.slot()),
+				"Mineral guidance must stay unavailable until a concrete ore block is located");
+		helper.succeed();
+	}
 
-		ServerPlayer crafter = helper.makeMockServerPlayerInLevel();
-		data.updateTerminalRecord(crafter.getUUID(), record -> {
-			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK,
-					SurvivalMilestone.MINED_LOGS.mask() | SurvivalMilestone.IRON.mask());
-			record.putLong(TerminalData.GUIDANCE_STALLED_TICKS, 6_000L);
+	@GameTest
+	public void structureNavigationCompletesWithinFiftyBlocksAndBecomesAPersistentPrompt(GameTestHelper helper) {
+		ServerPlayer player = helper.makeMockServerPlayerInLevel();
+		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
+		BlockPos destination = player.blockPosition().offset(30, 200, 40);
+		String dimension = player.level().dimension().identifier().toString();
+		data.updateTerminalRecord(player.getUUID(), record -> {
+			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, SurvivalMilestone.MINED_LOGS.mask());
+			record.putInt(TerminalData.ACTIVE_GUIDANCE_TOOL, TerminalTool.NAVIGATION.slot());
+			new NavigationState(TerminalStructureTarget.VILLAGE.id(), "", true,
+					TerminalStructureTarget.VILLAGE.id(), destination.asLong(), dimension,
+					player.level().getGameTime()).writeTo(record);
 		});
-		crafter.getInventory().add(new ItemStack(Items.IRON_INGOT));
-		helper.assertTrue(TerminalToolService.selectResource(crafter, TerminalResource.REDSTONE.wireId()),
-				"Redstone must be an accepted fixed resource control value");
-		helper.assertValueEqual(data.terminalRecord(crafter.getUUID()).orElseThrow()
-				.getStringOr(TerminalData.TARGET_KIND, ""), "redstone",
-				"The chosen redstone target must not be replaced by an inventory guess");
-		helper.assertFalse(TerminalToolService.selectResource(crafter, TerminalResource.NONE.wireId()),
-				"The non-resource snapshot sentinel must be rejected as a control value");
+
+		StructureNavigationService.updatePlayer(player);
+		var completed = data.terminalRecord(player.getUUID()).orElseThrow();
+		helper.assertValueEqual(completed.getIntOr(TerminalData.ACTIVE_GUIDANCE_TOOL, -1),
+				TerminalToolService.NO_TOOL, "Arrival must stop structure guidance");
+		helper.assertFalse(NavigationState.read(completed).located(),
+				"The completed destination must leave the active navigation state");
+		helper.assertTrue(completed.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_ACTIVE, false),
+				"Arrival must leave a persistent completion card");
+		helper.assertTrue(completed.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_UNREAD, false),
+				"The carried terminal must enter its prompt style until opened");
+		helper.assertTrue((completed.getIntOr(TerminalData.COMPLETED_STRUCTURE_TARGETS_MASK, 0)
+				& TerminalStructureTarget.bit(TerminalStructureTarget.VILLAGE)) != 0,
+				"The arrived structure type must be persisted as completed");
+		helper.assertTrue((StructureNavigationService.availableTargetsMask(player, completed)
+				& TerminalStructureTarget.bit(TerminalStructureTarget.VILLAGE)) == 0,
+				"A completed destination must not reappear in navigation candidates");
+		var snapshot = TerminalToolService.snapshot(player, TerminalTool.NAVIGATION.slot());
+		helper.assertTrue(snapshot.navigationCompletionAvailable(),
+				"The home toolbar snapshot must keep the completion card available");
+		helper.assertTrue(snapshot.navigationCompletionDirection() >= 0
+				&& snapshot.navigationCompletionDirection() <= 3,
+				"The completion prompt must use one of the four player-relative sides");
+		var nether = helper.getLevel().getServer().getLevel(Level.NETHER);
+		helper.assertTrue(nether != null, "Nether level must exist for dimension-specific targets");
+		helper.assertTrue(player.teleportTo(nether, 0.5, 64.0, 0.5, Set.of(), 0.0F, 0.0F, true),
+				"Dimension-specific navigation fixture");
+		var netherRecord = data.terminalRecord(player.getUUID()).orElseThrow();
+		int netherTargets = StructureNavigationService.availableTargetsMask(player, netherRecord);
+		helper.assertTrue((netherTargets & TerminalStructureTarget.bit(TerminalStructureTarget.FORTRESS)) != 0,
+				"Entering the Nether must immediately offer a fortress");
+		helper.assertTrue((netherTargets & TerminalStructureTarget.bit(TerminalStructureTarget.VILLAGE)) == 0,
+				"Overworld structures must not leak into the Nether target list");
+		var end = helper.getLevel().getServer().getLevel(Level.END);
+		helper.assertTrue(end != null, "End level must exist for exclusion verification");
+		helper.assertTrue(player.teleportTo(end, 0.5, 64.0, 0.5, Set.of(), 0.0F, 0.0F, true),
+				"End exclusion fixture");
+		helper.assertValueEqual(StructureNavigationService.availableTargetsMask(
+				player, data.terminalRecord(player.getUUID()).orElseThrow()), 0,
+				"The End must not expose structure-navigation candidates");
 		helper.succeed();
 	}
 
@@ -294,26 +352,26 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 			record.putString(TerminalData.HOME_DIMENSION, dimension);
 			record.putLong(TerminalData.LAST_PORTAL_POSITION, portal.asLong());
 			record.putString(TerminalData.LAST_PORTAL_DIMENSION, dimension);
-			record.putInt(TerminalData.EYE_SAMPLE_COUNT, 2);
+			record.putInt(TerminalData.EYE_SAMPLE_COUNT, SurvivalProgressService.REQUIRED_EYE_SAMPLES);
 			record.putLong(TerminalData.STRONGHOLD_POSITION, stronghold.asLong());
 			record.putString(TerminalData.STRONGHOLD_DIMENSION, dimension);
 		});
 		var snapshot = TerminalToolService.snapshot(player, TerminalTool.HOME.slot());
-		helper.assertValueEqual(snapshot.protocolVersion(), 3, "Independent tool snapshot protocol");
-		helper.assertTrue(snapshot.homeKnown() && snapshot.homeSameDimension(), "Saved home must be real and local");
+		helper.assertValueEqual(snapshot.protocolVersion(), 4, "Independent tool snapshot protocol");
+		helper.assertFalse(snapshot.homeKnown(),
+				"Legacy manual home coordinates must not replace the player's real respawn point");
 		helper.assertTrue(snapshot.portalKnown() && snapshot.portalSameDimension(), "Portal arrival must be real and local");
 		helper.assertValueEqual(snapshot.weather(), player.level().isThundering() ? 2
 				: player.level().isRaining() ? 1 : 0, "Tool weather must match the server level");
-		helper.assertValueEqual(snapshot.eyeSampleCount(), 2, "Eye sample count");
+		helper.assertValueEqual(snapshot.eyeSampleCount(), SurvivalProgressService.REQUIRED_EYE_SAMPLES,
+				"Eye sample count");
 		helper.assertTrue(snapshot.strongholdKnown() && snapshot.strongholdMaxDistance()
-				> snapshot.strongholdMinDistance(), "Two samples must yield a bounded, non-exact range");
+				> snapshot.strongholdMinDistance(), "Three samples must yield a bounded, non-exact range");
 		helper.assertTrue(Math.hypot(snapshot.strongholdDx(), snapshot.strongholdDz()) < 150.0D,
 				"The client bearing must be a direction vector, not the exact stronghold coordinate delta");
 
-		helper.assertTrue(TerminalToolService.startGuidance(player, TerminalTool.HOME.slot()),
-				"Known home can control the compass");
 		helper.assertTrue(TerminalToolService.startGuidance(player, TerminalTool.PORTAL.slot()),
-				"A new tool can replace the compass owner");
+				"A real portal arrival can control the compass");
 		var replaced = data.terminalRecord(player.getUUID()).orElseThrow();
 		helper.assertValueEqual(replaced.getIntOr(TerminalData.ACTIVE_GUIDANCE_TOOL, -1),
 				TerminalTool.PORTAL.slot(), "Exactly one compass owner remains");

@@ -1,5 +1,7 @@
 package com.xm.thefourthfrequency.terminal;
 
+import com.xm.thefourthfrequency.pursuit.PursuitProgressPolicy;
+
 public final class TerminalControlPolicy {
 	public static final int DEFAULT_TUNING = 50;
 	public static final int RECEIVER_LOCK_RADIUS = 2;
@@ -33,6 +35,10 @@ public final class TerminalControlPolicy {
 
 	public static int visualStage(int plotStage, int bodyStage) {
 		return bodyStage >= 3 ? 2 : plotStage >= 3 ? 1 : 0;
+	}
+
+	public static int pursuitVisualStage(int resolvedChases, int allowedForm, int anomalyStage) {
+		return PursuitProgressPolicy.terminalVisualStage(resolvedChases, allowedForm, anomalyStage);
 	}
 
 	public enum Mode {

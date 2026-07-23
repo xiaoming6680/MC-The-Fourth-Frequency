@@ -9,22 +9,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class TerminalGuidancePolicyTest {
 	@Test
-	void resourceTargetsAreDisclosedOneLayerAtATime() {
+	void refreshCanChooseEveryPublishedMineralAsSoonAsTheToolUnlocks() {
 		int logs = SurvivalMilestone.MINED_LOGS.mask();
-		int iron = logs | SurvivalMilestone.IRON.mask();
-
 		int initial = TerminalGuidancePolicy.availableResourcesMask(logs, 0);
 		assertTrue(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.IRON));
-		assertFalse(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.REDSTONE));
-		assertFalse(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.DIAMOND));
-
-		int firstHint = TerminalGuidancePolicy.availableResourcesMask(iron, 1);
-		assertTrue(TerminalGuidancePolicy.resourceAvailable(firstHint, TerminalResource.DIAMOND));
-		assertFalse(TerminalGuidancePolicy.resourceAvailable(firstHint, TerminalResource.REDSTONE));
-
-		int secondHint = TerminalGuidancePolicy.availableResourcesMask(iron, 2);
-		assertTrue(TerminalGuidancePolicy.resourceAvailable(secondHint, TerminalResource.DIAMOND));
-		assertTrue(TerminalGuidancePolicy.resourceAvailable(secondHint, TerminalResource.REDSTONE));
+		assertTrue(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.COAL));
+		assertTrue(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.GOLD));
+		assertTrue(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.DIAMOND));
+		assertFalse(TerminalGuidancePolicy.resourceAvailable(0, TerminalResource.IRON));
+		assertFalse(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.NONE));
 	}
 
 	@Test

@@ -29,9 +29,6 @@ public final class DebugPanelScreen extends Screen {
 	private static final int BUTTON_GAP = 6;
 	private static final int ANOMALY_INFO_HEIGHT = 58;
 	private static final int ANOMALY_ROW_HEIGHT = 26;
-	private static final int ENDING_GROUP_TITLE_HEIGHT = 14;
-	private static final int ENDING_ROW_HEIGHT = 24;
-	private static final int ENDING_GROUP_GAP = 8;
 
 	private static final int OVERLAY = 0xCC05090B;
 	private static final int PANEL = 0xFF10181B;
@@ -49,27 +46,12 @@ public final class DebugPanelScreen extends Screen {
 
 	private static final List<String> ANOMALIES = AnomalyCatalog.definitions().stream()
 			.map(value -> value.id()).toList();
-	private static final List<ActionSpec> ALTAR_ACTIONS = List.of(
-			new ActionSpec("已找到祭坛", "altar_state", "", 1, false),
-			new ActionSpec("开始祭坛战", "altar_state", "", 2, false),
-			new ActionSpec("装置剩 1 个", "altar_state", "", 3, false),
-			new ActionSpec("重置祭坛", "altar_state", "", 0, true));
-	private static final List<ActionSpec> ENDING_ACTIONS = List.of(
-			new ActionSpec("战斗中", "ending_state", "", 0, true),
-			new ActionSpec("未读真相结局", "ending_state", "", 1, true),
-			new ActionSpec("保护失败结局", "ending_state", "", 2, true),
-			new ActionSpec("保护成功结局", "ending_state", "", 3, true));
-	private static final List<ActionSpec> BOSS_ACTIONS = List.of(
-			new ActionSpec("生命 25%", "boss_health", "", 25, false),
-			new ActionSpec("生命 100%", "boss_health", "", 100, false));
 
-	private static PageMemory pageMemory = new PageMemory(0, 0, 0);
+	private static PageMemory pageMemory = new PageMemory(0, 0);
 	private DebugStatusPayload status;
 	private Section section;
 	private int anomalyScrollRow;
 	private int anomalyMaxScrollRow;
-	private int endingScroll;
-	private int endingMaxScroll;
 	private Pending pending;
 
 	public DebugPanelScreen(DebugStatusPayload status) {
@@ -77,7 +59,6 @@ public final class DebugPanelScreen extends Screen {
 		this.status = status;
 		this.section = Section.values()[Math.clamp(pageMemory.sectionIndex, 0, Section.values().length - 1)];
 		this.anomalyScrollRow = Math.max(0, pageMemory.anomalyScrollRow);
-		this.endingScroll = Math.max(0, pageMemory.endingScroll);
 	}
 
 	public void update(DebugStatusPayload payload) {
@@ -97,7 +78,6 @@ public final class DebugPanelScreen extends Screen {
 			case OVERVIEW -> { }
 			case PROGRESS -> buildProgressActions(layout);
 			case ANOMALIES -> buildAnomalyActions(layout);
-			case ENDING -> buildEndingActions(layout);
 		}
 		buildFooterActions(layout);
 	}
@@ -108,10 +88,6 @@ public final class DebugPanelScreen extends Screen {
 		anomalyMaxScrollRow = Math.max(0, ANOMALIES.size() - visibleRows);
 		anomalyScrollRow = Math.clamp(anomalyScrollRow, 0, anomalyMaxScrollRow);
 
-		int columns = endingColumns(layout);
-		int totalHeight = endingContentHeight(columns);
-		endingMaxScroll = Math.max(0, totalHeight - layout.contentHeight());
-		endingScroll = Math.clamp(endingScroll, 0, endingMaxScroll);
 	}
 
 	private void buildNavigation(Layout layout) {
@@ -182,31 +158,6 @@ public final class DebugPanelScreen extends Screen {
 		}
 	}
 
-	private void buildEndingActions(Layout layout) {
-		int columns = endingColumns(layout);
-		int y = layout.contentTop - endingScroll;
-		y = buildEndingGroup(layout, y, columns, ALTAR_ACTIONS);
-		y += ENDING_GROUP_GAP;
-		y = buildEndingGroup(layout, y, columns, ENDING_ACTIONS);
-		y += ENDING_GROUP_GAP;
-		buildEndingGroup(layout, y, columns, BOSS_ACTIONS);
-	}
-
-	private int buildEndingGroup(Layout layout, int groupTop, int columns, List<ActionSpec> actions) {
-		int availableWidth = layout.contentWidth() - (endingMaxScroll > 0 ? 8 : 0);
-		int buttonWidth = (availableWidth - BUTTON_GAP * (columns - 1)) / columns;
-		int buttonsTop = groupTop + ENDING_GROUP_TITLE_HEIGHT;
-		for (int index = 0; index < actions.size(); index++) {
-			int row = index / columns;
-			int column = index % columns;
-			int x = layout.contentLeft + column * (buttonWidth + BUTTON_GAP);
-			int y = buttonsTop + row * ENDING_ROW_HEIGHT;
-			if (y >= layout.contentTop && y + BUTTON_HEIGHT <= layout.contentBottom)
-				actionButton(x, y, buttonWidth, actions.get(index));
-		}
-		return groupTop + endingGroupHeight(actions.size(), columns);
-	}
-
 	private void actionButton(int x, int y, int width, ActionSpec action) {
 		addRenderableWidget(Button.builder(Component.literal(action.label), ignored -> {
 			if (action.confirm) {
@@ -261,7 +212,6 @@ public final class DebugPanelScreen extends Screen {
 			case OVERVIEW -> renderOverview(graphics, layout);
 			case PROGRESS -> renderProgress(graphics, layout);
 			case ANOMALIES -> renderAnomalies(graphics, layout);
-			case ENDING -> renderEnding(graphics, layout);
 		}
 		renderFooter(graphics, layout);
 
@@ -307,9 +257,9 @@ public final class DebugPanelScreen extends Screen {
 						"等级 " + status.anomalyTier() + " / " + status.anomalyCeiling() + "  ·  热度 " + status.anomalyHeat() + "%",
 						"自动触发：" + (status.anomaliesSuspended() ? "停止" : "运行") + "  ·  下次 " + status.nextSeconds() + " 秒"));
 		y += cardHeight + gap;
-		String boss = status.bossAlive() ? status.bossHealth() + " / " + status.bossMaxHealth() : "未生成";
-		drawCard(graphics, layout.contentLeft, y, layout.contentWidth(), cardHeight, "终局",
-				List.of("结局：" + DebugNames.ending(status.ending()), "最终怪物：" + boss,
+		drawCard(graphics, layout.contentLeft, y, layout.contentWidth(), cardHeight, "构建与文件",
+				List.of("文件：" + status.unlockedFiles() + " / " + status.discoveredFiles(),
+						"身体构建：" + status.bodyProgress() + "  ·  阶段 " + status.bodyStage(),
 						"崩坏等级：" + status.decayStage() + (status.decayAuto() ? "（自动）" : "（手动）")));
 	}
 
@@ -358,34 +308,6 @@ public final class DebugPanelScreen extends Screen {
 		}
 		renderScrollbar(graphics, layout.contentRight - 5, listTop + 2, Math.max(0, listHeight - 4),
 				visibleRows, ANOMALIES.size(), anomalyScrollRow, anomalyMaxScrollRow);
-	}
-
-	private void renderEnding(GuiGraphics graphics, Layout layout) {
-		int columns = endingColumns(layout);
-		int y = layout.contentTop - endingScroll;
-		graphics.enableScissor(layout.contentLeft, layout.contentTop, layout.contentRight, layout.contentBottom);
-		y = renderEndingGroup(graphics, layout, y, columns, "祭坛", ALTAR_ACTIONS.size());
-		y += ENDING_GROUP_GAP;
-		y = renderEndingGroup(graphics, layout, y, columns, "结局", ENDING_ACTIONS.size());
-		y += ENDING_GROUP_GAP;
-		renderEndingGroup(graphics, layout, y, columns,
-				"最终怪物 · " + (status.bossAlive() ? status.bossHealth() + " / " + status.bossMaxHealth() : "未生成"),
-				BOSS_ACTIONS.size());
-		graphics.disableScissor();
-		if (endingMaxScroll > 0) renderScrollbar(graphics, layout.contentRight - 4, layout.contentTop + 2,
-				layout.contentHeight() - 4, layout.contentHeight(), layout.contentHeight() + endingMaxScroll,
-				endingScroll, endingMaxScroll);
-	}
-
-	private int renderEndingGroup(GuiGraphics graphics, Layout layout, int groupTop, int columns,
-			String label, int actionCount) {
-		int height = endingGroupHeight(actionCount, columns);
-		graphics.fill(layout.contentLeft, groupTop, layout.contentRight - (endingMaxScroll > 0 ? 8 : 0),
-				groupTop + height, CARD);
-		graphics.fill(layout.contentLeft, groupTop, layout.contentLeft + 3, groupTop + height, ACCENT);
-		graphics.drawString(font, Component.literal(label), layout.contentLeft + 9, groupTop + 3,
-				ACCENT_BRIGHT, false);
-		return groupTop + height;
 	}
 
 	private void drawCard(GuiGraphics graphics, int x, int y, int width, int height,
@@ -445,13 +367,6 @@ public final class DebugPanelScreen extends Screen {
 			rebuildWidgets();
 			return true;
 		}
-		if (section == Section.ENDING && inside(mouseX, mouseY, layout.contentLeft, layout.contentTop,
-				layout.contentRight, layout.contentBottom) && endingMaxScroll > 0) {
-			endingScroll = Math.clamp(endingScroll + delta * ENDING_ROW_HEIGHT, 0, endingMaxScroll);
-			rememberPage();
-			rebuildWidgets();
-			return true;
-		}
 		return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
 	}
 
@@ -490,21 +405,6 @@ public final class DebugPanelScreen extends Screen {
 		return layout.contentTop + ANOMALY_INFO_HEIGHT;
 	}
 
-	private int endingColumns(Layout layout) {
-		return layout.contentWidth() >= 360 ? 2 : 1;
-	}
-
-	private int endingContentHeight(int columns) {
-		return endingGroupHeight(ALTAR_ACTIONS.size(), columns) + ENDING_GROUP_GAP
-				+ endingGroupHeight(ENDING_ACTIONS.size(), columns) + ENDING_GROUP_GAP
-				+ endingGroupHeight(BOSS_ACTIONS.size(), columns);
-	}
-
-	private int endingGroupHeight(int actionCount, int columns) {
-		int rows = (actionCount + columns - 1) / columns;
-		return ENDING_GROUP_TITLE_HEIGHT + rows * ENDING_ROW_HEIGHT;
-	}
-
 	private String fit(String value, int maxWidth) {
 		if (maxWidth <= 0) return "";
 		if (font.width(value) <= maxWidth) return value;
@@ -539,7 +439,7 @@ public final class DebugPanelScreen extends Screen {
 	}
 
 	private void rememberPage() {
-		pageMemory = new PageMemory(section.ordinal(), anomalyScrollRow, endingScroll);
+		pageMemory = new PageMemory(section.ordinal(), anomalyScrollRow);
 	}
 
 	public int sectionCountForTesting() { return Section.values().length; }
@@ -550,14 +450,14 @@ public final class DebugPanelScreen extends Screen {
 	public String statusMessageForTesting() { return status.message(); }
 
 	private enum Section {
-		OVERVIEW("总览"), PROGRESS("主线"), ANOMALIES("异象"), ENDING("终局");
+		OVERVIEW("总览"), PROGRESS("主线"), ANOMALIES("异象");
 		private final String label;
 		Section(String label) { this.label = label; }
 	}
 
 	private record ActionSpec(String label, String action, String target, int value, boolean confirm) { }
 	private record Pending(String label, String action, String target, int value) { }
-	private record PageMemory(int sectionIndex, int anomalyScrollRow, int endingScroll) { }
+	private record PageMemory(int sectionIndex, int anomalyScrollRow) { }
 	private record Modal(int left, int top, int width, int height) {
 		private int right() { return left + width; }
 		private int bottom() { return top + height; }

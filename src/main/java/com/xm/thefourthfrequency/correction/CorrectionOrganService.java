@@ -4,7 +4,7 @@ import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
 import com.xm.thefourthfrequency.content.ModEntities;
 import com.xm.thefourthfrequency.entity.ReworkEntity;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
-import com.xm.thefourthfrequency.ending.EndingState;
+import com.xm.thefourthfrequency.ending.FinaleRuntimePolicy;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -34,7 +34,7 @@ public final class CorrectionOrganService {
 	}
 
 	public static void updateServer(MinecraftServer server) {
-		if (!EndingState.activeAnomaliesAllowed(FrequencyWorldData.get(server))) {
+		if (!FinaleRuntimePolicy.backgroundSystemsAllowed(FrequencyWorldData.get(server))) {
 			return;
 		}
 		CorrectionTargetService.ensureActivated(server);

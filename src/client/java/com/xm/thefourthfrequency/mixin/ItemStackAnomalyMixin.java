@@ -1,7 +1,6 @@
 package com.xm.thefourthfrequency.mixin;
 
 import com.xm.thefourthfrequency.client_ui.AnomalyPresentationController;
-import com.xm.thefourthfrequency.client_ui.EndBossIntrusionClient;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
 import org.spongepowered.asm.mixin.Mixin;
@@ -14,8 +13,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public abstract class ItemStackAnomalyMixin {
 	@Inject(method = "getHoverName", at = @At("HEAD"), cancellable = true)
 	private void thefourthfrequency$misreadItemName(CallbackInfoReturnable<Component> callback) {
-		if (AnomalyPresentationController.isMisread((ItemStack) (Object) this)
-				|| EndBossIntrusionClient.isLocked((ItemStack) (Object) this))
+		if (AnomalyPresentationController.isMisread((ItemStack) (Object) this))
 			callback.setReturnValue(Component.literal("I SEE YOU...."));
 	}
 }

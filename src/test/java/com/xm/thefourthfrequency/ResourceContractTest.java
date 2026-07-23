@@ -8,7 +8,6 @@ import javax.imageio.ImageIO;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.zip.GZIPInputStream;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -71,9 +70,6 @@ final class ResourceContractTest {
 			assertEquals(512, image.getWidth());
 			assertEquals(256, image.getHeight());
 		}
-		var misread = ImageIO.read(ASSETS.resolve("textures/entity/misread_body.png").toFile());
-		assertEquals(128, misread.getWidth());
-		assertEquals(128, misread.getHeight());
 	}
 
 	@Test
@@ -215,8 +211,24 @@ final class ResourceContractTest {
 				zh.get("terminal.thefourthfrequency.file.select_prompt").getAsString());
 		assertEquals("文件", zh.get("terminal.thefourthfrequency.tab.files").getAsString());
 		assertEquals("文件", zh.get("terminal.thefourthfrequency.tab.log").getAsString());
-		assertEquals("在合适时机自动寻找最近的结构",
+		assertEquals("在合适时机自动探测最近的结构",
 				zh.get("terminal.thefourthfrequency.tool.navigation.summary").getAsString());
+		assertEquals("自动记录你的重生点",
+				zh.get("terminal.thefourthfrequency.tool.home.summary").getAsString());
+		assertEquals("自动寻找附近合适的矿物",
+				zh.get("terminal.thefourthfrequency.tool.minerals.summary").getAsString());
+		assertEquals("正在探测矿物",
+				zh.get("terminal.thefourthfrequency.tool.minerals.scanning").getAsString());
+		assertEquals("探测失败",
+				zh.get("terminal.thefourthfrequency.tool.minerals.not_found").getAsString());
+		assertEquals("探测",
+				zh.get("terminal.thefourthfrequency.tool.minerals.refresh").getAsString());
+		assertEquals("探测失败",
+				zh.get("message.thefourthfrequency.guidance.not_found").getAsString());
+		assertTrue(zh.has("message.thefourthfrequency.terminal.unread"));
+		assertTrue(zh.has("message.thefourthfrequency.task.completed"));
+		assertEquals("目的地在您%s侧，本次导航结束",
+				zh.get("terminal.thefourthfrequency.navigation.completed").getAsString());
 		assertEquals("开始导航", zh.get("terminal.thefourthfrequency.tool.guide").getAsString());
 		assertEquals("停止导航", zh.get("terminal.thefourthfrequency.tool.stop").getAsString());
 		for (var entry : zh.entrySet()) {
@@ -251,8 +263,8 @@ final class ResourceContractTest {
 		assertTrue(saveNotice.contains("不可逆") && saveNotice.contains("备份"));
 		assertEquals("存档提示",
 				zh.get("screen.thefourthfrequency.first_run_notice.section.effects").getAsString());
-		assertTrue(zh.get("screen.thefourthfrequency.first_run_notice.recovery_hint")
-				.getAsString().contains("-Dthefourthfrequency.safeMode=true"));
+		assertFalse(zh.has("screen.thefourthfrequency.first_run_notice.recovery_hint"));
+		assertFalse(en.has("screen.thefourthfrequency.first_run_notice.recovery_hint"));
 		for (String undisclosedOperation : new String[]{"窗口", "记事本", "摄像头", "壁纸", "视频"})
 			assertFalse(noticeCopy.contains(undisclosedOperation), undisclosedOperation);
 		String displayedNotice = noticeCopy + saveNotice
@@ -279,6 +291,9 @@ final class ResourceContractTest {
 				"src/main/java/com/xm/thefourthfrequency/terminal/TerminalPage.java"), StandardCharsets.UTF_8);
 		String tool = Files.readString(Path.of(
 				"src/main/java/com/xm/thefourthfrequency/terminal/TerminalTool.java"), StandardCharsets.UTF_8);
+		String runtime = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/terminal/TerminalRuntimeService.java"),
+				StandardCharsets.UTF_8);
 		for (String name : new String[]{"HOME", "TOOLS", "RECORDS", "FILES"}) assertTrue(page.contains(name));
 		for (String name : new String[]{"HOME", "MINERALS", "PORTAL", "WEATHER", "NAVIGATION", "STRONGHOLD"}) {
 			assertTrue(tool.contains(name));
@@ -294,6 +309,11 @@ final class ResourceContractTest {
 		assertTrue(screen.contains("receiverGameplayActive()"));
 		assertTrue(screen.contains("TerminalUiLayout.RECEIVER_SLIDER"));
 		assertTrue(screen.contains("displayedObjectiveFraction"));
+		assertTrue(screen.contains("drawTaskReward(graphics)"));
+		assertTrue(screen.contains("graphics.renderItem(reward"));
+		assertTrue(screen.contains("TerminalUiLayout.HOME_TASK.contains"));
+		assertTrue(screen.contains("TerminalControlPayload.CLAIM_TASK_REWARD"));
+		assertTrue(screen.contains("TerminalControlPayload.VISIT_PAGE"));
 		assertTrue(screen.contains("recommendedPrimaryTool()"));
 		assertTrue(screen.contains("HOME_TOOL_DETAIL"));
 		assertTrue(screen.contains("HOME_TOOL_CLOSE"));
@@ -302,11 +322,25 @@ final class ResourceContractTest {
 				"Locked tools must be rejected by the shared detail-opening boundary");
 		assertFalse(screen.contains("localLockedTool"),
 				"Locked tools must not retain a local-only detail state");
-		assertFalse(screen.contains("send(TerminalControlPayload.REQUEST_RESCAN"),
-				"Mineral refresh must not require a client button");
-		assertTrue(screen.contains("terminal.thefourthfrequency.tool.minerals.auto_refresh"));
+		assertTrue(screen.contains("send(TerminalControlPayload.REQUEST_RESCAN"),
+				"Mineral refresh must be an explicit server-authoritative button");
+		assertFalse(screen.contains("send(TerminalControlPayload.SELECT_RESOURCE"),
+				"The client must not offer manual mineral selection");
+		assertFalse(screen.contains("send(TerminalControlPayload.SET_HOME"),
+				"The client must not offer manual home storage");
+		assertTrue(screen.contains("terminal.thefourthfrequency.tool.minerals.refresh"));
+		assertFalse(screen.contains("terminal.thefourthfrequency.navigation.side_route"));
+		assertFalse(screen.contains("targets.add(selected)"),
+				"Selecting a destination must not move it into the first option slot");
+		assertTrue(screen.contains("target.sideRoute()"));
+		assertTrue(screen.contains("sideRouteGlitchActive(renderAge)"));
+		assertTrue(screen.contains("navigationNeedleFlashStartedAt = renderAge"));
+		assertTrue(screen.contains("mineralTargetLocated()"));
+		assertTrue(screen.contains("\".\".repeat(dots)"));
 		assertTrue(screen.contains("drawFittedLine(graphics, lineTwo"));
 		assertTrue(screen.contains("navigationOptionBounds"));
+		assertTrue(screen.contains("targets.size() >= 3"));
+		assertTrue(screen.contains("index < 3"));
 		assertTrue(screen.contains("TerminalControlPayload.MARK_RECORDS_READ"));
 		assertTrue(screen.contains("TerminalUiLayout.unreadFlashOn"));
 		assertTrue(screen.contains("Component.literal(\" [!]\")"));
@@ -315,6 +349,65 @@ final class ResourceContractTest {
 		assertTrue(screen.contains("TerminalUiLayout.FILE_LIST.contains"));
 		assertTrue(screen.contains("TerminalUiLayout.FILE_CONTENT.contains"));
 		assertFalse(screen.contains("FILE_GRID_COLUMNS"));
+		int markReadStart = runtime.indexOf("private static boolean markRecordsRead");
+		int markReadEnd = runtime.indexOf("private static boolean markHiddenFileRead", markReadStart);
+		assertTrue(markReadStart >= 0 && markReadEnd > markReadStart);
+		assertFalse(runtime.substring(markReadStart, markReadEnd).contains("synchronizeProjection"),
+				"Opening RECORDS must not rewrite the held terminal and restart its equip animation");
+	}
+
+	@Test
+	void terminalFeedbackUsesABoundedBottomFirstNoticeStackAndClearAttentionTone() throws Exception {
+		String hud = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/TerminalNoticeHud.java"),
+				StandardCharsets.UTF_8);
+		String networking = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/TerminalClientNetworking.java"),
+				StandardCharsets.UTF_8);
+		String commonNetworking = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/networking/TerminalNetworking.java"),
+				StandardCharsets.UTF_8);
+		String audio = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/TerminalClientAudio.java"),
+				StandardCharsets.UTF_8);
+		String targets = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/terminal/TerminalStructureTarget.java"),
+				StandardCharsets.UTF_8);
+		String taskService = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/terminal/TerminalTaskService.java"),
+				StandardCharsets.UTF_8);
+		String survivalProgress = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/world/SurvivalProgressService.java"),
+				StandardCharsets.UTF_8);
+		String metaFallback = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/meta_api/InGameMetaPlatformAdapter.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(hud.contains("MAX_VISIBLE = 4"));
+		assertTrue(hud.contains("ENTRIES.add(new NoticeEntry"));
+		assertTrue(hud.contains("entry.targetSlot++"),
+				"A new bottom entry must push existing entries upward");
+		assertTrue(hud.contains("exiting = ENTRIES.getLast()"),
+				"The bottom entry must be the first one to leave");
+		assertTrue(hud.contains("entry.targetSlot = Math.max(0, entry.targetSlot - 1)"),
+				"Remaining entries must fall after the bottom entry leaves");
+		assertTrue(hud.contains("ENTRIES.removeFirst()"),
+				"The visible stack must stay bounded during notification bursts");
+		assertTrue(networking.contains("TerminalNoticeHud.enqueue(payload.message(), payload.tone())"));
+		assertTrue(metaFallback.contains("TerminalNoticeHud.enqueue("));
+		assertFalse(metaFallback.contains("displayClientMessage("));
+		assertTrue(commonNetworking.contains("TerminalNoticePayload.TYPE"));
+		assertTrue(audio.contains("UI_TOAST_CHALLENGE_COMPLETE"));
+		assertTrue(audio.contains("NOTE_BLOCK_CHIME"));
+		assertTrue(hud.contains("taskComplete ? TASK_BACKGROUND : DEFAULT_BACKGROUND"),
+				"Task completion notices must use the dedicated green background");
+		assertTrue(taskService.contains("consumeCompletionAlert"));
+		assertTrue(taskService.contains("TerminalNoticeService.taskComplete(player)"));
+		assertTrue(survivalProgress.contains("public static final int REQUIRED_IRON = 12;"));
+		assertTrue(taskService.contains(
+				"new TaskDefinition(\"bring_iron\", SurvivalProgressService.REQUIRED_IRON, Items.TORCH, 24)"));
+		assertTrue(targets.contains("MINESHAFT(2, \"mineshaft\", true"));
+		assertTrue(targets.contains("TRIAL_CHAMBERS(3, \"trial_chambers\", true"));
+		assertTrue(targets.contains("BASTION(5, \"bastion\", true"));
 	}
 
 	@Test
@@ -340,14 +433,19 @@ final class ResourceContractTest {
 				"src/main/java/com/xm/thefourthfrequency/networking/TerminalControlPayload.java"), StandardCharsets.UTF_8);
 		String runtime = Files.readString(Path.of(
 				"src/main/java/com/xm/thefourthfrequency/terminal/TerminalRuntimeService.java"), StandardCharsets.UTF_8);
-		assertTrue(snapshot.contains("CURRENT_PROTOCOL_VERSION = 6"));
-		assertTrue(navigation.contains("CURRENT_PROTOCOL_VERSION = 5"));
-		assertTrue(toolSnapshot.contains("CURRENT_PROTOCOL_VERSION = 3"));
-		for (String action : List.of("SELECT_TOOL", "START_GUIDANCE", "STOP_GUIDANCE", "SELECT_RESOURCE",
-				"REQUEST_RESCAN", "SET_HOME", "MARK_RECORDS_READ", "READ_HIDDEN_FILE", "SELECT_STRUCTURE_TARGET",
-				"SELECT_NEAREST_UNSTABLE")) {
+		assertTrue(snapshot.contains("CURRENT_PROTOCOL_VERSION = 8"));
+		assertTrue(navigation.contains("CURRENT_PROTOCOL_VERSION = 6"));
+		assertTrue(toolSnapshot.contains("CURRENT_PROTOCOL_VERSION = 4"));
+		for (String action : List.of("SELECT_TOOL", "START_GUIDANCE", "STOP_GUIDANCE",
+				"REQUEST_RESCAN", "MARK_RECORDS_READ", "READ_HIDDEN_FILE", "SELECT_STRUCTURE_TARGET",
+				"SELECT_NEAREST_UNSTABLE", "DISMISS_NAVIGATION_COMPLETION", "VISIT_PAGE",
+				"CLAIM_TASK_REWARD")) {
 			assertTrue(control.contains(action));
 			assertTrue(runtime.contains("TerminalControlPayload." + action));
+		}
+		for (String retired : List.of("SELECT_RESOURCE", "SET_HOME")) {
+			assertTrue(control.contains(retired));
+			assertTrue(runtime.contains("case TerminalControlPayload." + retired + " -> { return; }"));
 		}
 		assertTrue(control.contains("SET_AUTO_TUNING"), "Wire id 11 remains reserved for old clients");
 		assertFalse(runtime.contains("TerminalControlPayload.SET_AUTO_TUNING"));
@@ -433,7 +531,7 @@ final class ResourceContractTest {
 		}
 		assertTrue(mixins.contains("EndCrystalMixin") && mixins.contains("EndPortalBlockMixin")
 				&& mixins.contains("EnderEyeItemMixin") && mixins.contains("EnderDragonMixin")
-				&& mixins.contains("ServerPlayerDropMixin"));
+				&& !mixins.contains("ServerPlayerDropMixin"));
 	}
 
 	@Test
@@ -580,30 +678,6 @@ final class ResourceContractTest {
 	}
 
 	@Test
-	void everyFacilityOwnsTwoValidCompressedStructureVariants() throws Exception {
-		Path definitionsPath = Path.of("src/main/resources/data/thefourthfrequency/facilities/facilities.json");
-		var definitions = JsonParser.parseString(Files.readString(definitionsPath, StandardCharsets.UTF_8)).getAsJsonArray();
-		Set<String> templates = new HashSet<>();
-		for (var element : definitions) {
-			var variants = element.getAsJsonObject().getAsJsonArray("templates");
-			assertEquals(2, variants.size());
-			for (var variant : variants) {
-				String name = variant.getAsString();
-				assertTrue(templates.add(name), name);
-				Path path = Path.of("src/main/resources/data/thefourthfrequency/structure")
-						.resolve(name + ".nbt");
-				assertTrue(Files.isRegularFile(path), path.toString());
-				try (var stream = new GZIPInputStream(Files.newInputStream(path))) {
-					byte[] rootHeader = stream.readNBytes(3);
-					assertTrue(rootHeader.length == 3 && rootHeader[0] == 10 && rootHeader[1] == 0 && rootHeader[2] == 0,
-							path.toString());
-				}
-			}
-		}
-		assertEquals(10, templates.size());
-	}
-
-	@Test
 	void currentFragmentMainlineUsesVanillaStructuresWithoutAllocatingFacilities() throws Exception {
 		String fragments = Files.readString(Path.of(
 				"src/main/java/com/xm/thefourthfrequency/world/FragmentInvestigationService.java"),
@@ -649,13 +723,6 @@ final class ResourceContractTest {
 		assertTrue(fragmentInvestigation.contains("if (record.getIntOr(TerminalData.BAND_STAGE, 0) == 0) return false;"),
 				"Structure coordinates stay out of the signal log before the investigation gate");
 
-		String facilities = Files.readString(Path.of(
-				"src/main/java/com/xm/thefourthfrequency/facility/FacilityService.java"),
-				StandardCharsets.UTF_8);
-		String updateBody = facilities.substring(facilities.indexOf("public static void updateServer"),
-				facilities.indexOf("public static boolean unlockArchiveFromHiddenFiles"));
-		assertFalse(updateBody.contains("ensureAllocated("),
-				"New worlds must not allocate the five legacy facilities");
 		assertFalse(fragmentInvestigation.contains("unlockArchiveFromFragments"),
 				"Discovering all hidden files must not unlock the complete diary before they are read");
 	}
@@ -682,15 +749,16 @@ final class ResourceContractTest {
 	}
 
 	@Test
-	void debugPanelUsesMAndContainsFourSectionsAndScrollableAnomalies() throws Exception {
+	void debugPanelUsesMAndContainsThreeCurrentSectionsAndScrollableAnomalies() throws Exception {
 		String client = Files.readString(Path.of(
 				"src/client/java/com/xm/thefourthfrequency/client_ui/DebugPanelClient.java"), StandardCharsets.UTF_8);
 		String screen = Files.readString(Path.of(
 				"src/client/java/com/xm/thefourthfrequency/client_ui/DebugPanelScreen.java"), StandardCharsets.UTF_8);
 		assertTrue(client.contains("GLFW.GLFW_KEY_M"));
 		assertFalse(client.contains("GLFW.GLFW_KEY_F7"));
-		for (String section : new String[]{"总览", "主线", "异象", "终局"})
+		for (String section : new String[]{"总览", "主线", "异象"})
 			assertTrue(screen.contains(section), section);
+		assertFalse(screen.contains("ENDING(\"终局\")"));
 		for (String removed : new String[]{"local_file_prev", "local_facility_prev", "local_anomaly_prev",
 				"完成生存节点", "显示设施坐标", "解锁当前文件"})
 			assertFalse(screen.contains(removed), removed);
@@ -712,7 +780,7 @@ final class ResourceContractTest {
 		}
 		assertFalse(sounds.has("hostile_echo"));
 		assertFalse(sounds.has("composite_breach"));
-		for (String event : new String[]{"rework_joint", "misread_body", "misread_adaptation"}) {
+		for (String event : new String[]{"rework_joint"}) {
 			var definition = sounds.getAsJsonObject(event);
 			assertTrue(definition.has("subtitle"), event);
 			for (var sound : definition.getAsJsonArray("sounds")) {
@@ -1054,6 +1122,10 @@ final class ResourceContractTest {
 		String startupMixin = Files.readString(Path.of(
 				"src/client/java/com/xm/thefourthfrequency/mixin/MinecraftAlphaStartupMixin.java"),
 				StandardCharsets.UTF_8);
+		JsonObject enLang = JsonParser.parseString(Files.readString(
+				ASSETS.resolve("lang/en_us.json"), StandardCharsets.UTF_8)).getAsJsonObject();
+		JsonObject zhLang = JsonParser.parseString(Files.readString(
+				ASSETS.resolve("lang/zh_cn.json"), StandardCharsets.UTF_8)).getAsJsonObject();
 		assertTrue(controller.contains("PackActivationType.NORMAL"));
 		assertTrue(controller.contains("ClientPlayConnectionEvents.INIT"));
 		assertTrue(controller.contains("repository.setSelected(activePackOrder)"));
@@ -1068,7 +1140,15 @@ final class ResourceContractTest {
 		assertTrue(controller.contains("screenTicks >= AlphaLoadTimeline.GLITCH_START_TICK"));
 		assertTrue(controller.contains("retainFinalWindowTitle"));
 		assertTrue(controller.contains("MENU_VERSION_TEXT = \"Minecraft 1.0.0\""));
-		assertTrue(controller.contains("MENU_WINDOW_TITLE = \"Minecraft Alpha 1.0.0\""));
+		assertTrue(controller.contains("MENU_WINDOW_TITLE = \"Minecraft 1.0.0\""));
+		assertEquals("%s - Singleplayer World", enLang.get(
+				"window.thefourthfrequency.alpha_load.singleplayer").getAsString());
+		assertEquals("%s - Multiplayer", enLang.get(
+				"window.thefourthfrequency.alpha_load.multiplayer").getAsString());
+		assertEquals("%s - 单人世界", zhLang.get(
+				"window.thefourthfrequency.alpha_load.singleplayer").getAsString());
+		assertEquals("%s - 多人游戏", zhLang.get(
+				"window.thefourthfrequency.alpha_load.multiplayer").getAsString());
 		assertTrue(controller.contains("ConfigManager.loadClientState().alphaDowngradeComplete()"));
 		assertTrue(controller.contains("ConfigManager.updateClientState"));
 		assertTrue(controller.contains("client.screen instanceof TitleScreen"));
@@ -1103,6 +1183,8 @@ final class ResourceContractTest {
 		assertTrue(plan.indexOf("GOLDEN_DAYS_BASE_PACK_ID") < plan.indexOf("GOLDEN_DAYS_ALPHA_PACK_ID"));
 		assertTrue(packMixin.contains("selected.removeIf"));
 		assertTrue(packMixin.contains("unselected.removeIf"));
+		assertTrue(packMixin.contains("method = \"updateRepoSelectedList\""));
+		assertTrue(packMixin.contains("repository.getSelectedPacks()"));
 		assertTrue(loadingMixin.contains("SimpleSoundInstance.forUI(ModSounds.TERMINAL_FAULT"));
 		assertTrue(loadingMixin.contains("AlphaLoadTimeline.copiedFailureLines"));
 		assertTrue(loadingMixin.contains("reason == LevelLoadingScreen.Reason.OTHER"));

@@ -3,7 +3,7 @@ package com.xm.thefourthfrequency.state;
 import com.xm.thefourthfrequency.content.TerminalData;
 import net.minecraft.nbt.CompoundTag;
 
-/** Typed view of the stable schema-v4 story keys stored on a personal terminal. */
+/** Typed view of the current story keys stored on a personal terminal. */
 public record StoryState(
 		boolean bound,
 		int bandStage,
@@ -15,13 +15,11 @@ public record StoryState(
 		int preludeAnomalyMask,
 		boolean watcherWitnessed,
 		String proofRoute,
-		String facilityEvidence,
 		boolean localFileUnlocked,
 		boolean riftObserved,
 		boolean continuityLearned,
 		int bodyProgress,
-		int bodyStage,
-		int endingVersion
+		int bodyStage
 ) {
 	public StoryState {
 		bandStage = Math.clamp(bandStage, 0, 3);
@@ -29,10 +27,8 @@ public record StoryState(
 		calibratedBandsMask &= 0b111;
 		preludeAnomalyMask &= 0b1111;
 		proofRoute = safe(proofRoute, "none");
-		facilityEvidence = safe(facilityEvidence, "");
 		bodyProgress = Math.clamp(bodyProgress, 0, 1000);
 		bodyStage = Math.clamp(bodyStage, 0, 3);
-		endingVersion = Math.max(0, endingVersion);
 	}
 
 	public static StoryState read(CompoundTag tag) {
@@ -47,13 +43,11 @@ public record StoryState(
 				tag.getIntOr(TerminalData.PRELUDE_ANOMALY_MASK, 0),
 				tag.getBooleanOr(TerminalData.WATCHER_WITNESSED, false),
 				tag.getStringOr(TerminalData.PROOF_ROUTE, "none"),
-				tag.getStringOr(TerminalData.FACILITY_EVIDENCE, ""),
 				tag.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false),
 				tag.getBooleanOr(TerminalData.RIFT_OBSERVED, false),
 				tag.getBooleanOr(TerminalData.CONTINUITY_LEARNED, false),
 				tag.getIntOr(TerminalData.BODY_PROGRESS, 0),
-				tag.getIntOr(TerminalData.BODY_STAGE, 0),
-				tag.getIntOr(TerminalData.ENDING_VERSION, 0));
+				tag.getIntOr(TerminalData.BODY_STAGE, 0));
 	}
 
 	public void writeTo(CompoundTag tag) {
@@ -67,13 +61,11 @@ public record StoryState(
 		tag.putInt(TerminalData.PRELUDE_ANOMALY_MASK, preludeAnomalyMask);
 		tag.putBoolean(TerminalData.WATCHER_WITNESSED, watcherWitnessed);
 		tag.putString(TerminalData.PROOF_ROUTE, proofRoute);
-		tag.putString(TerminalData.FACILITY_EVIDENCE, facilityEvidence);
 		tag.putBoolean(TerminalData.LOCAL_FILE_UNLOCKED, localFileUnlocked);
 		tag.putBoolean(TerminalData.RIFT_OBSERVED, riftObserved);
 		tag.putBoolean(TerminalData.CONTINUITY_LEARNED, continuityLearned);
 		tag.putInt(TerminalData.BODY_PROGRESS, bodyProgress);
 		tag.putInt(TerminalData.BODY_STAGE, bodyStage);
-		tag.putInt(TerminalData.ENDING_VERSION, endingVersion);
 	}
 
 	public int preludeExposure() {

@@ -2,12 +2,15 @@ package com.xm.thefourthfrequency.client_ui;
 
 import com.xm.thefourthfrequency.audio.ModSounds;
 import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
+import com.xm.thefourthfrequency.networking.TerminalNoticePayload;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.AbstractTickableSoundInstance;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.RandomSource;
+import net.minecraft.util.Util;
 
 public final class TerminalClientAudio {
 	private static TuningLoop tuningLoop;
@@ -17,6 +20,8 @@ public final class TerminalClientAudio {
 	private static int anomalyPlays;
 	private static int noticeOpeningPlays;
 	private static int noticeStablePlays;
+	private static long nextAttentionMillis;
+	private static int attentionPlays;
 
 	private TerminalClientAudio() {
 	}
@@ -70,6 +75,18 @@ public final class TerminalClientAudio {
 		play(ModSounds.TERMINAL_ANOMALY, 1.0F, 0.58F);
 	}
 
+	public static void attention(int tone) {
+		long now = Util.getMillis();
+		if (now < nextAttentionMillis) return;
+		nextAttentionMillis = now + 300L;
+		attentionPlays++;
+		if (tone == TerminalNoticePayload.TONE_TASK_COMPLETE) {
+			play(SoundEvents.UI_TOAST_CHALLENGE_COMPLETE, 1.0F, 0.92F);
+		} else {
+			play(SoundEvents.NOTE_BLOCK_CHIME.value(), 1.18F, 0.84F);
+		}
+	}
+
 	private static void playContact(SoundEvent event, float pitch, float relativeVolume) {
 		Minecraft client = Minecraft.getInstance();
 		long now = client.level == null ? 0L : client.level.getGameTime();
@@ -96,6 +113,7 @@ public final class TerminalClientAudio {
 	public static int anomalyPlaysForTesting() { return anomalyPlays; }
 	public static int noticeOpeningPlaysForTesting() { return noticeOpeningPlays; }
 	public static int noticeStablePlaysForTesting() { return noticeStablePlays; }
+	public static int attentionPlaysForTesting() { return attentionPlays; }
 	public static void resetTuningForTesting() {
 		if (tuningLoop != null) tuningLoop.forceStop();
 		tuningLoop = null;

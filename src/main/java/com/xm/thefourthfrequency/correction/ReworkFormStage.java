@@ -10,4 +10,8 @@ public final class ReworkFormStage {
 	public static int forDismantleCount(int dismantleCount) {
 		return (int) Math.clamp((long) dismantleCount + 1L, MIN_STAGE, MAX_STAGE);
 	}
+
+	public static int forResolvedChases(int resolvedChases) {
+		return (int) Math.clamp((long) resolvedChases + 1L, MIN_STAGE, MAX_STAGE);
+	}
 }

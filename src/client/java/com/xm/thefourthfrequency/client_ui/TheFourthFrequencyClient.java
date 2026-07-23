@@ -9,8 +9,6 @@ import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.content.ModEntities;
 import com.xm.thefourthfrequency.client_render.ReworkBodyModel;
 import com.xm.thefourthfrequency.client_render.ReworkBodyRenderer;
-import com.xm.thefourthfrequency.client_render.MisreadBodyRenderer;
-import com.xm.thefourthfrequency.client_render.MisreadBodyModel;
 import com.xm.thefourthfrequency.client_render.WatcherRenderer;
 import com.xm.thefourthfrequency.client_render.WatcherModel;
 import com.xm.thefourthfrequency.client_render.WorldInterfaceModel;
@@ -40,8 +38,6 @@ public final class TheFourthFrequencyClient implements ClientModInitializer {
 		EntityModelLayerRegistry.registerModelLayer(ReworkBodyRenderer.STAGE_5_LAYER,
 				ReworkBodyModel::createStage5Layer);
 		EntityRendererRegistry.register(ModEntities.REWORK_BODY, ReworkBodyRenderer::new);
-		EntityModelLayerRegistry.registerModelLayer(MisreadBodyRenderer.MODEL_LAYER, MisreadBodyModel::createBodyLayer);
-		EntityRendererRegistry.register(ModEntities.MISREAD_BODY, MisreadBodyRenderer::new);
 		EntityModelLayerRegistry.registerModelLayer(WatcherRenderer.MODEL_LAYER, WatcherModel::createBodyLayer);
 		EntityRendererRegistry.register(ModEntities.WATCHER, WatcherRenderer::new);
 		EntityModelLayerRegistry.registerModelLayer(WorldInterfaceRenderer.MODEL_LAYER,
@@ -55,6 +51,7 @@ public final class TheFourthFrequencyClient implements ClientModInitializer {
 		FirstRunNoticeController.initialize();
 		MetaController.initialize();
 		TerminalClientNetworking.initialize();
+		TerminalNoticeHud.initialize();
 		WorldInterfaceClientNetworking.initialize();
 		WorldInterfacePresentationController.initialize();
 		WorldInterfaceHud.initialize();

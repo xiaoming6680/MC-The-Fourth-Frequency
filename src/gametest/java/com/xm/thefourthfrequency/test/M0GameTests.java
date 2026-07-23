@@ -26,7 +26,7 @@ public final class M0GameTests implements CustomTestMethodInvoker {
 	public void narrativeAudioIsRegisteredAndBounded(GameTestHelper helper) {
 		var sounds = java.util.List.of(ModSounds.EMPTY_VIEWPOINT, ModSounds.EMPTY_BASE,
 				ModSounds.EMPTY_EXPERIENCE, ModSounds.FOURTH_BAND, ModSounds.REWORK_JOINT,
-				ModSounds.MISREAD_BODY, ModSounds.TERMINATION);
+				ModSounds.ANOMALY_ECHO, ModSounds.WORLD_INTERFACE_SUMMON);
 		if (sounds.stream().map(BuiltInRegistries.SOUND_EVENT::getKey).distinct().count() != 7
 				|| sounds.stream().map(BuiltInRegistries.SOUND_EVENT::getKey)
 				.anyMatch(id -> !id.getNamespace().equals("thefourthfrequency"))) {

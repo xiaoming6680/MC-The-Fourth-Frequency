@@ -361,7 +361,7 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 		level.setBlockAndUpdate(state.invariantPositions.get(1), Blocks.PISTON.defaultBlockState());
 		level.setBlockAndUpdate(state.invariantPositions.get(2), Blocks.CHEST.defaultBlockState());
 		Container chest = (Container) level.getBlockEntity(state.invariantPositions.get(2));
-		chest.setItem(0, new ItemStack(ModItems.TERMINATION_SPIKE)); chest.setItem(1, new ItemStack(Items.DIAMOND, 20));
+		chest.setItem(0, new ItemStack(ModItems.OLD_TERMINAL)); chest.setItem(1, new ItemStack(Items.DIAMOND, 20));
 		player.getInventory().setItem(8, new ItemStack(Items.IRON_INGOT, 7));
 		state.invariantBlocks = state.invariantPositions.stream().collect(java.util.stream.Collectors.toMap(
 				pos -> pos, level::getBlockState, (a, b) -> a, LinkedHashMap::new));
@@ -617,7 +617,7 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 		for (var entry : fixture.invariantBlocks.entrySet()) assertBlock(level, entry.getKey(), entry.getValue(),
 				"local rule collapse changed a real block");
 		Container chest = (Container) level.getBlockEntity(fixture.invariantPositions.get(2));
-		if (chest == null || !chest.getItem(0).is(ModItems.TERMINATION_SPIKE) || chest.getItem(1).getCount() != 20
+		if (chest == null || !chest.getItem(0).is(ModItems.OLD_TERMINAL) || chest.getItem(1).getCount() != 20
 				|| player.getInventory().getItem(8).getCount() != 7)
 			throw new AssertionError("Local rule collapse changed container/redstone/inventory state");
 	}

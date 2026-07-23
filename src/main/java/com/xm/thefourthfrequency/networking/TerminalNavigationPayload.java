@@ -16,10 +16,9 @@ public record TerminalNavigationPayload(
 		int targetY,
 		float playerYaw
 ) implements CustomPacketPayload {
-	public static final int CURRENT_PROTOCOL_VERSION = 5;
+	public static final int CURRENT_PROTOCOL_VERSION = 6;
 	public static final int NONE = 0;
 	public static final int IRON = 1;
-	public static final int REDSTONE = 2;
 	public static final int DIAMOND = 3;
 	public static final int UNSTABLE_SIGNAL = 4;
 	public static final int HOME = 5;
@@ -31,6 +30,8 @@ public record TerminalNavigationPayload(
 	public static final int TRIAL_CHAMBERS = 11;
 	public static final int FORTRESS = 12;
 	public static final int BASTION = 13;
+	public static final int COAL = 14;
+	public static final int GOLD = 15;
 	public static final Type<TerminalNavigationPayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(
 			TheFourthFrequency.MOD_ID, "terminal_navigation"));
 	public static final StreamCodec<RegistryFriendlyByteBuf, TerminalNavigationPayload> CODEC = StreamCodec.of(
@@ -55,5 +56,9 @@ public record TerminalNavigationPayload(
 	@Override
 	public Type<? extends CustomPacketPayload> type() {
 		return TYPE;
+	}
+
+	public static boolean isMineral(int kind) {
+		return kind == IRON || kind == COAL || kind == GOLD || kind == DIAMOND;
 	}
 }

@@ -9,7 +9,7 @@ final class TerminalRecordPolicyTest {
 	@Test
 	void recordsKeepStoryEventsAndOnlyOneSummaryPerCandidateGroup() {
 		assertTrue(TerminalRecordPolicy.visibleInRecords("terminal_issued"));
-		assertTrue(TerminalRecordPolicy.visibleInRecords("facility_surface_shelter"));
+		assertTrue(TerminalRecordPolicy.visibleInRecords("fragment_shared_0"));
 		assertTrue(TerminalRecordPolicy.visibleInRecords("fragment_candidate_2_0"));
 		assertTrue(TerminalRecordPolicy.visibleInRecords("fragment_near_2"));
 		assertTrue(TerminalRecordPolicy.retainedInLog("fragment_candidate_2_1"));

@@ -2,7 +2,6 @@ package com.xm.thefourthfrequency.test;
 
 import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.content.TerminalData;
-import com.xm.thefourthfrequency.facility.FacilityService;
 import com.xm.thefourthfrequency.narrative.HiddenFilePolicy;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
 import com.xm.thefourthfrequency.narrative.WitnessArchive;
@@ -15,6 +14,7 @@ import com.xm.thefourthfrequency.terminal.TerminalTool;
 import com.xm.thefourthfrequency.terminal.TerminalToolService;
 import com.xm.thefourthfrequency.world.FragmentInvestigationService;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
+import com.xm.thefourthfrequency.world.RiftArchiveService;
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
@@ -51,7 +51,7 @@ public final class M4GameTests implements CustomTestMethodInvoker {
 		});
 
 		int legacyFacilitiesBefore = data.narrativeState().getListOrEmpty("facilities").size();
-		FacilityService.updateServer(helper.getLevel().getServer());
+		RiftArchiveService.updateForTesting(helper.getLevel().getServer());
 		helper.assertValueEqual(data.narrativeState().getListOrEmpty("facilities").size(), legacyFacilitiesBefore,
 				"The current mainline must not allocate predecessor facilities");
 
@@ -195,7 +195,9 @@ public final class M4GameTests implements CustomTestMethodInvoker {
 		BlockPos rift = BlockPos.of(data.terminalRecord(discoverer.getUUID()).orElseThrow()
 				.getLongOr(TerminalData.RIFT_POSITION, 0L));
 		loadFixtureChunks(helper, rift);
-		for (int iteration = 0; iteration < 8; iteration++) FacilityService.updateServer(helper.getLevel().getServer());
+		for (int iteration = 0; iteration < 8; iteration++) {
+			RiftArchiveService.updateForTesting(helper.getLevel().getServer());
+		}
 		var record = data.terminalRecord(discoverer.getUUID()).orElseThrow();
 		WitnessArchive archive = WitnessArchive.get();
 		helper.assertValueEqual(record.getIntOr(TerminalData.LOCAL_FILE_VERSION, 0), archive.version(),

@@ -2,14 +2,12 @@ package com.xm.thefourthfrequency.terminal;
 
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.correction.CorrectionState;
-import com.xm.thefourthfrequency.facility.FacilityService;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import com.xm.thefourthfrequency.world.TerminalLifecycleService;
 import com.xm.thefourthfrequency.world.FragmentInvestigationService;
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
-import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
@@ -17,16 +15,8 @@ import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 public final class TerminalSignalService {
-	private static final Map<String, String> FACILITY_FILES = Map.of(
-			"surface_shelter", "surface_shelter_record",
-			"field_observation", "field_observation_record",
-			"underground_mine_station", "underground_mine_record",
-			"abandoned_warehouse", "abandoned_warehouse_record",
-			"transport_node", "encrypted_witness_file");
 	private static boolean initialized;
 
 	private TerminalSignalService() { }
@@ -67,18 +57,6 @@ public final class TerminalSignalService {
 				ensureFile(tag, "maintenance_handoff", true, now, dayTime, fileNotifications);
 			if (tag.getBooleanOr(TerminalData.SECOND_CACHE_UNLOCKED, false))
 				ensureFile(tag, "recovered_fragment", true, now, dayTime, fileNotifications);
-			for (var entry : data.narrativeState().contains("facilities") ? FACILITY_FILES.entrySet() : Set.<Map.Entry<String, String>>of()) {
-				if (insideCompletedFacility(player, data, entry.getKey())) {
-					boolean unlocked = !entry.getKey().equals("transport_node")
-							|| tag.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false);
-					ensureFile(tag, entry.getValue(), unlocked, now, dayTime, fileNotifications);
-					String event = "facility_" + entry.getKey();
-					if (!TerminalSignalLog.containsType(tag, event)) {
-						append(tag, player, SignalBand.PUBLIC, event, 0, 1, true);
-						projectionChanged[0] = true;
-					}
-				}
-			}
 			projectionChanged[0] |= FragmentInvestigationService.synchronizeSharedFiles(tag, player, data, sharedReceipts);
 			projectionChanged[0] |= FragmentInvestigationService.ensureSignalMarkers(tag, player);
 			projectionChanged[0] |= FragmentInvestigationService.appendCandidateLogs(tag, player, data);
@@ -95,8 +73,8 @@ public final class TerminalSignalService {
 			if (SurvivalMilestone.THREW_EYE.present(
 					tag.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0)))
 				ensureFile(tag, "body_mapping_warning", true, now, dayTime, fileNotifications);
-			if (tag.getIntOr(TerminalData.ENDING_VERSION, 0) > 0)
-				ensureFile(tag, "permanent_aftermath_record", true, now, dayTime, fileNotifications);
+			if (tag.getBooleanOr(TerminalData.PORTAL_ROOM_FOUND, false))
+				ensureFile(tag, "world_interface_entry_record", true, now, dayTime, fileNotifications);
 
 			recordStageEvents(tag, player, projectionChanged);
 			if (!fileNotifications.isEmpty()) projectionChanged[0] = true;
@@ -106,13 +84,15 @@ public final class TerminalSignalService {
 			TerminalRuntimeService.synchronizeProjection(player);
 			TerminalRuntimeService.refresh(player);
 		}
-		for (String id : fileNotifications) player.displayClientMessage(
+		for (String id : fileNotifications) TerminalNoticeService.send(player,
 				Component.translatable("message.thefourthfrequency.file.discovered",
-						Component.translatable("terminal.thefourthfrequency.file." + id + ".title")), true);
-		for (FragmentInvestigationService.SharedReceipt receipt : sharedReceipts) player.displayClientMessage(
+						Component.translatable("terminal.thefourthfrequency.file." + id + ".title")));
+		for (FragmentInvestigationService.SharedReceipt receipt : sharedReceipts) TerminalNoticeService.send(player,
 				receipt.own() ? Component.translatable("message.thefourthfrequency.fragment.shared", receipt.fragment())
 						: Component.translatable("message.thefourthfrequency.fragment.received",
-							receipt.discovererName(), receipt.fragment()), true);
+							receipt.discovererName(), receipt.fragment()));
+		TerminalTaskService.notifyIfCompleted(player);
+		updateUnreadAlert(player, data);
 	}
 
 	public static void updatePlayerForTesting(ServerPlayer player) {
@@ -130,6 +110,23 @@ public final class TerminalSignalService {
 		data.updateTerminalRecord(player.getUUID(), tag -> append(tag, player, band, type, variant, severity, unread));
 		TerminalRuntimeService.synchronizeProjection(player);
 		TerminalRuntimeService.refresh(player);
+		updateUnreadAlert(player, data);
+	}
+
+	private static void updateUnreadAlert(ServerPlayer player, FrequencyWorldData data) {
+		boolean[] started = {false};
+		data.updateTerminalRecord(player.getUUID(), tag -> {
+			boolean hasUnread = TerminalSignalLog.unreadCount(tag) > 0
+					|| tag.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_UNREAD, false);
+			boolean latched = tag.getBooleanOr(TerminalData.UNREAD_ALERT_ACTIVE, false);
+			if (TerminalAttentionPolicy.unreadStarted(hasUnread, latched)) {
+				tag.putBoolean(TerminalData.UNREAD_ALERT_ACTIVE, true);
+				started[0] = true;
+			} else if (!hasUnread && latched) {
+				tag.putBoolean(TerminalData.UNREAD_ALERT_ACTIVE, false);
+			}
+		});
+		if (started[0]) TerminalNoticeService.unread(player);
 	}
 
 	private static void recordStageEvents(CompoundTag tag, ServerPlayer player, boolean[] changed) {
@@ -154,8 +151,6 @@ public final class TerminalSignalService {
 			changed[0] |= appendOnce(tag, player, SignalBand.UNKNOWN, "survival_eye", 0);
 		if (SurvivalMilestone.FOUND_STRONGHOLD.present(milestones))
 			changed[0] |= appendOnce(tag, player, SignalBand.UNKNOWN, "survival_stronghold", 0);
-		if (tag.getIntOr(TerminalData.ENDING_VERSION, 0) > 0)
-			changed[0] |= appendOnce(tag, player, SignalBand.UNKNOWN, "ending_recorded", 0);
 	}
 
 	private static boolean appendOnce(CompoundTag tag, ServerPlayer player, SignalBand band, String type, int variant) {
@@ -177,11 +172,4 @@ public final class TerminalSignalService {
 		if (TerminalFileState.discover(tag, id, now, dayTime, unlocked) && !existed) notifications.add(id);
 	}
 
-	private static boolean insideCompletedFacility(ServerPlayer player, FrequencyWorldData data, String id) {
-		if (player.level() != player.level().getServer().overworld()) return false;
-		CompoundTag state = FacilityService.facilityState(data, id).orElse(null);
-		if (state == null || !state.getBooleanOr("complete", false)) return false;
-		BlockPos origin = FacilityService.facilityPosition(data, id).orElse(null);
-		return origin != null && player.distanceToSqr(origin.getCenter()) <= 14.0D * 14.0D;
-	}
 }

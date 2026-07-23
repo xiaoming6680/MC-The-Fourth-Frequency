@@ -25,13 +25,8 @@ public final class TerminalGuidancePolicy {
 
 	public static int availableResourcesMask(int milestones, int hintTier) {
 		if (!SurvivalMilestone.MINED_LOGS.present(milestones)) return 0;
-		int mask = bit(TerminalResource.IRON);
-		if (SurvivalMilestone.RETURNED_NETHER.present(milestones)
-				|| SurvivalMilestone.IRON.present(milestones) && hintTier >= 1)
-			mask |= bit(TerminalResource.DIAMOND);
-		if (SurvivalMilestone.IRON.present(milestones) && hintTier >= 2)
-			mask |= bit(TerminalResource.REDSTONE);
-		return mask;
+		return bit(TerminalResource.IRON) | bit(TerminalResource.COAL)
+				| bit(TerminalResource.GOLD) | bit(TerminalResource.DIAMOND);
 	}
 
 	public static Recommendations recommendations(String objectiveId, int availableToolsMask,

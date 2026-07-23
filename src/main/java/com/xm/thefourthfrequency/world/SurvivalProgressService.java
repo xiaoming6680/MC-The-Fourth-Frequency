@@ -7,6 +7,7 @@ import com.xm.thefourthfrequency.correction.CorrectionState;
 import com.xm.thefourthfrequency.terminal.SignalBand;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
 import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
+import com.xm.thefourthfrequency.pursuit.PursuitDimensions;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -27,10 +28,13 @@ import java.util.List;
 
 /** Server-authoritative vanilla-survival milestones replacing the legacy timed body counter. */
 public final class SurvivalProgressService {
-	public static final int REQUIRED_WOOD = 7;
+	public static final int REQUIRED_WOOD = 12;
 	/** Stable compatibility alias for older tests and saved objective wording. */
 	public static final int REQUIRED_LOGS = REQUIRED_WOOD;
-	public static final int REQUIRED_BLAZE_RODS = 6;
+	public static final int REQUIRED_IRON = 12;
+	public static final int REQUIRED_BLAZE_RODS = 8;
+	public static final int REQUIRED_CRAFTED_EYES = 4;
+	public static final int REQUIRED_EYE_SAMPLES = 3;
 	private static final int SCENE_ANOMALY = 1;
 	private static final int SCENE_CORRECTION = 1 << 1;
 	private static final int SCENE_EXPLAINED = 1 << 2;
@@ -52,21 +56,23 @@ public final class SurvivalProgressService {
 	}
 
 	public static void updatePlayer(ServerPlayer player, FrequencyWorldData data) {
+		if (PursuitDimensions.isMirror(player.level())) return;
 		CompoundTag before = data.terminalRecord(player.getUUID()).orElse(null);
 		if (before == null) return;
 		int oldMask = before.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0);
 		int wood = Math.max(before.getIntOr(TerminalData.WOOD_MINED_COUNT, 0), collectedWood(player));
+		int iron = Math.max(before.getIntOr(TerminalData.IRON_SAMPLE_COUNT, 0), ironSamples(player));
 		int blazeRods = Math.max(before.getIntOr(TerminalData.BLAZE_ROD_SAMPLE_COUNT, 0), blazeRodSamples(player));
+		int craftedEyes = Math.max(before.getIntOr(TerminalData.CRAFTED_EYE_COUNT, 0), craftedEyeSamples(player));
 		int add = 0;
 		if (wood >= REQUIRED_WOOD) add |= SurvivalMilestone.MINED_LOGS.mask();
 		if (hasHome(player, before)) add |= SurvivalMilestone.HOME.mask();
-		if (hasAny(player, Items.RAW_IRON, Items.IRON_INGOT)) add |= SurvivalMilestone.IRON.mask();
+		if (iron >= REQUIRED_IRON) add |= SurvivalMilestone.IRON.mask();
 		if (preparedForNether(player)) add |= SurvivalMilestone.PREPARED_NETHER.mask();
 		if (blazeRods >= REQUIRED_BLAZE_RODS) add |= SurvivalMilestone.COLLECTED_BLAZE_RODS.mask();
-		if (hasAny(player, Items.ENDER_EYE)) add |= SurvivalMilestone.CRAFTED_EYE.mask();
+		if (craftedEyes >= REQUIRED_CRAFTED_EYES) add |= SurvivalMilestone.CRAFTED_EYE.mask();
 		if (before.getIntOr(TerminalData.EYE_SAMPLE_COUNT, 0) > 0) {
-			add |= SurvivalMilestone.CRAFTED_EYE.mask() | SurvivalMilestone.THREW_EYE.mask()
-					| SurvivalMilestone.COLLECTED_BLAZE_RODS.mask();
+			add |= SurvivalMilestone.THREW_EYE.mask();
 		}
 		if (nearRecordedStronghold(player, before)) add |= SurvivalMilestone.FOUND_STRONGHOLD.mask();
 		if (player.level().dimension() == Level.END) {
@@ -74,19 +80,26 @@ public final class SurvivalProgressService {
 		}
 		int newMask = oldMask | add;
 		if (newMask != oldMask || wood != before.getIntOr(TerminalData.WOOD_MINED_COUNT, 0)
-				|| blazeRods != before.getIntOr(TerminalData.BLAZE_ROD_SAMPLE_COUNT, 0)) {
+				|| iron != before.getIntOr(TerminalData.IRON_SAMPLE_COUNT, 0)
+				|| blazeRods != before.getIntOr(TerminalData.BLAZE_ROD_SAMPLE_COUNT, 0)
+				|| craftedEyes != before.getIntOr(TerminalData.CRAFTED_EYE_COUNT, 0)) {
 			data.updateTerminalRecord(player.getUUID(), tag -> {
 				tag.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, newMask);
 				tag.putInt(TerminalData.WOOD_MINED_COUNT, Math.clamp(wood, 0, REQUIRED_WOOD));
+				tag.putInt(TerminalData.IRON_SAMPLE_COUNT, Math.clamp(iron, 0, REQUIRED_IRON));
 				tag.putInt(TerminalData.BLAZE_ROD_SAMPLE_COUNT, Math.clamp(blazeRods, 0, REQUIRED_BLAZE_RODS));
+				tag.putInt(TerminalData.CRAFTED_EYE_COUNT,
+						Math.clamp(craftedEyes, 0, REQUIRED_CRAFTED_EYES));
 			});
 		}
 		CompoundTag current = data.terminalRecord(player.getUUID()).orElse(before);
 		maybeStartSignatureScene(player, data, current);
 		maybeExplainRecoveredTools(player, data, current);
+		TerminalRuntimeService.synchronizeAttentionProjection(player, data);
 	}
 
 	public static boolean mark(ServerPlayer player, SurvivalMilestone milestone) {
+		if (PursuitDimensions.isMirror(player.level())) return false;
 		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
 		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
 		if (record == null || milestone.present(record.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0))) return false;
@@ -97,6 +110,7 @@ public final class SurvivalProgressService {
 	}
 
 	public static void recordPortalTransition(ServerPlayer player, Level origin, Level destination) {
+		if (PursuitDimensions.isMirror(origin) || PursuitDimensions.isMirror(destination)) return;
 		if (origin.dimension() == Level.OVERWORLD && destination.dimension() == Level.NETHER) {
 			mark(player, SurvivalMilestone.ENTERED_NETHER);
 		} else if (origin.dimension() == Level.NETHER && destination.dimension() == Level.OVERWORLD) {
@@ -145,8 +159,21 @@ public final class SurvivalProgressService {
 				Math.max(craftedPowder / 2, (craftedEyes + 1) / 2)), 0, REQUIRED_BLAZE_RODS);
 	}
 
+	public static int ironSamples(ServerPlayer player) {
+		int pickedUp = player.getStats().getValue(Stats.ITEM_PICKED_UP, Items.RAW_IRON)
+				+ player.getStats().getValue(Stats.ITEM_PICKED_UP, Items.IRON_INGOT);
+		int carried = count(player, Items.RAW_IRON) + count(player, Items.IRON_INGOT);
+		return Math.clamp(Math.max(pickedUp, carried), 0, REQUIRED_IRON);
+	}
+
+	public static int craftedEyeSamples(ServerPlayer player) {
+		int crafted = player.getStats().getValue(Stats.ITEM_CRAFTED, Items.ENDER_EYE);
+		int accounted = count(player, Items.ENDER_EYE);
+		return Math.clamp(Math.max(crafted, accounted), 0, REQUIRED_CRAFTED_EYES);
+	}
+
 	private static boolean hasHome(ServerPlayer player, CompoundTag tag) {
-		return player.getRespawnConfig() != null || !tag.getStringOr(TerminalData.HOME_DIMENSION, "").isBlank();
+		return player.getRespawnConfig() != null;
 	}
 
 	private static boolean preparedForNether(ServerPlayer player) {
@@ -172,7 +199,7 @@ public final class SurvivalProgressService {
 	}
 
 	private static boolean nearRecordedStronghold(ServerPlayer player, CompoundTag tag) {
-		if (tag.getIntOr(TerminalData.EYE_SAMPLE_COUNT, 0) < 2) return false;
+		if (tag.getIntOr(TerminalData.EYE_SAMPLE_COUNT, 0) < REQUIRED_EYE_SAMPLES) return false;
 		if (!player.level().dimension().identifier().toString().equals(
 				tag.getStringOr(TerminalData.STRONGHOLD_DIMENSION, ""))) return false;
 		BlockPos target = BlockPos.of(tag.getLongOr(TerminalData.STRONGHOLD_POSITION, 0L));
@@ -198,7 +225,8 @@ public final class SurvivalProgressService {
 			appendOnce(tag, player, "signature_anomaly", trace, 2);
 			appendOnce(tag, player, "signature_correction", trace, 1);
 		});
-		player.displayClientMessage(Component.translatable("message.thefourthfrequency.signature.started"), true);
+		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+				Component.translatable("message.thefourthfrequency.signature.started"));
 		TerminalRuntimeService.synchronizeProjection(player);
 		TerminalRuntimeService.refresh(player);
 	}
@@ -238,7 +266,8 @@ public final class SurvivalProgressService {
 			tag.putLong(TerminalData.TOOLS_DISABLED_UNTIL, 0L);
 			appendOnce(tag, player, "signature_explained", position, 1);
 		});
-		player.displayClientMessage(Component.translatable("message.thefourthfrequency.signature.recovered"), true);
+		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+				Component.translatable("message.thefourthfrequency.signature.recovered"));
 		TerminalRuntimeService.synchronizeProjection(player);
 		TerminalRuntimeService.refresh(player);
 	}

@@ -43,31 +43,8 @@ public final class DebugNames {
 			case "overworld_fracture_record" -> "主世界裂缝日记";
 			case "continuity_report" -> "下界往返日记";
 			case "body_mapping_warning" -> "入口线索日记";
-			case "permanent_aftermath_record" -> "最后一页日记";
+			case "world_interface_entry_record" -> "世界接口入口记录";
 			default -> "未知文件";
-		};
-	}
-
-	public static String facility(String id) {
-		return switch (id) {
-			case "surface_shelter" -> "地表避难所";
-			case "field_observation" -> "野外观测点";
-			case "underground_mine_station" -> "地下矿站";
-			case "abandoned_warehouse" -> "废弃仓库";
-			case "transport_node" -> "运输节点";
-			case "all" -> "全部设施";
-			default -> "未知设施";
-		};
-	}
-
-	public static String ending(String id) {
-		return switch (id) {
-			case "active" -> "最终怪物正在活动";
-			case "undiscovered_truth" -> "发现太晚，怪物已经出现";
-			case "prevention_failed" -> "没能阻止怪物";
-			case "prevention_succeeded" -> "怪物已经被消灭";
-			case "unresolved" -> "事情还没有结束";
-			default -> "未知结局";
 		};
 	}
 

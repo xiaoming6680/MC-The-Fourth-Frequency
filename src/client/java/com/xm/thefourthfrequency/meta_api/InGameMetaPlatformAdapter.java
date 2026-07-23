@@ -1,5 +1,6 @@
 package com.xm.thefourthfrequency.meta_api;
 
+import com.xm.thefourthfrequency.client_ui.TerminalNoticeHud;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
@@ -17,8 +18,8 @@ public final class InGameMetaPlatformAdapter implements MetaPlatformAdapter {
 	public MetaExecution execute(MetaEvent event, MetaContext context) {
 		Minecraft client = Minecraft.getInstance();
 		if (client.player != null) {
-			client.player.displayClientMessage(Component.translatable(
-					"message.thefourthfrequency.meta." + event.name().toLowerCase(java.util.Locale.ROOT)), true);
+			TerminalNoticeHud.enqueue(Component.translatable(
+					"message.thefourthfrequency.meta." + event.name().toLowerCase(java.util.Locale.ROOT)));
 		}
 		return new MetaExecution(event, false, true, List.of(), List.of());
 	}

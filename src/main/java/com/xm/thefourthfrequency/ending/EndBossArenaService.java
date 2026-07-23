@@ -2,7 +2,6 @@ package com.xm.thefourthfrequency.ending;
 
 import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.content.ModBlocks;
-import com.xm.thefourthfrequency.entity.MisreadBodyEntity;
 import com.xm.thefourthfrequency.mixin.EndDragonFightAccessor;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -72,8 +71,6 @@ public final class EndBossArenaService {
 	public static final TagKey<Block> WORLD_INTERFACE_IMMUNE = TagKey.create(Registries.BLOCK,
 			Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "world_interface_immune"));
 	/** Existing data-pack tag remains honored while the old boss assets are retired. */
-	public static final TagKey<Block> END_BOSS_IMMUNE = TagKey.create(Registries.BLOCK,
-			Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "end_boss_immune"));
 
 	private static final Map<ServerLevel, ArenaRuntime> RUNTIMES =
 			Collections.synchronizedMap(new WeakHashMap<>());
@@ -206,7 +203,7 @@ public final class EndBossArenaService {
 			runtime = RUNTIMES.get(level);
 		}
 		if (runtime != null && runtime.protectedPositions.contains(pos)) return false;
-		if (state.is(WORLD_INTERFACE_IMMUNE) || state.is(END_BOSS_IMMUNE)
+		if (state.is(WORLD_INTERFACE_IMMUNE)
 				|| state.is(ModBlocks.RESONANCE_CORE) || state.is(ModBlocks.WARP_GATE_CORE)
 				|| state.is(ModBlocks.STABILITY_ANCHOR_CAGE)
 				|| state.is(Blocks.BEDROCK) || state.is(Blocks.OBSIDIAN)
@@ -309,19 +306,6 @@ public final class EndBossArenaService {
 
 	public static boolean isAuthoritativeAnchor(Entity entity, int index) {
 		return isAuthoritativeAnchor(entity) && entity.getTags().contains(ANCHOR_INDEX_PREFIX + index);
-	}
-
-	/** The old Misread body no longer owns End terrain edits. */
-	@Deprecated
-	public static boolean arm(MisreadBodyEntity body, EndBossAction action, BlockPos target,
-			EndBossPhase phase) {
-		return false;
-	}
-
-	/** The new queue is memory-only, so legacy persistent pending attacks have nothing to cancel here. */
-	@Deprecated
-	public static void cancelPending(FrequencyWorldData data) {
-		// Compatibility no-op.
 	}
 
 	private static ArenaRuntime runtime(ServerLevel level) {

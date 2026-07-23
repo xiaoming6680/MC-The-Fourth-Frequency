@@ -6,9 +6,6 @@ UV finishing script is [`tools/prepare_rework_body_art.py`](../../../tools/prepa
 it samples the material board into the model's semantic UV islands, adds stage-specific
 bruising, fascia, necrosis, bone and facial details, and writes the seven 256×256 runtime PNGs.
 
-`legacy_rework_body.png` is the displaced 64×32 quadruped texture, retained here only as a
-recoverable historical reference. It is no longer part of the runtime resource contract.
-
 ## Orthographic concept prompt
 
 ```text

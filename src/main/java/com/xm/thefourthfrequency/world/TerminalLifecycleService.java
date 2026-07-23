@@ -11,6 +11,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
+import com.xm.thefourthfrequency.pursuit.PursuitDimensions;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -79,6 +80,7 @@ public final class TerminalLifecycleService {
 	}
 
 	private static void recordDimension(ServerPlayer player, FrequencyWorldData data) {
+		if (PursuitDimensions.isMirror(player.level())) return;
 		String dimension = player.level().dimension().identifier().toString();
 		CompoundTag current = data.terminalRecord(player.getUUID()).orElseThrow();
 		String visited = current.getStringOr(TerminalData.VISITED_DIMENSIONS, "");
@@ -122,11 +124,13 @@ public final class TerminalLifecycleService {
 		if (insertIntoSafeSlot(player, recovery)) {
 			PENDING_RECOVERY.remove(player.getUUID());
 			RECOVERY_NOTIFIED.remove(player.getUUID());
-			player.displayClientMessage(Component.translatable("message.thefourthfrequency.terminal.recovered"), true);
+			com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+					Component.translatable("message.thefourthfrequency.terminal.recovered"));
 			return true;
 		}
 		if (RECOVERY_NOTIFIED.add(player.getUUID())) {
-			player.displayClientMessage(Component.translatable("message.thefourthfrequency.terminal.recovery_waiting"), true);
+			com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+					Component.translatable("message.thefourthfrequency.terminal.recovery_waiting"));
 		}
 		return false;
 	}

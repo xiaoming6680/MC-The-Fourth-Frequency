@@ -72,6 +72,10 @@ public final class ReworkEntity extends Monster {
 	private int blockedTravelTicks;
 	private int breachRetryTicks;
 	private boolean formStageInitialized;
+	private boolean pursuitMode;
+	private UUID pursuitOwner;
+	private String pursuitSessionId = "";
+	private boolean pursuitTracking = true;
 
 	public ReworkEntity(EntityType<? extends ReworkEntity> type, Level level) {
 		super(type, level);
@@ -116,6 +120,35 @@ public final class ReworkEntity extends Monster {
 		return morphTicks() > 0;
 	}
 
+	public void configurePursuit(UUID ownerId, String sessionId, int form) {
+		pursuitMode = true;
+		pursuitOwner = ownerId;
+		pursuitSessionId = sessionId == null ? "" : sessionId;
+		pursuitTracking = true;
+		int stage = Math.clamp(form, MIN_FORM_STAGE, MAX_FORM_STAGE);
+		entityData.set(FORM_STAGE, stage);
+		entityData.set(MORPH_TARGET_STAGE, stage);
+		entityData.set(MORPH_TICKS, 0);
+		formStageInitialized = true;
+		refreshDimensions();
+	}
+
+	public boolean pursuitMode() {
+		return pursuitMode;
+	}
+
+	public UUID pursuitOwner() {
+		return pursuitOwner;
+	}
+
+	public String pursuitSessionId() {
+		return pursuitSessionId;
+	}
+
+	public void setPursuitTracking(boolean tracking) {
+		pursuitTracking = tracking;
+	}
+
 	/** Applies world-authoritative progress without replaying a compensating morph. */
 	public void initializeFormStageFromWorld(FrequencyWorldData data) {
 		int stage = formStageForDismantleCount(CorrectionState.dismantleCount(data));
@@ -146,7 +179,7 @@ public final class ReworkEntity extends Monster {
 	@Override
 	protected void customServerAiStep(ServerLevel level) {
 		super.customServerAiStep(level);
-		if (!formStageInitialized) {
+		if (!formStageInitialized && !pursuitMode) {
 			initializeFormStageFromWorld(FrequencyWorldData.get(level.getServer()));
 		}
 		if (hostileTicks > 0) hostileTicks--;
@@ -157,7 +190,15 @@ public final class ReworkEntity extends Monster {
 			setTarget(hostile);
 			boolean pathStarted = getNavigation().moveTo(hostile, 1.05);
 			tickObstacleBreach(level, hostile.position(), pathStarted);
-			if (distanceToSqr(hostile) <= 3.0 && tickCount % 20 == 0) doHurtTarget(level, hostile);
+			if (!pursuitMode && distanceToSqr(hostile) <= 3.0 && tickCount % 20 == 0) {
+				doHurtTarget(level, hostile);
+			}
+			return;
+		}
+		if (pursuitMode) {
+			setTarget(null);
+			getNavigation().stop();
+			resetObstacleBreach();
 			return;
 		}
 		if (tickCount % 10 == 0 || blockTarget == null || !targetStillValid(level, blockTarget)) {
@@ -206,21 +247,15 @@ public final class ReworkEntity extends Monster {
 	private void completeDismantle(ServerLevel level, CorrectionTarget target) {
 		BlockPos position = target.position();
 		level.destroyBlockProgress(getId(), position, -1);
-		if (target.kind() == CorrectionTarget.Kind.GROUNDING_ANCHOR) {
-			// The altar device itself is the whole target. Do not scar or alter the stronghold around it.
-			level.setBlockAndUpdate(position, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
-		} else {
-			level.setBlockAndUpdate(position, ModBlocks.REWORK_SCAR.defaultBlockState());
-			for (Direction direction : Direction.Plane.HORIZONTAL) {
-				BlockPos brace = position.relative(direction);
-				if (level.getBlockState(brace).isAir()) {
-					level.setBlockAndUpdate(brace, ModBlocks.REWORK_BRACE.defaultBlockState());
-					break;
-				}
+		level.setBlockAndUpdate(position, ModBlocks.REWORK_SCAR.defaultBlockState());
+		for (Direction direction : Direction.Plane.HORIZONTAL) {
+			BlockPos brace = position.relative(direction);
+			if (level.getBlockState(brace).isAir()) {
+				level.setBlockAndUpdate(brace, ModBlocks.REWORK_BRACE.defaultBlockState());
+				break;
 			}
 		}
-		if (target.kind() == CorrectionTarget.Kind.ANOMALY_TRACE)
-			SurvivalProgressService.completeCorrectionScene(level.getServer(), position);
+		SurvivalProgressService.completeCorrectionScene(level.getServer(), position);
 		FrequencyWorldData data = FrequencyWorldData.get(level.getServer());
 		CorrectionState.recordDismantle(data, target.kind(), position);
 		int unlockedStage = formStageForDismantleCount(CorrectionState.dismantleCount(data));
@@ -377,6 +412,11 @@ public final class ReworkEntity extends Monster {
 	}
 
 	private ServerPlayer hostileTarget(ServerLevel level) {
+		if (pursuitMode) {
+			if (!pursuitTracking || pursuitOwner == null) return null;
+			ServerPlayer owner = level.getServer().getPlayerList().getPlayer(pursuitOwner);
+			return owner != null && owner.level() == level && owner.isAlive() ? owner : null;
+		}
 		if (hostilePlayerEntity != null && hostileTicks > 0 && hostilePlayerEntity.level() == level
 				&& hostilePlayerEntity.isAlive() && !hostilePlayerEntity.isRemoved()) return hostilePlayerEntity;
 		if (hostilePlayer != null && hostileTicks > 0) {
@@ -402,11 +442,7 @@ public final class ReworkEntity extends Monster {
 	}
 
 	private boolean targetStillValid(ServerLevel level, CorrectionTarget target) {
-		return switch (target.kind()) {
-			case ANOMALY_TRACE -> level.getBlockState(target.position()).is(ModBlocks.NASCENT_BODY_ORGAN);
-			case SIGNAL_SHELL -> level.getBlockState(target.position()).is(ModBlocks.ARCHIVE_LOCK);
-			case GROUNDING_ANCHOR -> level.getBlockState(target.position()).is(ModBlocks.ALTAR_ANCHOR);
-		};
+		return level.getBlockState(target.position()).is(ModBlocks.NASCENT_BODY_ORGAN);
 	}
 
 	@Override
@@ -417,7 +453,7 @@ public final class ReworkEntity extends Monster {
 
 	@Override
 	public void die(DamageSource source) {
-		if (level() instanceof ServerLevel level) {
+		if (!pursuitMode && level() instanceof ServerLevel level) {
 			FrequencyWorldData data = FrequencyWorldData.get(level.getServer());
 			CorrectionTarget trace = blockTarget != null
 					&& blockTarget.kind() == CorrectionTarget.Kind.ANOMALY_TRACE
@@ -453,6 +489,9 @@ public final class ReworkEntity extends Monster {
 		output.putInt("form_stage", formStage());
 		output.putInt("morph_target_stage", morphTargetStage());
 		output.putInt("morph_ticks", morphTicks());
+		output.putBoolean("pursuit_mode", pursuitMode);
+		output.putString("pursuit_owner", pursuitOwner == null ? "" : pursuitOwner.toString());
+		output.putString("pursuit_session", pursuitSessionId);
 	}
 
 	@Override
@@ -465,7 +504,14 @@ public final class ReworkEntity extends Monster {
 		// Reloads adopt the world-unlocked form immediately and never replay a compensating morph.
 		entityData.set(MORPH_TICKS, 0);
 		refreshDimensions();
-		formStageInitialized = false;
+		pursuitMode = input.getBooleanOr("pursuit_mode", false);
+		pursuitSessionId = input.getStringOr("pursuit_session", "");
+		try {
+			pursuitOwner = UUID.fromString(input.getStringOr("pursuit_owner", ""));
+		} catch (IllegalArgumentException exception) {
+			pursuitOwner = null;
+		}
+		formStageInitialized = pursuitMode;
 	}
 
 }

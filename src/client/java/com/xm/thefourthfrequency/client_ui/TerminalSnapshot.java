@@ -13,15 +13,16 @@ import com.xm.thefourthfrequency.terminal.TerminalNavigationMath;
 import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
 import net.minecraft.network.chat.Component;
 import net.minecraft.ChatFormatting;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 
 import java.util.ArrayList;
 import java.util.List;
 
 public record TerminalSnapshot(TerminalSnapshotPayload payload) {
-	private static final String[] TARGETS = {"unresolved", "iron", "redstone", "diamond", "fragment"};
-	private static final String[] FACILITIES = {"surface_shelter", "abandoned_warehouse",
-			"underground_mine_station", "field_observation"};
-	private static final String[] ENDINGS = {"unresolved", "active", "undiscovered_truth", "prevention_failed", "prevention_succeeded"};
 
 	public TerminalSnapshot {
 		if (payload.protocolVersion() != TerminalSnapshotPayload.CURRENT_PROTOCOL_VERSION) {
@@ -40,8 +41,17 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 	public String objectiveId() { return payload.objectiveId(); }
 	public int objectiveProgress() { return Math.max(0, payload.objectiveProgress()); }
 	public int objectiveTarget() { return Math.max(0, payload.objectiveTarget()); }
+	public int objectiveIndex() { return Math.max(0, payload.objectiveIndex()); }
+	public boolean objectiveClaimable() { return payload.objectiveClaimable(); }
+	public int objectiveRewardCount() { return Math.max(0, payload.objectiveRewardCount()); }
 	public double objectiveFraction() {
 		return objectiveTarget() <= 0 ? 0.0D : Math.clamp(objectiveProgress() / (double) objectiveTarget(), 0.0D, 1.0D);
+	}
+	public ItemStack objectiveReward() {
+		Identifier id = Identifier.tryParse(payload.objectiveRewardItem());
+		Item item = id == null ? null : BuiltInRegistries.ITEM.getValue(id);
+		if (item == null || item == Items.AIR || objectiveRewardCount() <= 0) return ItemStack.EMPTY;
+		return new ItemStack(item, Math.min(objectiveRewardCount(), item.getDefaultMaxStackSize()));
 	}
 	public int portalTransitions() { return Math.max(0, payload.portalTransitions()); }
 	public Component objectiveLine() {
@@ -50,7 +60,7 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 	}
 	public List<TerminalLogEntryPayload> signalToolEntries() {
 		return payload.signalEvents().stream().filter(entry -> entry.band() == SignalBand.UNKNOWN.wireId()
-				|| entry.type().startsWith("fragment_") || entry.type().startsWith("facility_")).toList();
+				|| entry.type().startsWith("fragment_")).toList();
 	}
 	public List<TerminalLogEntryPayload> recordEntries() {
 		return payload.signalEvents().stream()
@@ -97,16 +107,6 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 				.filter(file -> HiddenFilePolicy.isHiddenFile(file.id()) && file.read()).count();
 	}
 	public int hiddenFileReadPercent() { return readHiddenFileCount() * 100 / HiddenFilePolicy.FILE_COUNT; }
-	public int evidence(int index) {
-		return switch (index) {
-			case 0 -> payload.shelterEvidence();
-			case 1 -> payload.warehouseEvidence();
-			case 2 -> payload.mineEvidence();
-			case 3 -> payload.observationEvidence();
-			default -> -1;
-		};
-	}
-
 	public Component navigationLine(TerminalNavigationPayload navigation, int playerY) {
 		if (navigation.targetKind() == TerminalNavigationPayload.UNSTABLE_SIGNAL) {
 			if (!navigation.located()) return Component.translatable("terminal.thefourthfrequency.navigation.fragment.scanning");
@@ -158,7 +158,13 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 							+ direction(navigation.targetDx(), navigation.targetDz())),
 					distance(navigation.targetDx(), navigation.targetDz()), navigation.targetY() - playerY);
 		}
-		String target = TARGETS[Math.clamp(navigation.targetKind(), 0, TARGETS.length - 1)];
+		String target = switch (navigation.targetKind()) {
+			case TerminalNavigationPayload.IRON -> "iron";
+			case TerminalNavigationPayload.COAL -> "coal";
+			case TerminalNavigationPayload.GOLD -> "gold";
+			case TerminalNavigationPayload.DIAMOND -> "diamond";
+			default -> "unresolved";
+		};
 		Component mineral = Component.translatable("terminal.thefourthfrequency.resource." + target);
 		if (!navigation.located()) return Component.translatable(
 				"terminal.thefourthfrequency.navigation.scanning", mineral);
@@ -195,11 +201,13 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 		if (entry.type().startsWith("resource_")) return Component.translatable(
 				"terminal.thefourthfrequency.signal.event." + entry.type(),
 				Component.translatable("terminal.thefourthfrequency.resource."
-						+ TARGETS[Math.clamp(entry.variant(), 0, TARGETS.length - 1)]));
-		if (entry.type().equals("facility_evidence_recorded")) return Component.translatable(
-				"terminal.thefourthfrequency.signal.event.facility_evidence_recorded",
-				Component.translatable("terminal.thefourthfrequency.facility."
-						+ FACILITIES[Math.clamp(entry.variant(), 0, FACILITIES.length - 1)]));
+						+ switch (entry.variant()) {
+							case 0 -> "iron";
+							case 4 -> "coal";
+							case 5 -> "gold";
+							case 2 -> "diamond";
+							default -> "unresolved";
+						}));
 		return Component.translatable("terminal.thefourthfrequency.signal.event." + entry.type(), entry.variant());
 	}
 
@@ -231,11 +239,6 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 		if (HiddenFilePolicy.isHiddenFile(file.id())) return damagedFileContent(file.id());
 		if (file.id().equals("encrypted_witness_file")) return file.unlocked()
 				? archive() : List.of(Component.translatable("terminal.thefourthfrequency.file.locked"));
-		if (file.id().equals("permanent_aftermath_record")) {
-			String ending = ENDINGS[Math.clamp(file.variant(), 0, ENDINGS.length - 1)];
-			return List.of(Component.translatable("terminal.thefourthfrequency.ending.version", payload.endingVersion()),
-					Component.translatable("terminal.thefourthfrequency.ending." + ending));
-		}
 		List<Component> lines = new ArrayList<>();
 		for (String key : NarrativeFileCatalog.require(file.id()).lineKeys()) lines.add(Component.translatable(key));
 		return List.copyOf(lines);
@@ -294,21 +297,6 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 
 	public List<ArchiveSection> archiveSections() {
 		List<ArchiveSection> sections = new ArrayList<>();
-		List<Component> evidence = new ArrayList<>();
-		if (payload.shelterEvidence() >= 0 || payload.warehouseEvidence() >= 0
-				|| payload.mineEvidence() >= 0 || payload.observationEvidence() >= 0) {
-			evidence.add(Component.translatable("terminal.thefourthfrequency.archive.evidence_header"));
-			appendDirectionEvidence(evidence, "surface_shelter", payload.shelterEvidence());
-			appendDirectionEvidence(evidence, "abandoned_warehouse", payload.warehouseEvidence());
-			if (payload.mineEvidence() >= 0) evidence.add(Component.translatable(
-					"terminal.thefourthfrequency.archive.evidence.underground_mine_station",
-					Component.literal(Integer.toString(Math.clamp(payload.mineEvidence(), 0, 3) + 1))));
-			appendDirectionEvidence(evidence, "field_observation", payload.observationEvidence());
-			evidence.add(Component.translatable("terminal.thefourthfrequency.archive.mapping_hint"));
-			sections.add(new ArchiveSection(
-					Component.translatable("terminal.thefourthfrequency.ui.archive.section.evidence"), evidence));
-		}
-
 		List<Component> localFile = new ArrayList<>();
 		if (payload.localFileUnlocked()) {
 			WitnessArchive file = WitnessArchive.get();
@@ -331,18 +319,6 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 	}
 
 	public record ArchiveSection(Component title, List<Component> lines) {
-	}
-
-	private static void appendDirectionEvidence(List<Component> lines, String id, int value) {
-		if (value < 0) return;
-		String direction = switch (Math.clamp(value, 0, 3)) {
-			case 1 -> "east";
-			case 2 -> "south";
-			case 3 -> "west";
-			default -> "north";
-		};
-		lines.add(Component.translatable("terminal.thefourthfrequency.archive.evidence." + id,
-				Component.translatable("terminal.thefourthfrequency.direction." + direction)));
 	}
 
 	private static void appendCacheRecord(List<Component> lines, int variant) {

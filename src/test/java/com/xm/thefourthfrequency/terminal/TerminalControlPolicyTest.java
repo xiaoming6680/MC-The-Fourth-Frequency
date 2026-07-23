@@ -55,4 +55,12 @@ final class TerminalControlPolicyTest {
 		assertEquals(2, TerminalControlPolicy.visualStage(2, 3));
 	}
 
+	@Test
+	void derivesNewHardwareStagesFromPersonalPursuitProgress() {
+		assertEquals(0, TerminalControlPolicy.pursuitVisualStage(0, 5, 5));
+		assertEquals(1, TerminalControlPolicy.pursuitVisualStage(1, 1, 1));
+		assertEquals(1, TerminalControlPolicy.pursuitVisualStage(3, 4, 3));
+		assertEquals(2, TerminalControlPolicy.pursuitVisualStage(3, 4, 4));
+	}
+
 }

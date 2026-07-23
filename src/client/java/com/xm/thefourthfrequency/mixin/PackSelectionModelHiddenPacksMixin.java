@@ -18,6 +18,7 @@ import java.util.function.Function;
 
 @Mixin(PackSelectionModel.class)
 public abstract class PackSelectionModelHiddenPacksMixin {
+	@Shadow @Final private PackRepository repository;
 	@Shadow @Final private List<Pack> selected;
 	@Shadow @Final private List<Pack> unselected;
 
@@ -31,6 +32,17 @@ public abstract class PackSelectionModelHiddenPacksMixin {
 	@Inject(method = "findNewPacks", at = @At("TAIL"))
 	private void thefourthfrequency$hideInternalBasesAfterRefresh(CallbackInfo callback) {
 		thefourthfrequency$removeInternalBases();
+	}
+
+	@Inject(method = "updateRepoSelectedList", at = @At("HEAD"))
+	private void thefourthfrequency$restoreInternalBasesBeforeCommit(CallbackInfo callback) {
+		selected.removeIf(pack -> AlphaResourcePackPlan.isHiddenFromSelectionScreen(pack.getId()));
+		for (Pack pack : repository.getSelectedPacks()) {
+			if (AlphaResourcePackPlan.isHiddenFromSelectionScreen(pack.getId())) {
+				// The model stores its selected list in high-to-low priority order.
+				selected.add(0, pack);
+			}
+		}
 	}
 
 	private void thefourthfrequency$removeInternalBases() {

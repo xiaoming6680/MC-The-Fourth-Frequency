@@ -46,4 +46,24 @@ final class TerminalNavigationMathTest {
 		assertEquals("northwest", TerminalNavigationMath.direction(-8, -8));
 		assertEquals(5, TerminalNavigationMath.distance(3, 4));
 	}
+
+	@Test
+	void completionDirectionUsesThePlayersFourRelativeSides() {
+		assertEquals("ahead", TerminalNavigationMath.relativeDirectionId(
+				TerminalNavigationMath.relativeDirection(0, 10, 0.0F)));
+		assertEquals("left", TerminalNavigationMath.relativeDirectionId(
+				TerminalNavigationMath.relativeDirection(10, 0, 0.0F)));
+		assertEquals("right", TerminalNavigationMath.relativeDirectionId(
+				TerminalNavigationMath.relativeDirection(-10, 0, 0.0F)));
+		assertEquals("behind", TerminalNavigationMath.relativeDirectionId(
+				TerminalNavigationMath.relativeDirection(0, -10, 0.0F)));
+	}
+
+	@Test
+	void structureArrivalUsesAFiftyBlockHorizontalRadius() {
+		assertTrue(TerminalNavigationMath.withinHorizontalRadius(10, -10, 40, 30, 50));
+		assertTrue(TerminalNavigationMath.withinHorizontalRadius(10, -10, 60, -10, 50));
+		assertFalse(TerminalNavigationMath.withinHorizontalRadius(10, -10, 61, -10, 50));
+		assertFalse(TerminalNavigationMath.withinHorizontalRadius(10, -10, 46, 26, 50));
+	}
 }

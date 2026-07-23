@@ -1,7 +1,7 @@
 package com.xm.thefourthfrequency.mixin;
 
 import com.xm.thefourthfrequency.ending.EndBossEncounterService;
-import com.xm.thefourthfrequency.ending.FinalConfrontationService;
+import com.xm.thefourthfrequency.ending.StrongholdPortalService;
 import com.xm.thefourthfrequency.terminal.TerminalToolService;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
@@ -31,8 +31,8 @@ public abstract class EnderEyeItemMixin {
 		var state = context.getLevel().getBlockState(context.getClickedPos());
 		if (!(state.getBlock() instanceof EndPortalFrameBlock)
 				|| !state.getValue(EndPortalFrameBlock.HAS_EYE)) return;
-		FinalConfrontationService.findPortalRingNear(context.getLevel(), context.getClickedPos(), 4)
-				.filter(center -> FinalConfrontationService.eyeCount(context.getLevel(), center) == 12)
+		StrongholdPortalService.findPortalRingNear(context.getLevel(), context.getClickedPos(), 4)
+				.filter(center -> StrongholdPortalService.eyeCount(context.getLevel(), center) == 12)
 				.ifPresent(center -> EndBossEncounterService.prepareFromActivatedPortal(
 						player.level(), center, player));
 	}

@@ -2,8 +2,6 @@ package com.xm.thefourthfrequency.world;
 
 import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
 import com.xm.thefourthfrequency.content.TerminalData;
-import com.xm.thefourthfrequency.ending.EndingOutcome;
-import com.xm.thefourthfrequency.ending.EndingState;
 import com.xm.thefourthfrequency.state.PlayerPatternState;
 import com.xm.thefourthfrequency.state.StoryState;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
@@ -58,8 +56,10 @@ public final class StoryProgressService {
 			}
 			if (reveal) tag.putInt(TerminalData.BAND_STAGE, 1);
 		});
-		if (bind) player.displayClientMessage(Component.translatable("message.thefourthfrequency.terminal.bound"), true);
-		if (reveal) player.displayClientMessage(Component.translatable("message.thefourthfrequency.unknown.revealed"), true);
+		if (bind) com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+				Component.translatable("message.thefourthfrequency.terminal.bound"));
+		if (reveal) com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+				Component.translatable("message.thefourthfrequency.unknown.revealed"));
 		TerminalLifecycleService.ensureCarried(player, false);
 		if (bind || reveal) TerminalRuntimeService.synchronizeProjection(player);
 	}
@@ -81,30 +81,30 @@ public final class StoryProgressService {
 	}
 
 	public static Objective objective(CompoundTag tag, FrequencyWorldData data) {
-		CompoundTag ending = EndingState.get(data);
-		if (EndingState.started(data) && EndingState.outcome(data) == EndingOutcome.ACTIVE
-				&& ending.getBooleanOr("truth_read_at_start", false)) {
-			int anchors = Math.max(1, ending.getIntOr("anchors_initial", 1));
-			int remaining = Math.clamp(tag.getIntOr(TerminalData.GROUNDING_ANCHORS_REMAINING, anchors),
-					0, anchors);
-			return new Objective("protect_anchors", remaining, anchors);
-		}
 		int milestones = tag.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0);
 		int wood = Math.clamp(tag.getIntOr(TerminalData.WOOD_MINED_COUNT, 0), 0,
 				SurvivalProgressService.REQUIRED_WOOD);
 		if (!SurvivalMilestone.MINED_LOGS.present(milestones)) return new Objective("mine_logs", wood,
 				SurvivalProgressService.REQUIRED_WOOD);
-		if (!SurvivalMilestone.IRON.present(milestones)) return new Objective("bring_iron", 0, 1);
+		int iron = Math.clamp(tag.getIntOr(TerminalData.IRON_SAMPLE_COUNT, 0), 0,
+				SurvivalProgressService.REQUIRED_IRON);
+		if (!SurvivalMilestone.IRON.present(milestones)) return new Objective("bring_iron", iron,
+				SurvivalProgressService.REQUIRED_IRON);
 		if (!SurvivalMilestone.ENTERED_NETHER.present(milestones)) return new Objective("enter_nether", 0, 1);
 		int blazeRods = Math.clamp(tag.getIntOr(TerminalData.BLAZE_ROD_SAMPLE_COUNT, 0), 0,
 				SurvivalProgressService.REQUIRED_BLAZE_RODS);
 		if (!SurvivalMilestone.COLLECTED_BLAZE_RODS.present(milestones)) return new Objective(
 				"collect_blaze_rods", blazeRods, SurvivalProgressService.REQUIRED_BLAZE_RODS);
 		if (!SurvivalMilestone.RETURNED_NETHER.present(milestones)) return new Objective("return_from_nether", 0, 1);
-		if (!SurvivalMilestone.CRAFTED_EYE.present(milestones)) return new Objective("craft_eye", 0, 1);
-		int eyeSamples = Math.clamp(tag.getIntOr(TerminalData.EYE_SAMPLE_COUNT, 0), 0, 2);
-		if (!SurvivalMilestone.THREW_EYE.present(milestones) || eyeSamples < 2)
-			return new Objective("record_eye", eyeSamples, 2);
+		int craftedEyes = Math.clamp(tag.getIntOr(TerminalData.CRAFTED_EYE_COUNT, 0), 0,
+				SurvivalProgressService.REQUIRED_CRAFTED_EYES);
+		if (!SurvivalMilestone.CRAFTED_EYE.present(milestones)) return new Objective("craft_eye", craftedEyes,
+				SurvivalProgressService.REQUIRED_CRAFTED_EYES);
+		int eyeSamples = Math.clamp(tag.getIntOr(TerminalData.EYE_SAMPLE_COUNT, 0), 0,
+				SurvivalProgressService.REQUIRED_EYE_SAMPLES);
+		if (!SurvivalMilestone.THREW_EYE.present(milestones)
+				|| eyeSamples < SurvivalProgressService.REQUIRED_EYE_SAMPLES)
+			return new Objective("record_eye", eyeSamples, SurvivalProgressService.REQUIRED_EYE_SAMPLES);
 		if (!SurvivalMilestone.FOUND_STRONGHOLD.present(milestones)) return new Objective("find_stronghold", 0, 1);
 		if (!SurvivalMilestone.ENTERED_END.present(milestones)) return new Objective("enter_end", 0, 1);
 		if (!SurvivalMilestone.DEFEATED_BOSS.present(milestones)) return new Objective("defeat_boss", 0, 1);

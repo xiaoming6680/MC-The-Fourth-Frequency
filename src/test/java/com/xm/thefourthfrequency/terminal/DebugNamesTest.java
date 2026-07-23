@@ -12,10 +12,6 @@ final class DebugNamesTest {
 	void everyDebugIdentifierHasAReadableChineseName() {
 		for (AnomalyDefinition definition : AnomalyCatalog.definitions()) readable(DebugNames.anomaly(definition.id()));
 		for (NarrativeFileCatalog.Definition definition : NarrativeFileCatalog.definitions()) readable(DebugNames.file(definition.id()));
-		for (String facility : List.of("surface_shelter", "field_observation", "underground_mine_station",
-				"abandoned_warehouse", "transport_node")) readable(DebugNames.facility(facility));
-		for (String ending : List.of("unresolved", "active", "undiscovered_truth", "prevention_failed",
-				"prevention_succeeded")) readable(DebugNames.ending(ending));
 	}
 
 	private static void readable(String value) {

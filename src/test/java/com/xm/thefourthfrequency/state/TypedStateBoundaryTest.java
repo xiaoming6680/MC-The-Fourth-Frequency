@@ -10,7 +10,7 @@ final class TypedStateBoundaryTest {
 	@Test
 	void storySnapshotClampsValuesAtTheTypedBoundary() {
 		StoryState state = new StoryState(true, 99, 2, 0b1111, true, true, false, 0b11111,
-				true, "mining", "shelter=north", true, true, true, 1_500, 8, 1);
+				true, "mining", true, true, true, 1_500, 8);
 		assertEquals(3, state.bandStage());
 		assertEquals(1_000, state.bodyProgress());
 		assertEquals(0b111, state.calibratedBandsMask());
@@ -67,6 +67,6 @@ final class TypedStateBoundaryTest {
 
 	private static StoryState storyWithPrelude(boolean night, int anomalyMask, boolean watcher) {
 		return new StoryState(true, 0, 2, 0b111, true, night, night, anomalyMask, watcher,
-				"mining", "", false, false, false, 0, 0, 0);
+				"mining", false, false, false, 0, 0);
 	}
 }

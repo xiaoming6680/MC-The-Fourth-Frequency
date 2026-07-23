@@ -403,7 +403,7 @@ public final class FragmentInvestigationService {
 			Component message = online.getUUID().equals(discoverer.getUUID())
 					? Component.translatable("message.thefourthfrequency.fragment.shared")
 					: Component.translatable("message.thefourthfrequency.fragment.received", discovererName);
-			online.displayClientMessage(message, true);
+			com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(online, message);
 			TerminalLifecycleService.ensureCarried(online, false);
 			TerminalRuntimeService.synchronizeProjection(online);
 			TerminalRuntimeService.refresh(online);

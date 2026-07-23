@@ -2,6 +2,7 @@ package com.xm.thefourthfrequency.client_ui;
 
 import com.xm.thefourthfrequency.networking.TerminalClosedPayload;
 import com.xm.thefourthfrequency.networking.TerminalNavigationPayload;
+import com.xm.thefourthfrequency.networking.TerminalNoticePayload;
 import com.xm.thefourthfrequency.networking.TerminalSnapshotPayload;
 import com.xm.thefourthfrequency.networking.TerminalToolSnapshotPayload;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -25,6 +26,12 @@ public final class TerminalClientNetworking {
 		ClientPlayNetworking.registerGlobalReceiver(TerminalToolSnapshotPayload.TYPE, (payload, context) ->
 				context.client().execute(() -> {
 					if (context.client().screen instanceof TerminalScreen terminal) terminal.updateTools(payload);
+				}));
+		ClientPlayNetworking.registerGlobalReceiver(TerminalNoticePayload.TYPE, (payload, context) ->
+				context.client().execute(() -> {
+					TerminalNoticeHud.enqueue(payload.message(), payload.tone());
+					if (payload.tone() != TerminalNoticePayload.TONE_NONE)
+						TerminalClientAudio.attention(payload.tone());
 				}));
 		ClientPlayNetworking.registerGlobalReceiver(TerminalClosedPayload.TYPE, (payload, context) ->
 				context.client().execute(() -> {

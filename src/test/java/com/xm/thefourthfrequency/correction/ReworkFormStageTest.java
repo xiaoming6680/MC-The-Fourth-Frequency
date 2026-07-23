@@ -17,4 +17,14 @@ final class ReworkFormStageTest {
 		assertEquals(5, ReworkFormStage.forDismantleCount(5));
 		assertEquals(5, ReworkFormStage.forDismantleCount(Integer.MAX_VALUE));
 	}
+
+	@Test
+	void personalPursuitProgressUsesTheSameOneStepFormSequence() {
+		assertEquals(1, ReworkFormStage.forResolvedChases(0));
+		assertEquals(2, ReworkFormStage.forResolvedChases(1));
+		assertEquals(3, ReworkFormStage.forResolvedChases(2));
+		assertEquals(4, ReworkFormStage.forResolvedChases(3));
+		assertEquals(5, ReworkFormStage.forResolvedChases(4));
+		assertEquals(5, ReworkFormStage.forResolvedChases(99));
+	}
 }

@@ -34,28 +34,6 @@
       "thefourthfrequency:entity/rework/joint/02"
     ]
   },
-  "misread_body": {
-    "subtitle": "subtitles.thefourthfrequency.misread_body",
-    "sounds": [
-      "thefourthfrequency:entity/misread/body/01",
-      "thefourthfrequency:entity/misread/body/02"
-    ]
-  },
-  "misread_adaptation": {
-    "subtitle": "subtitles.thefourthfrequency.misread_adaptation",
-    "sounds": [
-      "thefourthfrequency:entity/misread/adaptation/operator",
-      "thefourthfrequency:entity/misread/adaptation/builder",
-      "thefourthfrequency:entity/misread/adaptation/miner"
-    ]
-  },
-  "termination": {
-    "subtitle": "subtitles.thefourthfrequency.termination",
-    "sounds": [
-      { "name": "minecraft:block.beacon.deactivate", "type": "event", "volume": 0.65, "pitch": 0.82 },
-      { "name": "minecraft:block.amethyst_block.break", "type": "event", "volume": 0.50, "pitch": 0.68 }
-    ]
-  },
   "anomaly_echo": {
     "subtitle": "subtitles.thefourthfrequency.anomaly_echo",
     "sounds": [{ "name": "minecraft:block.iron_door.close", "type": "event", "volume": 0.46, "pitch": 0.68 }]

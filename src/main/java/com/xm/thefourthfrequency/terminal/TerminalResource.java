@@ -2,7 +2,8 @@ package com.xm.thefourthfrequency.terminal;
 
 public enum TerminalResource {
 	IRON(0, "iron"),
-	REDSTONE(1, "redstone"),
+	COAL(4, "coal"),
+	GOLD(5, "gold"),
 	DIAMOND(2, "diamond"),
 	NONE(3, "unresolved");
 
@@ -33,6 +34,14 @@ public enum TerminalResource {
 	}
 
 	public static boolean isSelectableWire(int value) {
-		return value >= IRON.wireId && value <= DIAMOND.wireId;
+		return false;
+	}
+
+	public static TerminalResource weightedRoll(int roll) {
+		int value = Math.floorMod(roll, 100);
+		if (value < 50) return IRON;
+		if (value < 80) return COAL;
+		if (value < 90) return GOLD;
+		return DIAMOND;
 	}
 }

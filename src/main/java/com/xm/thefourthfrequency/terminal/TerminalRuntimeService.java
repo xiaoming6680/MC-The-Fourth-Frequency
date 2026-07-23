@@ -10,19 +10,18 @@ import com.xm.thefourthfrequency.networking.TerminalSnapshotPayload;
 import com.xm.thefourthfrequency.networking.TerminalToolSnapshotPayload;
 import com.xm.thefourthfrequency.networking.TerminalLogEntryPayload;
 import com.xm.thefourthfrequency.networking.TerminalFilePayload;
-import com.xm.thefourthfrequency.facility.FacilityService;
+import com.xm.thefourthfrequency.world.RiftArchiveService;
 import com.xm.thefourthfrequency.narrative.HiddenFilePolicy;
 import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
-import com.xm.thefourthfrequency.world.StoryProgressService;
-import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.FragmentInvestigationService;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -67,6 +66,9 @@ public final class TerminalRuntimeService {
 		ViewState view = new ViewState(hand, TerminalControlPolicy.mode(mode), TerminalControlPolicy.tuning(tuning),
 				0L, 0L, "", serverTick, TerminalToolService.NO_TOOL);
 		OPEN_VIEWS.put(player.getUUID(), view);
+		if (com.xm.thefourthfrequency.world.StructureNavigationService.acknowledgeCompletion(player)) {
+			synchronizeProjection(player);
+		}
 		sendSnapshot(player, view);
 		sendNavigation(player);
 	}
@@ -112,14 +114,14 @@ public final class TerminalRuntimeService {
 			case TerminalControlPayload.STOP_GUIDANCE -> {
 				if (!TerminalToolService.stopGuidance(player, value)) return;
 			}
-			case TerminalControlPayload.SELECT_RESOURCE -> {
-				if (!TerminalToolService.selectResource(player, value)) return;
-			}
+			case TerminalControlPayload.SELECT_RESOURCE -> { return; }
 			case TerminalControlPayload.REQUEST_RESCAN -> {
 				if (value != 0 || !TerminalToolService.requestRescan(player)) return;
 			}
-			case TerminalControlPayload.SET_HOME -> {
-				if (value != 0 || !TerminalToolService.setHome(player)) return;
+			case TerminalControlPayload.SET_HOME -> { return; }
+			case TerminalControlPayload.DISMISS_NAVIGATION_COMPLETION -> {
+				if (value != 0 || !com.xm.thefourthfrequency.world.StructureNavigationService
+						.dismissCompletion(player)) return;
 			}
 			case TerminalControlPayload.READ_TRUTH_FILE -> {
 				if (value != 0 || !markTruthRead(player)) return;
@@ -129,6 +131,19 @@ public final class TerminalRuntimeService {
 			}
 			case TerminalControlPayload.READ_HIDDEN_FILE -> {
 				if (!markHiddenFileRead(player, value)) return;
+			}
+			case TerminalControlPayload.VISIT_PAGE -> {
+				if (!TerminalTaskService.visitPage(player, value)) return;
+			}
+			case TerminalControlPayload.CLAIM_TASK_REWARD -> {
+				TerminalTaskService.ClaimResult result = TerminalTaskService.claim(player, value);
+				if (result == TerminalTaskService.ClaimResult.INVENTORY_FULL) {
+					TerminalNoticeService.send(player, Component.translatable(
+							"message.thefourthfrequency.task.inventory_full"));
+				} else if (result != TerminalTaskService.ClaimResult.CLAIMED
+						&& result != TerminalTaskService.ClaimResult.STALE) {
+					return;
+				}
 			}
 			case TerminalControlPayload.CLOSE -> {
 				if (value != 0) return;
@@ -159,8 +174,13 @@ public final class TerminalRuntimeService {
 		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
 		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
 		if (record == null) return false;
-		data.updateTerminalRecord(player.getUUID(), TerminalSignalLog::markAllRead);
-		synchronizeProjection(player, data);
+		if (TerminalSignalLog.unreadCount(record) == 0) return true;
+		data.updateTerminalRecord(player.getUUID(), tag -> {
+			TerminalSignalLog.markAllRead(tag);
+			tag.putBoolean(TerminalData.UNREAD_ALERT_ACTIVE,
+					tag.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_UNREAD, false));
+		});
+		synchronizeAttentionProjection(player, data);
 		return true;
 	}
 
@@ -179,7 +199,7 @@ public final class TerminalRuntimeService {
 			completed[0] = HiddenFilePolicy.allDiscovered(tag) && HiddenFilePolicy.allRead(tag)
 					&& !TerminalFileState.unlocked(tag, HiddenFilePolicy.COMPLETE_FILE_ID);
 		});
-		if (completed[0]) FacilityService.unlockArchiveFromHiddenFiles(player);
+		if (completed[0]) RiftArchiveService.unlockArchiveFromHiddenFiles(player);
 		synchronizeProjection(player, data);
 		return true;
 	}
@@ -232,25 +252,23 @@ public final class TerminalRuntimeService {
 		BlockPos pos = player.blockPosition();
 		BlockPos rift = BlockPos.of(tag.getLongOr(TerminalData.RIFT_POSITION, 0L));
 		int bodyStage = tag.getIntOr(TerminalData.BODY_STAGE, 0);
-		int milestones = tag.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0);
-		int survivalVisualStage = SurvivalMilestone.FOUND_STRONGHOLD.present(milestones) ? 3
-				: SurvivalMilestone.RETURNED_NETHER.present(milestones) ? 2
-				: SurvivalMilestone.IRON.present(milestones) ? 1 : 0;
 		boolean bound = tag.getBooleanOr(TerminalData.BOUND, false);
-		String evidence = tag.getStringOr(TerminalData.FACILITY_EVIDENCE, "");
 		java.util.List<TerminalLogEntryPayload> logs = TerminalSignalLog.entries(tag).stream()
 				.map(entry -> new TerminalLogEntryPayload(entry.sequence(), entry.band().wireId(), entry.type(), entry.gameTime(),
 						entry.dayTime(), entry.dimension(), entry.position(), entry.variant(), entry.severity(), entry.unread()))
 				.toList();
 		java.util.List<TerminalFilePayload> files = visibleFiles(tag);
-		StoryProgressService.Objective objective = StoryProgressService.objective(tag, data);
+		TerminalTaskService.TaskSnapshot objective = TerminalTaskService.current(tag);
 		long now = level.getGameTime();
 		TerminalSnapshotPayload payload = new TerminalSnapshotPayload(
 				TerminalSnapshotPayload.CURRENT_PROTOCOL_VERSION,
 				0,
 				view.mode,
 				view.tuning,
-				TerminalControlPolicy.visualStage(tag.getIntOr(TerminalData.PLOT_STAGE, 1), survivalVisualStage),
+				TerminalControlPolicy.pursuitVisualStage(
+						tag.getIntOr(TerminalData.PURSUIT_RESOLVED_CHASES, 0),
+						tag.getIntOr(TerminalData.PURSUIT_ALLOWED_FORM, 0),
+						tag.getIntOr(TerminalData.ANOMALY_TIER, 0)),
 				Math.clamp(tag.getIntOr(TerminalData.BAND_STAGE, 0), 0, 3),
 				Math.floorMod(tag.getIntOr(TerminalData.CACHE_VARIANT, 0), 4),
 				tag.getBooleanOr(TerminalData.SECOND_CACHE_UNLOCKED, false),
@@ -262,24 +280,19 @@ public final class TerminalRuntimeService {
 				Math.clamp(tag.getIntOr(TerminalData.BODY_PROGRESS, 0), 0, 1000),
 				Math.clamp(bodyStage, 0, 4),
 				capabilityMask(tag.getStringOr(TerminalData.TERMINAL_CAPABILITIES, "")),
-				evidenceValue(evidence, "surface_shelter", false),
-				evidenceValue(evidence, "abandoned_warehouse", false),
-				evidenceValue(evidence, "underground_mine_station", true),
-				evidenceValue(evidence, "field_observation", false),
 				tag.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false),
 				tag.getBooleanOr(TerminalData.RIFT_LOCATED, false),
 				boundedDelta(rift.getX() - pos.getX()),
 				boundedDelta(rift.getZ() - pos.getZ()),
 				rift.getY(),
-				nonNegative(tag.getIntOr(TerminalData.ENDING_VERSION, 0)),
-				ending(tag.getStringOr(TerminalData.ENDING_OUTCOME, "unresolved")),
 				tag.getBooleanOr(TerminalData.TERMINAL_CAPTURED, false),
 				now,
 				TerminalSignalLog.unreadCount(tag),
 				logs,
 				tag.getStringOr(TerminalData.ACTIVE_ANOMALY_ID, "none"),
 				(int) Math.clamp(tag.getLongOr(TerminalData.ACTIVE_ANOMALY_UNTIL, 0L) - now, 0L, 1200L),
-				files, -1, objective.id(), objective.progress(), objective.target());
+				files, -1, objective.id(), objective.progress(), objective.target(),
+				objective.index(), objective.claimable(), objective.rewardItemId(), objective.rewardCount());
 		ServerPlayNetworking.send(player, payload);
 		ServerPlayNetworking.send(player, TerminalToolService.snapshot(player, view.selectedTool,
 				view.tuning, receiverLockTicks(player, view, now)));
@@ -295,8 +308,7 @@ public final class TerminalRuntimeService {
 					file.discoveredGameTime(), file.discoveredDayTime(),
 					file.unlockedGameTime(), file.unlockedDayTime(),
 					file.read(), file.readGameTime(), file.readDayTime(),
-					definition.id().equals("permanent_aftermath_record")
-							? ending(tag.getStringOr(TerminalData.ENDING_OUTCOME, "unresolved")) : 0);
+					0);
 		}).toList();
 	}
 
@@ -322,8 +334,7 @@ public final class TerminalRuntimeService {
 			switch (tool) {
 				case MINERALS -> {
 					kind = targetKind(navigation.kind());
-					located = kind >= TerminalNavigationPayload.IRON
-							&& kind <= TerminalNavigationPayload.DIAMOND && navigation.located();
+					located = TerminalNavigationPayload.isMineral(kind) && navigation.located();
 					sameDimension = player.level().dimension().identifier().toString().equals(navigation.dimension());
 					BlockPos target = BlockPos.of(navigation.position());
 					dx = boundedDelta(target.getX() - playerPos.getX());
@@ -403,7 +414,8 @@ public final class TerminalRuntimeService {
 	private static int targetKind(String value) {
 		return switch (value) {
 			case "iron" -> TerminalNavigationPayload.IRON;
-			case "redstone" -> TerminalNavigationPayload.REDSTONE;
+			case "coal" -> TerminalNavigationPayload.COAL;
+			case "gold" -> TerminalNavigationPayload.GOLD;
 			case "diamond" -> TerminalNavigationPayload.DIAMOND;
 			case "structure_fragment" -> TerminalNavigationPayload.UNSTABLE_SIGNAL;
 			default -> TerminalNavigationPayload.NONE;
@@ -441,39 +453,6 @@ public final class TerminalRuntimeService {
 		return mask;
 	}
 
-	private static int ending(String value) {
-		return switch (value) {
-			case "active" -> 1;
-			case "undiscovered_truth" -> 2;
-			case "prevention_failed" -> 3;
-			case "prevention_succeeded" -> 4;
-			default -> 0;
-		};
-	}
-
-	private static int evidenceValue(String evidence, String id, boolean numeric) {
-		for (String entry : evidence.split(";")) {
-			String prefix = id + "=";
-			if (!entry.startsWith(prefix)) continue;
-			String value = entry.substring(prefix.length());
-			if (numeric) {
-				try {
-					return Math.clamp(Integer.parseInt(value) - 1, 0, 3);
-				} catch (NumberFormatException ignored) {
-					return -1;
-				}
-			}
-			return switch (value) {
-				case "north" -> 0;
-				case "east" -> 1;
-				case "south" -> 2;
-				case "west" -> 3;
-				default -> -1;
-			};
-		}
-		return -1;
-	}
-
 	public static boolean isOpen(ServerPlayer player) {
 		return OPEN_VIEWS.containsKey(player.getUUID());
 	}
@@ -487,7 +466,7 @@ public final class TerminalRuntimeService {
 		synchronizeProjection(player, FrequencyWorldData.get(player.level().getServer()));
 	}
 
-	private static void synchronizeProjection(ServerPlayer player, FrequencyWorldData data) {
+	public static void synchronizeProjection(ServerPlayer player, FrequencyWorldData data) {
 		CompoundTag authoritative = data.terminalRecord(player.getUUID()).orElse(null);
 		if (authoritative != null) {
 			boolean changed = false;
@@ -497,6 +476,19 @@ public final class TerminalRuntimeService {
 			}
 			if (changed) player.getInventory().setChanged();
 		}
+	}
+
+	public static void synchronizeAttentionProjection(ServerPlayer player, FrequencyWorldData data) {
+		CompoundTag authoritative = data.terminalRecord(player.getUUID()).orElse(null);
+		if (authoritative == null) return;
+		boolean changed = false;
+		for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+			ItemStack stack = player.getInventory().getItem(slot);
+			if (data.isValidTerminal(stack, player.getUUID())) {
+				changed |= TerminalData.applyAttentionProjection(stack, authoritative);
+			}
+		}
+		if (changed) player.getInventory().setChanged();
 	}
 
 	public static int rememberedMode(UUID playerId) {

@@ -96,8 +96,10 @@ public final class ZeroStationService {
 		if (!player.addItem(terminal)) {
 			player.drop(terminal, false);
 		}
-		player.displayClientMessage(Component.translatable("message.thefourthfrequency.terminal.dispensed"), true);
-		player.displayClientMessage(Component.translatable("message.thefourthfrequency.terminal.stock_zero"), true);
+		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+				Component.translatable("message.thefourthfrequency.terminal.dispensed"));
+		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+				Component.translatable("message.thefourthfrequency.terminal.stock_zero"));
 		return true;
 	}
 

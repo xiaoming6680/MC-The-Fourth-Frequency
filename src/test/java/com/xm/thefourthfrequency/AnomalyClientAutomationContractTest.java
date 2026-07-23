@@ -46,10 +46,11 @@ final class AnomalyClientAutomationContractTest {
 		assertTrue(defaults.runsAnomalies());
 		assertFalse(defaults.runsAlphaRelaunch());
 		assertFalse(defaults.runsMetaSmoke());
-		assertFalse(defaults.runsReworkForms());
-		assertFalse(defaults.runsWatcherModel());
+		assertTrue(defaults.runsReworkForms());
+		assertTrue(defaults.runsWatcherModel());
+		assertTrue(defaults.runsToolsUi());
 		assertFalse(defaults.runsNoticeEntry());
-		assertFalse(defaults.runsEndBoss());
+		assertTrue(defaults.runsWorldInterface());
 
 		var noticeEntry = ClientGameTestSelection.parse("notice-entry", "");
 		assertTrue(noticeEntry.runsNoticeEntry());
@@ -82,10 +83,10 @@ final class AnomalyClientAutomationContractTest {
 		assertFalse(watcherModel.runsMainline());
 		assertFalse(watcherModel.runsAnomalies());
 		assertFalse(watcherModel.runsReworkForms());
-		var endBoss = ClientGameTestSelection.parse("end-boss", "");
-		assertTrue(endBoss.runsEndBoss());
-		assertFalse(endBoss.runsMainline());
-		assertFalse(endBoss.runsAnomalies());
+		var worldInterface = ClientGameTestSelection.parse("world-interface", "");
+		assertTrue(worldInterface.runsWorldInterface());
+		assertFalse(worldInterface.runsMainline());
+		assertFalse(worldInterface.runsAnomalies());
 		assertThrows(IllegalArgumentException.class,
 				() -> ClientGameTestSelection.parse("mainline", "phantom_echo"));
 		assertThrows(IllegalArgumentException.class,

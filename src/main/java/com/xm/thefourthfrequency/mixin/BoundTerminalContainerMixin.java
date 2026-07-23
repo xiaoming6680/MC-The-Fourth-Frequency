@@ -1,7 +1,6 @@
 package com.xm.thefourthfrequency.mixin;
 
 import com.xm.thefourthfrequency.content.TerminalData;
-import com.xm.thefourthfrequency.ending.EndBossIntrusionService;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Inventory;
@@ -25,16 +24,6 @@ public abstract class BoundTerminalContainerMixin {
 		}
 		AbstractContainerMenu menu = (AbstractContainerMenu) (Object) this;
 		Slot clicked = slotId >= 0 && slotId < menu.slots.size() ? menu.slots.get(slotId) : null;
-		boolean intrusionDrop = (clickType == ClickType.THROW && clicked != null
-				&& clicked.container instanceof Inventory
-				&& EndBossIntrusionService.isSlotLocked(serverPlayer, clicked.getContainerSlot()))
-				|| (slotId == AbstractContainerMenu.SLOT_CLICKED_OUTSIDE
-				&& EndBossIntrusionService.isLockedStack(serverPlayer, menu.getCarried()));
-		if (intrusionDrop) {
-			EndBossIntrusionService.notifyRejected(serverPlayer);
-			callback.cancel();
-			return;
-		}
 		boolean nonPlayerTarget = clicked != null && !(clicked.container instanceof Inventory);
 		boolean blocked = (nonPlayerTarget && TerminalData.isBound(menu.getCarried()))
 				|| (clickType == ClickType.QUICK_MOVE && clicked != null
@@ -46,7 +35,8 @@ public abstract class BoundTerminalContainerMixin {
 		if (!blocked) {
 			return;
 		}
-		serverPlayer.displayClientMessage(Component.translatable("message.thefourthfrequency.terminal.bound_no_container"), true);
+		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(serverPlayer,
+				Component.translatable("message.thefourthfrequency.terminal.bound_no_container"));
 		callback.cancel();
 	}
 }

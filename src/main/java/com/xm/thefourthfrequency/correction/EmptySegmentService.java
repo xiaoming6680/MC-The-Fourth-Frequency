@@ -6,7 +6,7 @@ import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.networking.EmptySegmentPayload;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
-import com.xm.thefourthfrequency.ending.EndingState;
+import com.xm.thefourthfrequency.ending.FinaleRuntimePolicy;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
@@ -47,7 +47,7 @@ public final class EmptySegmentService {
 	}
 
 	private static void updateServer(MinecraftServer server) {
-		if (!EndingState.activeAnomaliesAllowed(FrequencyWorldData.get(server))) {
+		if (!FinaleRuntimePolicy.backgroundSystemsAllowed(FrequencyWorldData.get(server))) {
 			for (ActiveEvent event : Map.copyOf(ACTIVE_EVENTS).values()) {
 				finish(server, event, server.getPlayerList().getPlayer(event.playerId));
 			}

@@ -48,6 +48,11 @@ import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.LCD_BORDER
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.MUTED;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.MUTED_DARK;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.SELECTED;
+import static com.xm.thefourthfrequency.terminal.TerminalNavigationVisualPolicy.animatedProbeDots;
+import static com.xm.thefourthfrequency.terminal.TerminalNavigationVisualPolicy.corruptNavigationName;
+import static com.xm.thefourthfrequency.terminal.TerminalNavigationVisualPolicy.navigationNeedleFlashActive;
+import static com.xm.thefourthfrequency.terminal.TerminalNavigationVisualPolicy.navigationNeedleFlashVisible;
+import static com.xm.thefourthfrequency.terminal.TerminalNavigationVisualPolicy.sideRouteGlitchActive;
 
 public final class TerminalScreen extends Screen {
 	private static final int BASE_WIDTH = 512;
@@ -93,6 +98,7 @@ public final class TerminalScreen extends Screen {
 	private boolean localNavigationTargetChosen;
 	private int hoveredToolSlot = -1;
 	private boolean localTuningOnly;
+	private double navigationNeedleFlashStartedAt = -100.0D;
 
 	private LogView logView = LogView.DIRECTORY;
 	private TerminalFilePayload detailFile;
@@ -184,9 +190,10 @@ public final class TerminalScreen extends Screen {
 		boolean gameplayBefore = receiverGameplayActive();
 		tools = new TerminalToolSnapshot(payload);
 		TerminalTool activeGuidance = tools.guidanceTool();
-		if (activeGuidance != null) homeLiveTool = activeGuidance;
+		if (tools.navigationCompletionAvailable()) homeLiveTool = TerminalTool.NAVIGATION;
+		else if (activeGuidance != null) homeLiveTool = activeGuidance;
 		else if (homeLiveTool != TerminalTool.WEATHER) homeLiveTool = null;
-		if (tools.selectedNavigationTarget() != TerminalStructureTarget.NONE) localNavigationTargetChosen = true;
+		localNavigationTargetChosen = tools.selectedNavigationTarget() != TerminalStructureTarget.NONE;
 		if (selectedTool != null && !tools.available(selectedTool)) clearSelectedTool(false);
 		if (!gameplayBefore && receiverGameplayActive() && localTuningOnly) {
 			localTuningOnly = false;
@@ -291,19 +298,26 @@ public final class TerminalScreen extends Screen {
 	}
 
 	private void drawHome(GuiGraphics graphics) {
-		drawCard(graphics, TerminalUiLayout.HOME_TASK, pageAccent());
+		drawCard(graphics, TerminalUiLayout.HOME_TASK, snapshot.objectiveClaimable() ? HOT : pageAccent());
 		graphics.drawString(font, Component.translatable("terminal.thefourthfrequency.home.current_task"),
 				TerminalUiLayout.HOME_TASK.left() + 7, TerminalUiLayout.HOME_TASK.top() + 6, AMBER, false);
-		List<FormattedCharSequence> objective = font.split(snapshot.objectiveLine(), TerminalUiLayout.HOME_TASK.width() - 14);
+		drawTaskReward(graphics);
+		List<FormattedCharSequence> objective = font.split(snapshot.objectiveLine(),
+				TerminalUiLayout.HOME_TASK.width() - 52);
 		if (!objective.isEmpty()) graphics.drawString(font, objective.getFirst(), TerminalUiLayout.HOME_TASK.left() + 7,
 				TerminalUiLayout.HOME_TASK.top() + 20, GREEN, false);
+		if (snapshot.objectiveClaimable()) {
+			graphics.drawString(font, Component.translatable("terminal.thefourthfrequency.home.claim_reward"),
+					TerminalUiLayout.HOME_TASK.left() + 7, TerminalUiLayout.HOME_TASK.top() + 31, HOT, false);
+		}
 		int progressWidth = TerminalUiLayout.HOME_TASK.width() - 14;
 		int filled = (int) Math.round(progressWidth * Math.clamp(displayedObjectiveFraction, 0.0D, 1.0D));
-		int progressY = TerminalUiLayout.HOME_TASK.bottom() - 9;
+		int progressY = TerminalUiLayout.HOME_TASK.bottom() - 5;
 		graphics.fill(TerminalUiLayout.HOME_TASK.left() + 7, progressY,
 				TerminalUiLayout.HOME_TASK.right() - 7, progressY + 3, DARK_BORDER);
 		graphics.fill(TerminalUiLayout.HOME_TASK.left() + 7, progressY,
-				TerminalUiLayout.HOME_TASK.left() + 7 + filled, progressY + 3, pageAccent());
+				TerminalUiLayout.HOME_TASK.left() + 7 + filled, progressY + 3,
+				snapshot.objectiveClaimable() ? HOT : pageAccent());
 
 		if (homeLiveTool != null) {
 			drawHomeToolDetail(graphics, homeLiveTool);
@@ -318,6 +332,20 @@ public final class TerminalScreen extends Screen {
 		Component recent = snapshot.latestSignalEvent();
 		graphics.drawString(font, font.split(recent, TerminalUiLayout.HOME_RECENT.width() - 14).getFirst(),
 				TerminalUiLayout.HOME_RECENT.left() + 7, TerminalUiLayout.HOME_RECENT.top() + 16, GREEN, false);
+	}
+
+	private void drawTaskReward(GuiGraphics graphics) {
+		var reward = snapshot.objectiveReward();
+		if (reward.isEmpty()) return;
+		int x = TerminalUiLayout.HOME_TASK.right() - 24;
+		int y = TerminalUiLayout.HOME_TASK.top() + 4;
+		graphics.fill(x - 2, y - 2, x + 18, y + 18, 0xA006100A);
+		graphics.renderOutline(x - 2, y - 2, 20, 20, snapshot.objectiveClaimable() ? HOT : AMBER);
+		graphics.renderItem(reward, x, y);
+		if (reward.getCount() > 1) {
+			String count = Integer.toString(reward.getCount());
+			graphics.drawString(font, count, x + 17 - font.width(count), y + 9, 0xFFFFFFFF, true);
+		}
 	}
 
 	private void drawQuickTool(GuiGraphics graphics, TerminalTool tool, TerminalUiLayout.Bounds bounds) {
@@ -498,21 +526,21 @@ public final class TerminalScreen extends Screen {
 		switch (tool) {
 			case HOME -> lines.add(tools.homeLine());
 			case MINERALS -> {
-				if (tools.selectedResource() == TerminalResource.NONE) {
-					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.waiting"));
-				} else if (navigation.targetKind() >= 1 && navigation.targetKind() <= 3) {
+				if (tools.mineralScanning()) {
+					lines.add(mineralScanningLine());
+				} else if (mineralTargetLocated()) {
 					lines.add(snapshot.navigationLine(navigation, tools.playerY()));
+				} else if (tools.selectedResource() == TerminalResource.NONE) {
+					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.waiting"));
 				} else {
-					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.auto_refresh",
-							Component.translatable("terminal.thefourthfrequency.resource."
-									+ tools.selectedResource().id())));
+					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.not_found"));
 				}
 			}
 			case PORTAL -> lines.add(tools.portalLine());
 			case WEATHER -> lines.add(tools.weatherLine());
 			case NAVIGATION -> {
-				lines.add(tools.navigationSummaryLine());
-				if (navigation.targetKind() != 0) lines.add(snapshot.navigationLine(navigation, tools.playerY()));
+				if (tools.navigationCompletionAvailable()) lines.add(tools.navigationCompletionLine());
+				else if (navigation.targetKind() != 0) lines.add(snapshot.navigationLine(navigation, tools.playerY()));
 			}
 			case STRONGHOLD -> lines.add(tools.strongholdLine());
 		}
@@ -521,23 +549,40 @@ public final class TerminalScreen extends Screen {
 		return List.copyOf(lines);
 	}
 
+	private Component mineralScanningLine() {
+		int dots = animatedProbeDots(renderAge);
+		return Component.translatable("terminal.thefourthfrequency.tool.minerals.scanning")
+				.copy().append(Component.literal(".".repeat(dots)));
+	}
+
+	private boolean mineralTargetLocated() {
+		return TerminalNavigationPayload.isMineral(navigation.targetKind()) && navigation.located();
+	}
+
+	private Component navigationTargetName(TerminalStructureTarget target) {
+		Component normal = Component.translatable(
+				"terminal.thefourthfrequency.navigation.target." + target.id());
+		if (!target.sideRoute() || !sideRouteGlitchActive(renderAge)) return normal;
+		long cycle = Math.max(1L, (long) Math.floor(renderAge / 40.0D));
+		return Component.literal(corruptNavigationName(normal.getString(), target.wireId(), cycle));
+	}
+
 	private void drawNavigationToolList(GuiGraphics graphics) {
 		navigationHits.clear();
 		List<TerminalStructureTarget> targets = new ArrayList<>();
+		TerminalStructureTarget selected = tools.selectedNavigationTarget();
 		for (TerminalStructureTarget target : TerminalStructureTarget.values()) {
+			if (targets.size() >= 3) break;
 			if (tools.navigationTargetAvailable(target)) targets.add(target);
 		}
 		int index = 0;
 		for (TerminalStructureTarget target : targets) {
 			TerminalUiLayout.Bounds bounds = navigationOptionBounds(index++);
-			boolean selected = tools.selectedNavigationTarget() == target;
-			Component name = Component.translatable("terminal.thefourthfrequency.navigation.target." + target.id());
-			Component label = target.sideRoute()
-					? Component.translatable("terminal.thefourthfrequency.navigation.side_route", name) : name;
-			drawToolButton(graphics, bounds, label, selected);
+			Component name = navigationTargetName(target);
+			drawToolButton(graphics, bounds, name, selected == target);
 			navigationHits.add(new NavigationHit(bounds, TerminalControlPayload.SELECT_STRUCTURE_TARGET, target.wireId()));
 		}
-		if (tools.unstableSignalAvailable() && index < 4) {
+		if (tools.unstableSignalAvailable() && index < 3) {
 			TerminalUiLayout.Bounds bounds = navigationOptionBounds(index++);
 			double pulse = (Math.sin(renderAge * 0.075D) + 1.0D) * 0.5D;
 			int red = lerpColor(0xFF754D50, 0xFFE5A0A4, pulse);
@@ -554,11 +599,11 @@ public final class TerminalScreen extends Screen {
 	}
 
 	private static TerminalUiLayout.Bounds navigationOptionBounds(int index) {
-		int column = Math.floorMod(index, 2);
-		int row = Math.floorDiv(index, 2);
-		int left = column == 0 ? 50 : 198;
-		int top = 124 + row * 20;
-		return new TerminalUiLayout.Bounds(left, top, left + 144, top + 17);
+		return switch (Math.clamp(index, 0, 2)) {
+			case 0 -> TerminalUiLayout.TOOL_OPTION_ONE;
+			case 1 -> TerminalUiLayout.TOOL_OPTION_TWO;
+			default -> TerminalUiLayout.TOOL_OPTION_THREE;
+		};
 	}
 
 	private void drawSignalToolList(GuiGraphics graphics) {
@@ -571,17 +616,15 @@ public final class TerminalScreen extends Screen {
 		if (!tools.available(tool) || tools.toolsDisabled() && tool != TerminalTool.WEATHER) return;
 		switch (tool) {
 			case HOME -> {
-				drawToolButton(graphics, TerminalUiLayout.TOOL_OPTION_ONE,
-						Component.translatable("terminal.thefourthfrequency.tool.home.set_here"), false);
 				if (tools.payload().homeKnown()) drawGuidanceToggle(graphics, tool,
 						TerminalUiLayout.TOOL_ACTION_FULL);
 			}
 			case MINERALS -> {
-				List<TerminalResource> resources = visibleResources();
-				for (int index = 0; index < resources.size(); index++)
-					drawResourceButton(graphics, resourceOptionBounds(index), resources.get(index));
-				if (tools.selectedResource() != TerminalResource.NONE) drawGuidanceToggle(graphics, tool,
-						TerminalUiLayout.TOOL_ACTION_FULL);
+				drawToolButton(graphics, TerminalUiLayout.TOOL_ACTION_PRIMARY,
+						Component.translatable("terminal.thefourthfrequency.tool.minerals.refresh"),
+						tools.mineralScanning());
+				if (tools.guidanceTool() == tool || mineralTargetLocated()) drawGuidanceToggle(graphics, tool,
+						TerminalUiLayout.TOOL_ACTION_SECONDARY);
 			}
 			case PORTAL -> {
 				if (tools.payload().portalKnown()) drawGuidanceToggle(graphics, tool,
@@ -607,27 +650,6 @@ public final class TerminalScreen extends Screen {
 		drawToolButton(graphics, bounds, Component.translatable(active
 				? "terminal.thefourthfrequency.tool.stop"
 				: "terminal.thefourthfrequency.tool.guide"), active);
-	}
-
-	private void drawResourceButton(GuiGraphics graphics, TerminalUiLayout.Bounds bounds, TerminalResource resource) {
-		drawToolButton(graphics, bounds, Component.translatable(
-				"terminal.thefourthfrequency.resource." + resource.id()), tools.selectedResource() == resource);
-	}
-
-	private List<TerminalResource> visibleResources() {
-		List<TerminalResource> resources = new ArrayList<>();
-		for (TerminalResource resource : new TerminalResource[]{TerminalResource.IRON,
-				TerminalResource.REDSTONE, TerminalResource.DIAMOND})
-			if (tools.resourceAvailable(resource)) resources.add(resource);
-		return resources;
-	}
-
-	private static TerminalUiLayout.Bounds resourceOptionBounds(int index) {
-		return switch (index) {
-			case 0 -> TerminalUiLayout.TOOL_OPTION_ONE;
-			case 1 -> TerminalUiLayout.TOOL_OPTION_TWO;
-			default -> TerminalUiLayout.TOOL_OPTION_THREE;
-		};
 	}
 
 	private void drawToolButton(GuiGraphics graphics, TerminalUiLayout.Bounds bounds, Component label, boolean selected) {
@@ -999,7 +1021,11 @@ public final class TerminalScreen extends Screen {
 		graphics.fill(cx, cy + 14, cx + 1, cy + 17, DIM);
 		graphics.fill(cx - 16, cy, cx - 13, cy + 1, DIM);
 
-		if (navigation.navigable()) drawTargetNeedle(graphics, cx, cy, mineralNeedle);
+		double flashAge = renderAge - navigationNeedleFlashStartedAt;
+		boolean flashVisible = navigationNeedleFlashVisible(flashAge);
+		if ((navigation.navigable() || navigationNeedleFlashActive(flashAge)) && flashVisible) {
+			drawTargetNeedle(graphics, cx, cy, mineralNeedle);
+		}
 		drawNorthNeedle(graphics, cx, cy, northNeedle);
 		graphics.fill(cx - 2, cy - 2, cx + 3, cy + 3, 0xFF17180F);
 		graphics.fill(cx - 1, cy - 1, cx + 2, cy + 2, AMBER);
@@ -1165,6 +1191,11 @@ public final class TerminalScreen extends Screen {
 			return true;
 		}
 		if (page == TerminalPage.HOME) {
+			if (TerminalUiLayout.HOME_TASK.contains(local[0], local[1]) && snapshot.objectiveClaimable()) {
+				send(TerminalControlPayload.CLAIM_TASK_REWARD, snapshot.objectiveIndex());
+				TerminalClientAudio.click();
+				return true;
+			}
 			if (homeLiveTool != null) {
 				if (TerminalUiLayout.HOME_TOOL_CLOSE.contains(local[0], local[1])) {
 					closeHomeLiveTool();
@@ -1204,24 +1235,16 @@ public final class TerminalScreen extends Screen {
 		if (selectedTool == null || !tools.available(selectedTool)
 				|| tools.toolsDisabled() && selectedTool != TerminalTool.WEATHER) return false;
 		switch (selectedTool) {
-			case HOME -> {
-				if (TerminalUiLayout.TOOL_OPTION_ONE.contains(x, y)) {
-					send(TerminalControlPayload.SET_HOME, 0);
-					TerminalClientAudio.click();
-					return true;
-				}
-			}
+			case HOME -> { }
 			case MINERALS -> {
-				List<TerminalResource> resources = visibleResources();
-				for (int index = 0; index < resources.size(); index++) {
-					if (!resourceOptionBounds(index).contains(x, y)) continue;
-					send(TerminalControlPayload.SELECT_RESOURCE, resources.get(index).wireId());
+				if (TerminalUiLayout.TOOL_ACTION_PRIMARY.contains(x, y) && !tools.mineralScanning()) {
+					send(TerminalControlPayload.REQUEST_RESCAN, 0);
 					TerminalClientAudio.click();
 					return true;
 				}
 			}
 			case NAVIGATION -> {
-				if (new TerminalUiLayout.Bounds(50, 124, 342, 163).contains(x, y)
+				if (new TerminalUiLayout.Bounds(50, 139, 342, 157).contains(x, y)
 						&& handleNavigationClick(x, y)) return true;
 			}
 			case PORTAL, STRONGHOLD, WEATHER -> { }
@@ -1230,7 +1253,8 @@ public final class TerminalScreen extends Screen {
 			togglePinnedTool();
 			return true;
 		}
-		TerminalUiLayout.Bounds guidanceBounds = TerminalUiLayout.TOOL_ACTION_FULL;
+		TerminalUiLayout.Bounds guidanceBounds = selectedTool == TerminalTool.MINERALS
+				? TerminalUiLayout.TOOL_ACTION_SECONDARY : TerminalUiLayout.TOOL_ACTION_FULL;
 		if (selectedTool != TerminalTool.WEATHER && guidanceBounds.contains(x, y)
 				&& canToggleGuidance(selectedTool)) {
 			toggleGuidance();
@@ -1243,7 +1267,7 @@ public final class TerminalScreen extends Screen {
 		if (tools.guidanceTool() == tool) return true;
 		return switch (tool) {
 			case HOME -> tools.payload().homeKnown();
-			case MINERALS -> tools.selectedResource() != TerminalResource.NONE;
+			case MINERALS -> mineralTargetLocated();
 			case PORTAL -> tools.payload().portalKnown();
 			case NAVIGATION -> localNavigationTargetChosen;
 			case STRONGHOLD -> tools.payload().strongholdKnown();
@@ -1252,6 +1276,7 @@ public final class TerminalScreen extends Screen {
 	}
 
 	private void toggleGuidance() {
+		navigationNeedleFlashStartedAt = renderAge;
 		if (tools.guidanceTool() == selectedTool) {
 			send(TerminalControlPayload.STOP_GUIDANCE, 0);
 			if (homeLiveTool == selectedTool) homeLiveTool = null;
@@ -1283,6 +1308,8 @@ public final class TerminalScreen extends Screen {
 
 	private void closeHomeLiveTool() {
 		if (tools.guidanceTool() != null) send(TerminalControlPayload.STOP_GUIDANCE, 0);
+		else if (homeLiveTool == TerminalTool.NAVIGATION && tools.navigationCompletionAvailable())
+			send(TerminalControlPayload.DISMISS_NAVIGATION_COMPLETION, 0);
 		homeLiveTool = null;
 		TerminalClientAudio.click();
 	}
@@ -1302,6 +1329,7 @@ public final class TerminalScreen extends Screen {
 		for (NavigationHit hit : navigationHits) {
 			if (!hit.bounds().contains(x, y)) continue;
 			localNavigationTargetChosen = true;
+			navigationNeedleFlashStartedAt = renderAge;
 			send(hit.action(), hit.value());
 			TerminalClientAudio.click();
 			return true;
@@ -1442,6 +1470,7 @@ public final class TerminalScreen extends Screen {
 	}
 
 	private boolean selectPage(TerminalPage next) {
+		send(TerminalControlPayload.VISIT_PAGE, next.ordinal());
 		if (next == page) {
 			if (next == TerminalPage.RECORDS && snapshot.unreadCount() > 0) {
 				send(TerminalControlPayload.MARK_RECORDS_READ, 0);
@@ -1590,8 +1619,7 @@ public final class TerminalScreen extends Screen {
 	}
 	public void backFromToolForTesting() { backFromToolDetail(); }
 	public void closeHomeLiveToolForTesting() { closeHomeLiveTool(); }
-	public void setHomeForTesting() { send(TerminalControlPayload.SET_HOME, 0); }
-	public void selectResourceForTesting(int value) { send(TerminalControlPayload.SELECT_RESOURCE, value); }
+	public void refreshMineralsForTesting() { send(TerminalControlPayload.REQUEST_RESCAN, 0); }
 	public void startGuidanceForTesting(int slot) { send(TerminalControlPayload.START_GUIDANCE, slot); }
 	public void stopGuidanceForTesting() { send(TerminalControlPayload.STOP_GUIDANCE, 0); }
 	public void selectCacheForTesting(int value) {

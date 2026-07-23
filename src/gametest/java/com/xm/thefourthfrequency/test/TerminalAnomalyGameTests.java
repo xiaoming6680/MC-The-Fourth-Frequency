@@ -87,9 +87,11 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 			record.putInt(TerminalData.BAND_STAGE, 0);
 			record.putBoolean(TerminalData.BOUND, false);
 			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, SurvivalMilestone.MINED_LOGS.mask());
+			record.putInt(TerminalData.SELECTED_RESOURCE, TerminalResource.IRON.wireId());
+			record.putLong(TerminalData.MINERAL_SCAN_READY_GAME_TIME, player.level().getGameTime());
+			record.putString(TerminalData.TARGET_KIND, TerminalResource.IRON.id());
 		});
 
-		TerminalToolService.selectResource(player, TerminalResource.IRON.wireId());
 		ResourceGuidanceService.requestRescan(player);
 		ResourceGuidanceService.updatePlayer(player);
 		CompoundTag located = data.terminalRecord(player.getUUID()).orElseThrow();
@@ -190,65 +192,7 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest
-	public void terminalV2RecordMigratesSignalsFilesTimesAndUnreadStateToCurrentSchema(GameTestHelper helper) {
-		CompoundTag legacy = new CompoundTag();
-		legacy.putInt(TerminalData.SCHEMA_VERSION, 2);
-		legacy.putString(TerminalData.OWNER_ID, java.util.UUID.randomUUID().toString());
-		legacy.putBoolean(TerminalData.SECOND_CACHE_UNLOCKED, true);
-		legacy.putString(TerminalData.FACILITY_EVIDENCE,
-				"surface_shelter=north;field_observation=east;underground_mine_station=2;abandoned_warehouse=south");
-		legacy.putBoolean(TerminalData.LOCAL_FILE_UNLOCKED, false);
-		ListTag logs = new ListTag();
-		CompoundTag anomaly = new CompoundTag();
-		anomaly.putInt("sequence", 7);
-		anomaly.putString("type", "fracture");
-		anomaly.putLong("game_time", 18_000L);
-		anomaly.putString("dimension", "minecraft:the_nether");
-		anomaly.putLong("position", BlockPos.asLong(1, 2, 3));
-		anomaly.putInt("variant", 2);
-		anomaly.putInt("severity", 2);
-		anomaly.putBoolean("unread", true);
-		logs.add(anomaly);
-		legacy.put(TerminalData.ANOMALY_LOGS, logs);
-		legacy.putInt(TerminalData.ANOMALY_LOG_SEQUENCE, 7);
-		legacy.putInt(TerminalData.UNREAD_ANOMALY_COUNT, 1);
-		CompoundTag legacyUnlocked = legacy.copy();
-		legacyUnlocked.putBoolean(TerminalData.LOCAL_FILE_UNLOCKED, true);
-
-		CompoundTag migrated = TerminalData.migrateRecord(legacy);
-		helper.assertValueEqual(migrated.getIntOr(TerminalData.SCHEMA_VERSION, 0),
-				PersistenceSchema.CURRENT_VERSION, "Schema upgraded to the current version");
-		helper.assertValueEqual(migrated.getIntOr(TerminalData.ANOMALY_TIER, -1), 0,
-				"Unbound legacy record has no anomaly tier");
-		var entries = TerminalSignalLog.entries(migrated, SignalBand.UNKNOWN);
-		helper.assertValueEqual(entries.size(), 1, "Legacy anomaly moved to unknown band");
-		helper.assertValueEqual(entries.getFirst().sequence(), 7, "Legacy sequence retained");
-		helper.assertValueEqual(entries.getFirst().dayTime(), 18_000L, "Best available day time retained");
-		helper.assertValueEqual(TerminalSignalLog.clock(entries.getFirst().dayTime()), "00:00",
-				"Migrated display clock");
-		helper.assertTrue(entries.getFirst().unread(), "Unread state retained");
-		var files = TerminalFileState.states(migrated);
-		helper.assertValueEqual(files.size(), 7,
-				"Legacy evidence migrates into four damaged files and their locked diary without losing old files");
-		helper.assertTrue(TerminalFileState.discovered(migrated, "encrypted_witness_file"),
-				"The complete diary is retained after the one-way legacy migration");
-		helper.assertFalse(TerminalFileState.unlocked(migrated, "encrypted_witness_file"),
-				"Legacy evidence alone does not silently unlock the complete file");
-		helper.assertFalse(com.xm.thefourthfrequency.narrative.HiddenFilePolicy.FILE_IDS.stream()
-						.anyMatch(id -> TerminalFileState.read(migrated, id)),
-				"Old discovered files remain unread until this terminal owner opens them again");
-
-		CompoundTag migratedUnlocked = TerminalData.migrateRecord(legacyUnlocked);
-		helper.assertTrue(TerminalFileState.unlocked(migratedUnlocked, "encrypted_witness_file"),
-				"An old unlocked complete diary must remain unlocked after v7 migration");
-		helper.assertTrue(com.xm.thefourthfrequency.narrative.HiddenFilePolicy.FILE_IDS.stream()
-						.allMatch(id -> TerminalFileState.read(migratedUnlocked, id)),
-				"Grandfathered unlocked diaries retain completion without forcing four rereads");
-		helper.succeed();
-	}
-
-	@GameTest
-	public void legacyWireChannelsStayBoundedWhileReadStateIsUnified(GameTestHelper helper) {
+	public void wireChannelsStayBoundedWhileReadStateIsUnified(GameTestHelper helper) {
 		CompoundTag record = new CompoundTag();
 		for (int index = 0; index < 40; index++) TerminalSignalLog.append(record, SignalBand.UNKNOWN,
 				"unknown_" + index, index, index, "minecraft:overworld", 0L, 0, 1, index == 39);
@@ -276,7 +220,7 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 				2L, 2L, "minecraft:overworld", 0L, 1, 1, true);
 		TerminalSignalLog.append(record, SignalBand.UNKNOWN, "fragment_candidate_2_1",
 				3L, 3L, "minecraft:overworld", 0L, 1, 1, false);
-		TerminalSignalLog.append(record, SignalBand.PUBLIC, "facility_surface_shelter",
+		TerminalSignalLog.append(record, SignalBand.PUBLIC, "fragment_shared_0",
 				4L, 4L, "minecraft:overworld", 0L, 0, 1, true);
 
 		helper.assertTrue(TerminalSignalLog.pruneOperationalTelemetry(record),
@@ -285,7 +229,7 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 		helper.assertValueEqual(types.size(), 2, "Only useful and tool-owned entries remain");
 		helper.assertTrue(types.contains("fragment_candidate_2_1"),
 				"Candidate coordinates remain available to the navigation tool");
-		helper.assertTrue(types.contains("facility_surface_shelter"), "Story records remain visible");
+		helper.assertTrue(types.contains("fragment_shared_0"), "Current story records remain visible");
 		helper.assertValueEqual(TerminalSignalLog.unreadCount(record), 1,
 				"Pruning also removes unread attention created only by telemetry");
 		helper.succeed();
@@ -375,32 +319,6 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 		helper.succeed();
 	}
 
-	@GameTest
-	public void terminalV1RecordMigratesToV6SignalsAndFilesWithoutDroppingStoryFields(GameTestHelper helper) {
-		CompoundTag legacy = new CompoundTag();
-		legacy.putInt(TerminalData.SCHEMA_VERSION, 1);
-		legacy.putString(TerminalData.OWNER_ID, java.util.UUID.randomUUID().toString());
-		legacy.putBoolean(TerminalData.BOUND, true);
-		legacy.putString(TerminalData.FACILITY_EVIDENCE, "surface_shelter=north");
-		legacy.putLong(TerminalData.RIFT_POSITION, BlockPos.asLong(12, 34, 56));
-		legacy.putString(TerminalData.ENDING_OUTCOME, "prevention_failed");
-		CompoundTag migrated = TerminalData.migrateRecord(legacy);
-		helper.assertValueEqual(migrated.getIntOr(TerminalData.SCHEMA_VERSION, 0), 7, "Terminal schema v7");
-		helper.assertValueEqual(migrated.getIntOr(TerminalData.ANOMALY_TIER, 0), 1,
-				"Bound legacy record starts at effective anomaly tier one");
-		helper.assertTrue(migrated.getBooleanOr(TerminalData.ANOMALY_LEGACY_RAMP, false),
-				"Bound legacy record enables gradual tier catch-up");
-		helper.assertValueEqual(TerminalSignalLog.entries(migrated).size(), 0, "Legacy worlds start with empty signals");
-		helper.assertTrue(migrated.getBooleanOr(TerminalData.BOUND, false), "Binding retained");
-		helper.assertValueEqual(migrated.getStringOr(TerminalData.FACILITY_EVIDENCE, ""),
-				"surface_shelter=north", "Evidence retained");
-		helper.assertValueEqual(migrated.getLongOr(TerminalData.RIFT_POSITION, 0L), BlockPos.asLong(12, 34, 56),
-				"Rift retained");
-		helper.assertValueEqual(migrated.getStringOr(TerminalData.ENDING_OUTCOME, ""), "prevention_failed",
-				"Ending retained");
-		helper.succeed();
-	}
-
 	@GameTest(maxTicks = 80)
 	public void doorCascadePermanentlyBreaksBothDoorHalvesWithoutDrops(GameTestHelper helper) {
 		ServerPlayer player = helper.makeMockServerPlayerInLevel();
@@ -479,14 +397,14 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 		player.snapTo(chestPos.getX() + 0.5D, chestPos.getY(), chestPos.getZ() + 3.5D, 180.0F, 0.0F);
 		helper.getLevel().setBlockAndUpdate(chestPos, Blocks.BARREL.defaultBlockState());
 		Container chest = (Container) helper.getLevel().getBlockEntity(chestPos);
-		chest.setItem(0, new ItemStack(ModItems.TERMINATION_SPIKE));
+		chest.setItem(0, new ItemStack(ModItems.OLD_TERMINAL));
 		chest.setItem(1, new ItemStack(Items.DIAMOND, 20));
 		helper.assertTrue(AmbientAnomalyService.trigger(player, "local_rule_collapse", false),
 				"Client-only trace anomaly starts without a server lease");
 		helper.runAfterDelay(8, () -> {
 			Container currentChest = (Container) helper.getLevel().getBlockEntity(chestPos);
 			helper.assertTrue(helper.getLevel().getBlockState(chestPos).is(Blocks.BARREL), "Container block remains real");
-			helper.assertTrue(currentChest.getItem(0).is(ModItems.TERMINATION_SPIKE), "Story item remains untouched");
+			helper.assertTrue(currentChest.getItem(0).is(ModItems.OLD_TERMINAL), "Story item remains untouched");
 			helper.assertValueEqual(currentChest.getItem(1).getCount(), 20, "Container contents remain untouched");
 			helper.assertValueEqual(player.getInventory().getItem(8).getCount(), 7, "Inventory remains untouched");
 			AnomalyRuntimeService.interrupt(player, false);

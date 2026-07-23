@@ -9,7 +9,7 @@ import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.SurvivalProgressService;
 import com.xm.thefourthfrequency.world.TerminalLifecycleService;
-import com.xm.thefourthfrequency.ending.EndingState;
+import com.xm.thefourthfrequency.ending.FinaleRuntimePolicy;
 import net.fabricmc.fabric.api.entity.event.v1.ServerEntityWorldChangeEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
@@ -81,7 +81,7 @@ public final class BodyConstructionService {
 
 	private static void updateServer(MinecraftServer server) {
 		FrequencyWorldData data = FrequencyWorldData.get(server);
-		if (!EndingState.activeAnomaliesAllowed(data)) {
+		if (!FinaleRuntimePolicy.backgroundSystemsAllowed(data)) {
 			return;
 		}
 		if (!data.narrativeState().getBooleanOr(ARCHIVE_UNLOCKED, false)) {
@@ -172,7 +172,8 @@ public final class BodyConstructionService {
 			});
 		}
 		TerminalLifecycleService.ensureCarried(player, false);
-		player.displayClientMessage(Component.translatable("message.thefourthfrequency.nether_rift.observed"), true);
+		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+				Component.translatable("message.thefourthfrequency.nether_rift.observed"));
 		sendPrivateAnomaly(player, "fracture");
 		return true;
 	}

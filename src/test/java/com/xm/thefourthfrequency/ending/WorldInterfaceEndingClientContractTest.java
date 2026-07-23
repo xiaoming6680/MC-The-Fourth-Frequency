@@ -72,16 +72,16 @@ final class WorldInterfaceEndingClientContractTest {
 		assertTrue(controller.contains("CURRENT_NOTICE_VERSION = 3"));
 		assertTrue(screen.contains("screen.thefourthfrequency.first_run_notice.body.safety_v2"));
 		assertTrue(screen.contains("screen.thefourthfrequency.first_run_notice.body.recovery_v3"));
+		assertFalse(screen.contains("screen.thefourthfrequency.first_run_notice.recovery_hint"));
+		assertFalse(chinese.has("screen.thefourthfrequency.first_run_notice.recovery_hint"));
 		String disclosure = String.join(" ",
 				chinese.get("screen.thefourthfrequency.first_run_notice.eyebrow").getAsString(),
 				chinese.get("screen.thefourthfrequency.first_run_notice.body.control").getAsString(),
 				chinese.get("screen.thefourthfrequency.first_run_notice.body.safety").getAsString(),
 				chinese.get("screen.thefourthfrequency.first_run_notice.body.safety_v2").getAsString(),
-				chinese.get("screen.thefourthfrequency.first_run_notice.body.recovery_v3").getAsString(),
-				chinese.get("screen.thefourthfrequency.first_run_notice.recovery_hint").getAsString());
+				chinese.get("screen.thefourthfrequency.first_run_notice.body.recovery_v3").getAsString());
 		assertTrue(disclosure.contains("安全边界") && disclosure.contains("不是病毒"));
 		assertTrue(disclosure.contains("不可逆") && disclosure.contains("提前备份"));
-		assertTrue(disclosure.contains("-Dthefourthfrequency.safeMode=true"));
 		for (String spoiler : new String[]{"失败结局", "成功或失败", "最终战", "末地",
 				"壁纸", "Notepad", "已损坏", "封锁"})
 			assertFalse(disclosure.contains(spoiler), spoiler);
