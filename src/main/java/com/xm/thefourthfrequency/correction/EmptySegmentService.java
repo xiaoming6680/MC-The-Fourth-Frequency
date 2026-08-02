@@ -2,7 +2,6 @@ package com.xm.thefourthfrequency.correction;
 
 import com.xm.thefourthfrequency.audio.AudioService;
 
-import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.networking.EmptySegmentPayload;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
@@ -71,39 +70,6 @@ public final class EmptySegmentService {
 		// Empty-segment variants are scheduled exclusively by AmbientAnomalyService v3.
 	}
 
-	private static void scheduleRareEvent(MinecraftServer server) {
-		FrequencyWorldData data = FrequencyWorldData.get(server);
-		if (!CorrectionState.active(data) || server.getPlayerList().getPlayers().isEmpty()) {
-			return;
-		}
-		var correction = CorrectionState.get(data);
-		long last = correction.getLongOr("last_empty_segment_tick", 0L);
-		int interval = RuntimeServices.config().pacing().developerAcceleration()
-				? 200 : CorrectionOrganService.parameters().emptySegmentMinIntervalTicks();
-		if (server.overworld().getGameTime() - last < interval) {
-			return;
-		}
-		ServerPlayer player = server.getPlayerList().getPlayers().stream()
-				.filter(value -> value.level() == server.overworld())
-				.filter(value -> FrequencyWorldData.get(server).terminalRecord(value.getUUID())
-						.map(record -> record.getIntOr(TerminalData.PLOT_STAGE, 0) >= 4).orElse(false))
-				.findFirst().orElse(null);
-		if (player == null || ACTIVE_EVENTS.containsKey(player.getUUID())) {
-			return;
-		}
-		int next = Math.floorMod(correction.getIntOr("next_empty_segment_event", 0), EventType.values().length);
-		EventType type = EventType.values()[next];
-		if (trigger(player, type, switch (type) {
-			case VIEWPOINT_SEPARATION -> 100;
-			case EXPERIENCE_GAP -> 80;
-		})) {
-			CorrectionState.update(data, state -> {
-				state.putLong("last_empty_segment_tick", server.overworld().getGameTime());
-				state.putInt("next_empty_segment_event", (next + 1) % EventType.values().length);
-			});
-		}
-	}
-
 	public static boolean trigger(ServerPlayer player, EventType type, int durationTicks) {
 		if (durationTicks < 20 || durationTicks > 600 || ACTIVE_EVENTS.containsKey(player.getUUID())
 				|| !(player.level() instanceof ServerLevel level)) {
@@ -120,8 +86,9 @@ public final class EmptySegmentService {
 			if (camera == null) {
 				return false;
 			}
+			var forward = ViewpointOrientationPolicy.facePlayerForward(player.getYRot());
 			camera.snapTo(player.getX() + 4.0, player.getY() + 2.0, player.getZ() + 4.0,
-					player.getYRot() + 180.0F, 15.0F);
+					forward.yaw(), forward.pitch());
 			camera.setInvisible(true);
 			camera.setNoGravity(true);
 			camera.addTag("thefourthfrequency:empty_viewpoint");

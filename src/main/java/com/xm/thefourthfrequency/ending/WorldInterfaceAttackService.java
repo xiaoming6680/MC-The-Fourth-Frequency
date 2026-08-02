@@ -3,8 +3,10 @@ package com.xm.thefourthfrequency.ending;
 import com.mojang.serialization.DynamicOps;
 import com.xm.thefourthfrequency.audio.AudioService;
 import com.xm.thefourthfrequency.audio.ModSounds;
+import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEnergyOrbEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEntity;
+import com.xm.thefourthfrequency.terminal.TerminalNoticeService;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
@@ -67,7 +69,8 @@ public final class WorldInterfaceAttackService {
 	private static final String REFLECTED_ARROW_TAG = "thefourthfrequency.world_interface_reflected";
 	private static final String CAPTURED_ARROW_TAG = "thefourthfrequency.world_interface_captured";
 	private static final String RECOVERY_ITEM_TAG_PREFIX = "thefourthfrequency.recovery.";
-	private static final Component EVICTION_REASON = Component.literal("给   我   滚   开");
+	private static final Component EVICTION_REASON = Component.translatable(
+			"hud.thefourthfrequency.world_interface.action.forced_expulsion");
 
 	private static final Map<UUID, AttackRuntime> ACTIVE = new ConcurrentHashMap<>();
 	private static final Map<UUID, ProjectileLease> PROJECTILES = new ConcurrentHashMap<>();
@@ -769,7 +772,20 @@ public final class WorldInterfaceAttackService {
 		try {
 			stack = decodeItem(server, payload);
 		} catch (RuntimeException exception) {
-			return false;
+			// The item behind this ledger entry can no longer be decoded (e.g. it came from a
+			// mod/data version that has since changed). The stack was already taken from the
+			// owner's inventory when custody began, so retrying forever - which is what returning
+			// false here used to do, since restoreRecoveryEntries() calls this on every login and
+			// death - just leaves the entry "unresolved" forever with the item gone and no record
+			// of why. Drop the unrecoverable entry and tell the owner outright instead.
+			TheFourthFrequency.LOGGER.warn(
+					"Discarding unrecoverable world_interface recovery entry {} for {} ({}): {}",
+					entry.id(), entry.ownerId(), entry.kind(), exception.toString());
+			if (removeRecovery(server, encounterId, entry.id())) {
+				TerminalNoticeService.send(owner, Component.translatable(
+						"message.thefourthfrequency.world_interface.recovery_lost"));
+			}
+			return true;
 		}
 		int baseline = payload.getIntOr("baseline_count", stack.getCount());
 		Entity worldItem = findRecoveryItemEntity(server, entry.id(), payload);

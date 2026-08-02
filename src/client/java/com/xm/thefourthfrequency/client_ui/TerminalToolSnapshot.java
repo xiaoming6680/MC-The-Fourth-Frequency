@@ -6,6 +6,7 @@ import com.xm.thefourthfrequency.terminal.TerminalResource;
 import com.xm.thefourthfrequency.terminal.TerminalTool;
 import com.xm.thefourthfrequency.terminal.TerminalToolService;
 import com.xm.thefourthfrequency.terminal.TerminalStructureTarget;
+import com.xm.thefourthfrequency.world.SurvivalProgressService;
 import net.minecraft.network.chat.Component;
 
 public record TerminalToolSnapshot(TerminalToolSnapshotPayload payload) {
@@ -23,7 +24,7 @@ public record TerminalToolSnapshot(TerminalToolSnapshotPayload payload) {
 				TerminalToolService.NO_TOOL, TerminalToolService.NO_TOOL,
 				TerminalTool.WEATHER.slot(), TerminalTool.HOME.slot(), 0, 0,
 				TerminalStructureTarget.NONE.wireId(), false,
-				false, 0, TerminalResource.NONE.wireId(), 0, false, 0,
+				false, 0, TerminalResource.NONE.wireId(), 0, false, false, 0,
 				0, 0L, 13_000, 0,
 				false, false, false, 0, 0, 0, "",
 				false, false, 0, 0, 0, "",
@@ -83,6 +84,10 @@ public record TerminalToolSnapshot(TerminalToolSnapshotPayload payload) {
 
 	public int mineralScanTicks() {
 		return Math.clamp(payload.mineralScanTicks(), 0, 60);
+	}
+
+	public boolean mineralSurveyNearby() {
+		return payload.mineralSurveyNearby();
 	}
 
 	public boolean navigationCompletionAvailable() {
@@ -152,8 +157,9 @@ public record TerminalToolSnapshot(TerminalToolSnapshotPayload payload) {
 
 	public Component strongholdLine() {
 		int samples = Math.max(0, payload.eyeSampleCount());
-		if (samples < 2 || !payload.strongholdKnown()) return Component.translatable(
-				"terminal.thefourthfrequency.tool.stronghold.samples", samples, 2);
+		if (samples < SurvivalProgressService.REQUIRED_EYE_SAMPLES || !payload.strongholdKnown())
+			return Component.translatable("terminal.thefourthfrequency.tool.stronghold.samples",
+					samples, SurvivalProgressService.REQUIRED_EYE_SAMPLES);
 		if (!payload.strongholdSameDimension()) return Component.translatable(
 				"terminal.thefourthfrequency.tool.stronghold.other_dimension", payload.strongholdDimension());
 		return Component.translatable("terminal.thefourthfrequency.tool.stronghold.estimate",

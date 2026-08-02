@@ -51,45 +51,57 @@ final class AlphaLoadTimelineTest {
 	}
 
 	@Test
-	void firstEntryNormalPreludeStopsAtHalfForExactlyOneSecond() {
+	void firstEntryUsesTheAlreadyVisibleHalfProgressAndOnlyKeepsThePause() {
+		assertEquals(0, AlphaLoadTimeline.NORMAL_PROGRESS_END_TICK);
 		assertEquals(20, AlphaLoadTimeline.NORMAL_PAUSE_TICKS);
 		assertTrue(AlphaLoadTimeline.initialNormalFrame(0));
-		assertEquals(0.0F, AlphaLoadTimeline.initialNormalProgress(0));
-		assertEquals(0.5F, AlphaLoadTimeline.initialNormalProgress(
-				AlphaLoadTimeline.NORMAL_PROGRESS_END_TICK));
+		assertEquals(0.5F, AlphaLoadTimeline.initialNormalProgress(0));
 		assertEquals(0.5F, AlphaLoadTimeline.initialNormalProgress(
 				AlphaLoadTimeline.GLITCH_START_TICK - 1));
 		assertFalse(AlphaLoadTimeline.initialNormalFrame(AlphaLoadTimeline.GLITCH_START_TICK));
 	}
 
 	@Test
-	void terrainFailurePastesDownwardThenSmallThenLargeWithoutHoldingForever() {
+	void terrainFailureEscalatesFromSparseRecognitionToImmediateFullScreenWall() {
+		assertEquals(AlphaLoadTimeline.GLITCH_START_TICK + 24, AlphaLoadTimeline.FAILURE_TICK);
+		assertFalse(AlphaLoadTimeline.observerMessageVisible(
+				AlphaLoadTimeline.OBSERVER_MESSAGE_START_TICK - 1));
+		assertTrue(AlphaLoadTimeline.observerMessageVisible(
+				AlphaLoadTimeline.OBSERVER_MESSAGE_START_TICK));
+		assertFalse(AlphaLoadTimeline.observerMessageVisible(
+				AlphaLoadTimeline.OBSERVER_MESSAGE_END_TICK));
 		assertEquals(0, AlphaLoadTimeline.copiedFailureLines(AlphaLoadTimeline.FAILURE_TICK - 1));
 		assertEquals(1, AlphaLoadTimeline.copiedFailureLines(AlphaLoadTimeline.FAILURE_TICK));
 		assertEquals(AlphaLoadTimeline.MAX_FAILURE_COPIES,
 				AlphaLoadTimeline.copiedFailureLines(10_000));
-		assertTrue(AlphaLoadTimeline.MAX_FAILURE_COPIES > 12);
+		assertTrue(AlphaLoadTimeline.MAX_FAILURE_COPIES >= 24);
+		assertTrue(AlphaLoadTimeline.MAX_FAILURE_COPIES <= 32);
 		int downwardMid = (AlphaLoadTimeline.FAILURE_TICK + AlphaLoadTimeline.FLOOD_START_TICK) / 2;
 		int earlyDownwardCopies = AlphaLoadTimeline.copiedFailureLines(downwardMid) - 1;
 		int lateDownwardCopies = AlphaLoadTimeline.MAX_FAILURE_COPIES
 				- AlphaLoadTimeline.copiedFailureLines(downwardMid);
-		assertTrue(lateDownwardCopies > earlyDownwardCopies);
-		assertEquals(0, AlphaLoadTimeline.smallFailureCopies(AlphaLoadTimeline.FLOOD_START_TICK - 1));
-		assertEquals(6, AlphaLoadTimeline.smallFailureCopies(AlphaLoadTimeline.FLOOD_START_TICK));
-		assertEquals(AlphaLoadTimeline.MAX_SMALL_FAILURE_COPIES,
-				AlphaLoadTimeline.smallFailureCopies(AlphaLoadTimeline.SMALL_PASTE_COMPLETE_TICK));
-		assertTrue(AlphaLoadTimeline.MAX_SMALL_FAILURE_COPIES > 96);
-		assertEquals(0, AlphaLoadTimeline.largeFailureCopies(
-				AlphaLoadTimeline.LARGE_PASTE_START_TICK - 1));
-		assertEquals(1, AlphaLoadTimeline.largeFailureCopies(
-				AlphaLoadTimeline.LARGE_PASTE_START_TICK));
-		assertTrue(AlphaLoadTimeline.smallFailureCopies(AlphaLoadTimeline.LARGE_PASTE_START_TICK)
-				< AlphaLoadTimeline.MAX_SMALL_FAILURE_COPIES);
-		assertEquals(AlphaLoadTimeline.MAX_LARGE_FAILURE_COPIES,
-				AlphaLoadTimeline.largeFailureCopies(AlphaLoadTimeline.FREEZE_START_TICK));
-		assertTrue(AlphaLoadTimeline.MAX_LARGE_FAILURE_COPIES > 48);
+		assertTrue(earlyDownwardCopies > lateDownwardCopies);
+		assertFalse(AlphaLoadTimeline.fullScreenFailureWall(
+				AlphaLoadTimeline.FLOOD_START_TICK - 1));
+		assertTrue(AlphaLoadTimeline.fullScreenFailureWall(
+				AlphaLoadTimeline.FLOOD_START_TICK));
+		assertTrue(AlphaLoadTimeline.fullScreenFailureWall(
+				AlphaLoadTimeline.FREEZE_START_TICK));
+		assertFalse(AlphaLoadTimeline.fullScreenFailureWall(
+				AlphaLoadTimeline.BLACKOUT_START_TICK));
+		assertEquals(40, AlphaLoadTimeline.LEGACY_RECOVERY_START_TICK
+				- AlphaLoadTimeline.FLOOD_START_TICK
+				- AlphaLoadTimeline.BLACKOUT_TICKS);
 		assertFalse(AlphaLoadTimeline.frozenFailureFrame(AlphaLoadTimeline.FREEZE_START_TICK - 1));
 		assertTrue(AlphaLoadTimeline.frozenFailureFrame(AlphaLoadTimeline.FREEZE_START_TICK));
+		assertFalse(AlphaLoadTimeline.frozenFailureFrame(AlphaLoadTimeline.BLACKOUT_START_TICK));
+		assertFalse(AlphaLoadTimeline.blackoutFrame(AlphaLoadTimeline.BLACKOUT_START_TICK - 1));
+		assertTrue(AlphaLoadTimeline.blackoutFrame(AlphaLoadTimeline.BLACKOUT_START_TICK));
+		assertTrue(AlphaLoadTimeline.blackoutFrame(
+				AlphaLoadTimeline.LEGACY_RECOVERY_START_TICK - 1));
+		assertFalse(AlphaLoadTimeline.blackoutFrame(
+				AlphaLoadTimeline.LEGACY_RECOVERY_START_TICK));
+		assertEquals(40, AlphaLoadTimeline.BLACKOUT_TICKS);
 		assertFalse(AlphaLoadTimeline.legacyRecoveryFrame(
 				AlphaLoadTimeline.LEGACY_RECOVERY_START_TICK - 1));
 		assertTrue(AlphaLoadTimeline.legacyRecoveryFrame(

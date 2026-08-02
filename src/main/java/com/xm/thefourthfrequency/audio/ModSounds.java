@@ -21,6 +21,8 @@ public final class ModSounds {
 	public static final SoundEvent TERMINAL_LOCK = register("terminal_lock");
 	public static final SoundEvent TERMINAL_FAULT = register("terminal_fault");
 	public static final SoundEvent TERMINAL_ANOMALY = register("terminal_anomaly");
+	public static final SoundEvent ALPHA_CORRUPTION_WARNING = register("alpha_corruption_warning");
+	public static final SoundEvent ALPHA_CORRUPTION_COLLAPSE = register("alpha_corruption_collapse");
 	public static final SoundEvent WORLD_INTERFACE_ALTAR = register("world_interface_altar");
 	public static final SoundEvent WORLD_INTERFACE_TERMINAL = register("world_interface_terminal");
 	public static final SoundEvent WORLD_INTERFACE_ANCHOR = register("world_interface_anchor");

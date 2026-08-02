@@ -217,7 +217,7 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 			case INVENTORY -> prepareInventory(player, state);
 			case SAFE_PATH -> prepareSafePath(level, player, state);
 			case WORLD_INVARIANTS -> prepareWorldInvariants(level, player, state);
-			case CAMERA -> prepareCameraStage(level, player);
+			case CAMERA -> prepareCameraStage(level, player, state);
 			case HORIZON -> prepareHorizonStage(level, player);
 			case EMPTY, META_FALLBACK, CHANNEL -> { }
 		}
@@ -272,14 +272,15 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 		player.setItemSlot(net.minecraft.world.entity.EquipmentSlot.HEAD, new ItemStack(Items.IRON_HELMET));
 	}
 
-	private static void prepareCameraStage(ServerLevel level, ServerPlayer player) {
+	private static void prepareCameraStage(ServerLevel level, ServerPlayer player, FixtureState state) {
 		BlockPos origin = player.blockPosition().offset(-32, 0, 0);
 		for (int x = -6; x <= 6; x++) for (int z = -6; z <= 6; z++) {
 			level.setBlock(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState(), 2);
 			for (int y = 0; y <= 4; y++) level.setBlock(origin.offset(x, y, z), Blocks.AIR.defaultBlockState(), 2);
 		}
+		state.separationForwardYaw = 73.0F;
 		player.teleportTo(level, origin.getX() + 0.5D, origin.getY(), origin.getZ() + 0.5D,
-				Set.of(), 0.0F, 0.0F, true);
+				Set.of(), state.separationForwardYaw, -31.0F, true);
 	}
 
 	private static void prepareHorizonStage(ServerLevel level, ServerPlayer player) {
@@ -479,6 +480,12 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 			});
 		}
 		if (scenario.id().equals("viewpoint_separation")) {
+			float fixedYaw = AnomalyPresentationController.fixedCameraYawForTesting();
+			float fixedPitch = AnomalyPresentationController.fixedCameraPitchForTesting();
+			if (Math.abs(net.minecraft.util.Mth.wrapDegrees(fixedYaw - fixture.separationForwardYaw)) > 0.01F
+					|| Math.abs(fixedPitch) > 0.01F)
+				throw new AssertionError("Separated camera did not face the trigger-time forward heading: yaw="
+						+ fixedYaw + ", pitch=" + fixedPitch);
 			double moved = context.computeOnClient(client -> client.player.position()
 					.distanceTo(fixture.cameraMovementStart));
 			if (moved < 0.05D) throw new AssertionError("Player could not walk while the camera stayed behind");
@@ -493,6 +500,19 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 			if (!(client.screen instanceof ChannelOverrideScreen))
 				throw new AssertionError("Closed channel override screen was not reopened");
 		});
+		if (scenario.id().equals("local_rule_collapse")) {
+			Set<BlockPos> fragments = context.computeOnClient(client ->
+					AnomalyPresentationController.currentRuleFragmentsForTesting());
+			if (fragments.isEmpty() || fragments.size() > 24)
+				throw new AssertionError("Local-rule fragments were not sparse and bounded: " + fragments.size());
+			List<BlockPos> positions = List.copyOf(fragments);
+			for (int first = 0; first < positions.size(); first++) {
+				for (int second = first + 1; second < positions.size(); second++) {
+					if (positions.get(first).distSqr(positions.get(second)) < 9.0D)
+						throw new AssertionError("Local-rule collapse selected a contiguous block patch");
+				}
+			}
+		}
 	}
 
 	private static void assertMisreadDistribution(Set<Integer> selected) {
@@ -519,7 +539,10 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 			if (AnomalyGameTestBridge.anomalyLogCount(player, scenario.id()) != logBefore)
 				throw new AssertionError("Anomaly logged before completion");
 			switch (scenario.id()) {
-				case "light_dropout" -> assertBlock(level, fixture.light, fixture.blocksBefore.get(fixture.light), "light source changed");
+				case "light_dropout" -> {
+					if (!level.getBlockState(fixture.light).isAir())
+						throw new AssertionError("Nearby light source was not extinguished on the server");
+				}
 				case "surface_fracture" -> assertBlock(level, fixture.wall, fixture.blocksBefore.get(fixture.wall), "real wall changed");
 				case "watcher_alignment" -> {
 					Mob near = (Mob) level.getEntity(fixture.nearMob); Mob far = (Mob) level.getEntity(fixture.farMob);
@@ -578,8 +601,8 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 				throw new AssertionError("Active anomaly or temporary server lease remained after cleanup");
 			if (!AnomalyGameTestBridge.projectedActiveId(player).equals("none"))
 				throw new AssertionError("Persistent active anomaly projection was not cleared");
-			if (AnomalyGameTestBridge.anomalyLogCount(player, scenario.id()) != logBefore + 1)
-				throw new AssertionError("Completed anomaly did not write exactly one terminal log entry");
+			if (AnomalyGameTestBridge.anomalyLogCount(player, scenario.id()) != logBefore)
+				throw new AssertionError("Completed anomaly unexpectedly wrote a terminal log entry");
 			switch (scenario.id()) {
 				case "light_dropout" -> assertBlock(level, fixture.light, fixture.blocksBefore.get(fixture.light), "light source did not restore");
 				case "surface_fracture" -> assertBlock(level, fixture.wall, fixture.blocksBefore.get(fixture.wall), "wall did not remain real");
@@ -747,6 +770,7 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 		private final List<BlockPos> ordinaryDoors = new ArrayList<>(); private BlockPos protectedDoor;
 		private List<ItemStack> inventoryBefore = List.of(); private int serverWatcherCountBefore;
 		private float watcherViewYaw; private float watcherViewPitch;
+		private float separationForwardYaw;
 		private Vec3 cameraMovementStart;
 		private final List<BlockPos> facilityAnchors = new ArrayList<>(); private List<BlockPos> invariantPositions = List.of();
 		private Map<BlockPos, BlockState> invariantBlocks = Map.of();

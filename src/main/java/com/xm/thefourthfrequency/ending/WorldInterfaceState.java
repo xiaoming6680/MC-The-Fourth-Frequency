@@ -1,5 +1,6 @@
 package com.xm.thefourthfrequency.ending;
 
+import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -39,6 +40,26 @@ public final class WorldInterfaceState {
 	private WorldInterfaceState() {
 	}
 
+	// A single boss-fight tick calls snapshot() dozens of times across EndBossEncounterService,
+	// WorldInterfaceAttackService and WorldInterfaceRitualService, and every one of those calls
+	// used to pay for both a full CompoundTag deep copy (FrequencyWorldData.narrativeState()) and
+	// a full decode() of ~10 nested collections. The cache below is keyed on
+	// FrequencyWorldData.narrativeStateRevision(), a counter that instance bumps on every single
+	// mutation regardless of who performs it (see its field doc) - notably including GameTest
+	// fixtures that reset world_interface state directly via updateNarrativeState(root ->
+	// root.remove(...)) rather than going through write()/clearInvalid() below. Keying only on
+	// the FrequencyWorldData instance (without the revision) was tried first and is wrong: it
+	// missed exactly those direct writers and served stale COMPLETE-stage snapshots across
+	// GameTest method boundaries that share one server, breaking WorldInterfaceGameTests wholesale.
+	// The pair is published through one volatile reference so a stale read is possible under
+	// uncoordinated concurrent access but a torn (mismatched owner/revision/snapshot) read is not;
+	// callers already treat a stale revision as an ordinary CAS race and retry through
+	// mutate()/expectedRevision.
+	private static volatile CacheEntry cache;
+
+	private record CacheEntry(FrequencyWorldData owner, long dataRevision, Snapshot snapshot) {
+	}
+
 	public static Snapshot snapshot(MinecraftServer server) {
 		return snapshot(FrequencyWorldData.get(server));
 	}
@@ -48,13 +69,31 @@ public final class WorldInterfaceState {
 	}
 
 	public static Snapshot snapshot(FrequencyWorldData data) {
-		CompoundTag root = data.narrativeState();
-		if (!root.contains(ROOT_KEY)) return Snapshot.absent();
-		try {
-			return decode(root.getCompoundOrEmpty(ROOT_KEY));
-		} catch (RuntimeException exception) {
-			return Snapshot.rejected();
+		CacheEntry cached = cache;
+		long dataRevision = data.narrativeStateRevision();
+		if (cached != null && cached.owner() == data && cached.dataRevision() == dataRevision) {
+			return cached.snapshot();
 		}
+		CompoundTag root = data.narrativeState();
+		Snapshot result;
+		if (!root.contains(ROOT_KEY)) {
+			result = Snapshot.absent();
+		} else {
+			try {
+				result = decode(root.getCompoundOrEmpty(ROOT_KEY));
+			} catch (RuntimeException exception) {
+				// A rejected() snapshot here makes every caller across ending/ and pursuit/ treat
+				// the finale subsystem as inert: EndBossEncounterService.tickStart bails out
+				// silently on this exact result, with nothing else ever surfacing the cause.
+				// Without this log line a corrupted world_interface root turns the boss fight into
+				// an unexplained stall.
+				TheFourthFrequency.LOGGER.error("Failed to decode world_interface state; treating it as "
+						+ "rejected until it is cleared or repaired", exception);
+				result = Snapshot.rejected();
+			}
+		}
+		cache = new CacheEntry(data, dataRevision, result);
+		return result;
 	}
 
 	public static Snapshot get(FrequencyWorldData data) {
@@ -112,6 +151,12 @@ public final class WorldInterfaceState {
 			write(data, after);
 			return MutationResult.applied(after);
 		} catch (RuntimeException exception) {
+			// Unlike the revision-mismatch rejection above (a routine, expected CAS race that
+			// callers retry on), reaching this catch means the mutation itself violated an
+			// invariant - e.g. an illegal stage transition or a schema check in freeze(). Callers
+			// generally give up silently on any non-revision_mismatch reason, so this is the only
+			// place left to record what invariant broke and why.
+			TheFourthFrequency.LOGGER.warn("Rejected world_interface mutation: {}", exception.toString());
 			return MutationResult.rejected("invalid_mutation:" + exception.getMessage(), before);
 		}
 	}
@@ -132,12 +177,14 @@ public final class WorldInterfaceState {
 		Snapshot current = snapshot(data);
 		if (current.valid() || !current.present()) return false;
 		data.updateNarrativeState(root -> root.remove(ROOT_KEY));
+		cache = new CacheEntry(data, data.narrativeStateRevision(), Snapshot.absent());
 		return true;
 	}
 
 	private static void write(FrequencyWorldData data, Snapshot snapshot) {
 		CompoundTag encoded = encode(snapshot);
 		data.updateNarrativeState(root -> root.put(ROOT_KEY, encoded));
+		cache = new CacheEntry(data, data.narrativeStateRevision(), snapshot);
 	}
 
 	private static Snapshot decode(CompoundTag tag) {

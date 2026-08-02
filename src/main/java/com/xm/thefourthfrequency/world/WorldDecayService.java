@@ -47,8 +47,7 @@ public final class WorldDecayService {
 		int milestones = record.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0);
 		int survival = SurvivalMilestone.FOUND_STRONGHOLD.present(milestones) ? 5
 				: SurvivalMilestone.RETURNED_NETHER.present(milestones) ? 4
-				: SurvivalMilestone.IRON.present(milestones) ? 3
-				: SurvivalMilestone.HOME.present(milestones) ? 2 : 0;
+				: SurvivalMilestone.IRON.present(milestones) ? 3 : 0;
 		if (FinaleRuntimePolicy.pressureActive(data)) return 5;
 		return Math.max(anomaly, survival);
 	}

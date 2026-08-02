@@ -17,6 +17,7 @@ final class AnomalyCatalogTest {
 		assertEquals(2, AnomalyCatalog.definitions().stream().filter(value -> value.tier() == 4).count());
 		assertEquals(2, AnomalyCatalog.definitions().stream().filter(value -> value.tier() == 5).count());
 		assertTrue(AnomalyCatalog.require("door_cascade").destructive());
+		assertEquals(AnomalyDefinition.Scope.SHARED, AnomalyCatalog.require("light_dropout").scope());
 		assertFalse(AnomalyCatalog.require("local_rule_collapse").destructive());
 		assertFalse(AnomalyCatalog.contains("rework_probe"));
 		assertFalse(AnomalyCatalog.contains("hostile_echo"));

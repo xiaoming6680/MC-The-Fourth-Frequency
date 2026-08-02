@@ -1,6 +1,7 @@
 package com.xm.thefourthfrequency.mixin;
 
 import com.xm.thefourthfrequency.client_ui.AnomalyPresentationController;
+import com.xm.thefourthfrequency.client_ui.PursuitPresentationClient;
 import net.minecraft.client.player.ClientInput;
 import net.minecraft.client.player.KeyboardInput;
 import net.minecraft.world.entity.player.Input;
@@ -15,7 +16,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class KeyboardInputAnomalyMixin extends ClientInput {
 	@Inject(method = "tick", at = @At("RETURN"))
 	private void thefourthfrequency$lockAnomalyMovement(CallbackInfo callback) {
-		if (!AnomalyPresentationController.isInputLocked()) return;
+		if (!AnomalyPresentationController.isInputLocked()
+				&& !PursuitPresentationClient.blocksPlayerInput()) return;
 		keyPresses = Input.EMPTY;
 		moveVector = Vec2.ZERO;
 	}

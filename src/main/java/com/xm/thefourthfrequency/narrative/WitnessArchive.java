@@ -15,7 +15,7 @@ public record WitnessArchive(String id, int version, String contentHash, List<St
 
 	public WitnessArchive {
 		if (!"witness_termination_note".equals(id) || version != 1
-				|| !"TFF-WF-01-A91C".equals(contentHash)
+				|| !"TFF-WF-02-CONTINUITY".equals(contentHash)
 				|| lineKeys == null || lineKeys.size() < 4 || lineKeys.size() > 8
 				|| lineKeys.stream().anyMatch(key -> key == null
 				|| !key.matches("text\\.thefourthfrequency\\.archive\\.[a-z0-9_.]+"))) {

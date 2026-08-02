@@ -4,8 +4,11 @@ import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.persistence.PersistenceSchema;
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.SurvivalProgressService;
+import net.minecraft.SharedConstants;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.Bootstrap;
 import net.minecraft.world.item.Items;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -13,6 +16,16 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class TerminalTaskServiceTest {
+	@BeforeAll
+	static void bootstrapRegistries() {
+		// Items.BREAD / Items.STONE_AXE below trigger BuiltInRegistries's <clinit>, which asserts
+		// that the vanilla bootstrap has run, and that in turn needs the game version detected
+		// (DataFixers reads it). Outside a running game or GameTest environment nothing does this
+		// for us, so the plain unit-test JVM needs it done explicitly once.
+		SharedConstants.tryDetectVersion();
+		Bootstrap.bootStrap();
+	}
+
 	@Test
 	void firstTaskRequiresAllFourExplicitTabVisits() {
 		CompoundTag record = new CompoundTag();
@@ -54,6 +67,7 @@ final class TerminalTaskServiceTest {
 		assertEquals(12, SurvivalProgressService.REQUIRED_WOOD);
 		assertEquals(12, SurvivalProgressService.REQUIRED_IRON);
 		assertEquals(8, SurvivalProgressService.REQUIRED_BLAZE_RODS);
+		assertEquals(3, SurvivalProgressService.REQUIRED_STRONGHOLD_UNLOCK_EYES);
 		assertEquals(4, SurvivalProgressService.REQUIRED_CRAFTED_EYES);
 		assertEquals(3, SurvivalProgressService.REQUIRED_EYE_SAMPLES);
 		assertEquals(11, TerminalTaskService.taskCount());

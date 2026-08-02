@@ -14,26 +14,6 @@ public final class AnomalyIntensity {
 
 	private AnomalyIntensity() { }
 
-	public static int storyCeiling(boolean bound, int bandStage, boolean archiveOrRift,
-			boolean continuityOrNetherRift, int bodyProgress, boolean endingActive) {
-		if (!bound) return 0;
-		if (bodyProgress >= 750 || endingActive) return 5;
-		if (continuityOrNetherRift || bodyProgress > 0) return 4;
-		if (archiveOrRift) return 3;
-		if (bandStage > 0) return 2;
-		return 1;
-	}
-
-	public static int survivalStoryCeiling(boolean bound, int bandStage, boolean archiveOrRift,
-			boolean continuityOrNetherRift, int milestoneMask, boolean endingActive) {
-		if (!bound) return 0;
-		if ((milestoneMask & (1 << 7)) != 0 || endingActive) return 5;
-		if ((milestoneMask & ((1 << 3) | (1 << 4))) != 0 || continuityOrNetherRift) return 4;
-		if ((milestoneMask & ((1 << 1) | (1 << 2))) != 0 || archiveOrRift) return 3;
-		if (bandStage > 0 || (milestoneMask & 1) != 0) return 2;
-		return 1;
-	}
-
 	public static int progressionCeiling(boolean bound, int bandStage, int milestoneMask, int eyeSamples,
 			int activityProofMask, long effectiveActivityTicks, boolean endingActive) {
 		if (!bound) return 0;

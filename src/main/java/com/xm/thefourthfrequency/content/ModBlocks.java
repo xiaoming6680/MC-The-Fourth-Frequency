@@ -13,11 +13,6 @@ import net.minecraft.world.level.block.state.BlockBehaviour;
 import java.util.function.Function;
 
 public final class ModBlocks {
-	public static final Block RULE_FRACTURE_CORE = register("rule_fracture_core", Blocks.OBSIDIAN, 18.0F);
-	public static final Block NASCENT_BODY_ORGAN = register("nascent_body_organ", Blocks.SCULK_CATALYST, 8.0F);
-	public static final Block REWORK_SCAR = register("rework_scar", Blocks.CRYING_OBSIDIAN, 12.0F);
-	public static final Block REWORK_BRACE = register("rework_brace", Blocks.DEEPSLATE_TILES, 6.0F);
-	public static final Block NETHER_RULE_FRACTURE_CORE = register("nether_rule_fracture_core", Blocks.CRYING_OBSIDIAN, 18.0F);
 	public static final ResonanceCoreBlock RESONANCE_CORE = registerCustom("resonance_core",
 			BlockBehaviour.Properties.ofFullCopy(Blocks.CRYING_OBSIDIAN)
 					.strength(Block.INDESTRUCTIBLE, 3_600_000.0F).noLootTable().lightLevel(state -> 12),
@@ -41,7 +36,7 @@ public final class ModBlocks {
 	}
 
 	public static void initialize() {
-		TheFourthFrequency.LOGGER.info("Registered fracture, correction, World Interface, and anomaly proxy blocks");
+		TheFourthFrequency.LOGGER.info("Registered World Interface and anomaly proxy blocks");
 	}
 
 	private static Block register(String path, Block copy, float strength) {

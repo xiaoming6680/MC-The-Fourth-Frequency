@@ -1,8 +1,6 @@
 package com.xm.thefourthfrequency.test;
 
-import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.content.TerminalData;
-import com.xm.thefourthfrequency.correction.CorrectionState;
 import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
 import com.xm.thefourthfrequency.terminal.TerminalTaskService;
 import com.xm.thefourthfrequency.terminal.TerminalToolService;
@@ -10,13 +8,16 @@ import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import com.xm.thefourthfrequency.world.StoryProgressService;
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.SurvivalProgressService;
+import com.xm.thefourthfrequency.world.WorldDecayService;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
 
 import java.lang.reflect.Method;
@@ -40,7 +41,28 @@ public final class SurvivalReworkGameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest
-	public void vanillaMilestonesStartARecoverableCorrectionScene(GameTestHelper helper) {
+	public void legacyHomeMilestoneDoesNotAffectProgression(GameTestHelper helper) {
+		ServerPlayer player = helper.makeMockServerPlayerInLevel();
+		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
+		data.updateTerminalRecord(player.getUUID(), record -> {
+			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, SurvivalMilestone.HOME.mask());
+			record.putInt(TerminalData.ANOMALY_TIER, 0);
+			record.putBoolean(TerminalData.BOUND, false);
+		});
+
+		StoryProgressService.update(player, data);
+		var record = data.terminalRecord(player.getUUID()).orElseThrow();
+		helper.assertFalse(record.getBooleanOr(TerminalData.BOUND, false),
+				"A legacy home bit must not bind the terminal or advance the story");
+		helper.assertValueEqual(StoryProgressService.objective(record, data).id(), "mine_logs",
+				"A legacy home bit must not skip the opening survival objective");
+		helper.assertValueEqual(WorldDecayService.stage(data, record), 0,
+				"A legacy home bit must not raise the world-decay stage");
+		helper.succeed();
+	}
+
+	@GameTest
+	public void miningMilestoneAdvancesWithoutAForcedCorrectionScene(GameTestHelper helper) {
 		ServerPlayer player = helper.makeMockServerPlayerInLevel();
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
 		player.getInventory().add(new ItemStack(Items.OAK_PLANKS, SurvivalProgressService.REQUIRED_WOOD));
@@ -51,8 +73,9 @@ public final class SurvivalReworkGameTests implements CustomTestMethodInvoker {
 
 		player.getInventory().add(new ItemStack(Items.RAW_IRON, SurvivalProgressService.REQUIRED_IRON));
 		BlockPos origin = player.blockPosition();
-		for (BlockPos candidate : new BlockPos[] {origin.offset(6, 0, 0), origin.offset(-6, 0, 0),
-				origin.offset(0, 0, 6), origin.offset(0, 0, -6), origin.offset(4, 1, 4)}) {
+		BlockPos[] candidates = {origin.offset(6, 0, 0), origin.offset(-6, 0, 0),
+				origin.offset(0, 0, 6), origin.offset(0, 0, -6), origin.offset(4, 1, 4)};
+		for (BlockPos candidate : candidates) {
 			helper.getLevel().setBlockAndUpdate(candidate, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
 			helper.getLevel().setBlockAndUpdate(candidate.above(), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
 		}
@@ -60,33 +83,24 @@ public final class SurvivalReworkGameTests implements CustomTestMethodInvoker {
 		var record = data.terminalRecord(player.getUUID()).orElseThrow();
 		helper.assertTrue(SurvivalMilestone.IRON.present(
 				record.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0)), "Real carried iron records the mining milestone");
-		BlockPos trace = CorrectionState.anomalyTracePositions(data).stream()
-				.filter(position -> position.distSqr(origin) <= 100.0)
-				.filter(position -> helper.getLevel().getBlockState(position).is(ModBlocks.NASCENT_BODY_ORGAN))
-				.findFirst().orElseThrow();
-		helper.assertTrue(helper.getLevel().getBlockState(trace).is(ModBlocks.NASCENT_BODY_ORGAN),
-				"The deterministic signature scene places one recoverable anomaly trace in empty space");
-		helper.assertTrue(TerminalToolService.toolsDisabled(record, player.level().getGameTime()),
-				"The signature scene temporarily interrupts convenience tools");
-		long savedHome = record.getLongOr(TerminalData.HOME_POSITION, 0L);
-		helper.assertFalse(TerminalToolService.requestRescan(player),
-				"A disabled tool rejects a forced control attempt");
-		var breached = data.terminalRecord(player.getUUID()).orElseThrow();
-		helper.assertTrue((breached.getIntOr(TerminalData.BREACH_MASK, 0) & 1) != 0,
-				"The rejected attempt is recorded for the correction entity's hostility boundary");
-		helper.assertValueEqual(breached.getLongOr(TerminalData.HOME_POSITION, 0L), savedHome,
-				"Tool interruption never deletes a saved home");
+		for (BlockPos candidate : candidates) {
+			helper.assertTrue(helper.getLevel().getBlockState(candidate).isAir(),
+					"Completing the mining task must not place retired correction blocks");
+		}
+		helper.assertFalse(TerminalToolService.toolsDisabled(record, player.level().getGameTime()),
+				"Completing the mining task must not disable terminal tools");
+		helper.assertFalse(TerminalSignalLog.containsType(record, "signature_anomaly")
+						|| TerminalSignalLog.containsType(record, "signature_correction")
+						|| TerminalSignalLog.containsType(record, "signature_explained"),
+				"Completing the mining task must not create signature-scene records");
 
-		data.updateTerminalRecord(player.getUUID(), value ->
-				value.putLong(TerminalData.TOOLS_DISABLED_UNTIL, player.level().getGameTime()));
-		SurvivalProgressService.updatePlayer(player, data);
-		var recovered = data.terminalRecord(player.getUUID()).orElseThrow();
-		helper.assertFalse(TerminalToolService.toolsDisabled(recovered, player.level().getGameTime()),
-				"Waiting naturally restores the convenience tools");
-		helper.assertTrue(TerminalSignalLog.containsType(recovered, "signature_anomaly")
-				&& TerminalSignalLog.containsType(recovered, "signature_correction")
-				&& TerminalSignalLog.containsType(recovered, "signature_explained"),
-				"The terminal records anomaly, correction, and explanation as one complete scene");
+		StoryProgressService.update(player, data);
+		StoryProgressService.update(player, data);
+		var advanced = data.terminalRecord(player.getUUID()).orElseThrow();
+		helper.assertValueEqual(advanced.getIntOr(TerminalData.BAND_STAGE, 0), 1,
+				"Removing the forced scene must not block the fourth-band reveal");
+		helper.assertValueEqual(StoryProgressService.objective(advanced, data).id(), "enter_nether",
+				"Mining completion still advances the survival objective");
 		helper.succeed();
 	}
 
@@ -103,24 +117,22 @@ public final class SurvivalReworkGameTests implements CustomTestMethodInvoker {
 		helper.assertFalse(SurvivalMilestone.HOME.present(mask) || SurvivalMilestone.IRON.present(mask)
 				|| SurvivalMilestone.PREPARED_NETHER.present(mask),
 				"Unobserved earlier milestones are never fabricated");
-		helper.assertValueEqual(record.getIntOr(TerminalData.BODY_PROGRESS, 0), 0,
-				"The transition never writes the retired timer");
 		helper.succeed();
 	}
 
 	@GameTest
-	public void completedTerminalTaskWaitsForOneManualRewardClaim(GameTestHelper helper) {
+	public void completedTerminalTaskAutomaticallyDeliversOneReward(GameTestHelper helper) {
 		ServerPlayer player = helper.makeMockServerPlayerInLevel();
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
 		data.updateTerminalRecord(player.getUUID(), record ->
 				record.putInt(TerminalData.TERMINAL_PAGE_VISIT_MASK, TerminalTaskService.ALL_PAGES_MASK));
 		var ready = TerminalTaskService.current(data.terminalRecord(player.getUUID()).orElseThrow());
 		helper.assertValueEqual(ready.id(), "learn_terminal", "The first task is learning the four terminal tabs");
-		helper.assertTrue(ready.claimable(), "Visiting all four tabs completes the task without auto-claiming");
+		helper.assertTrue(ready.claimable(), "Visiting all four tabs completes the task");
 
 		int breadBefore = player.getInventory().countItem(Items.BREAD);
-		helper.assertValueEqual(TerminalTaskService.claim(player, ready.index()),
-				TerminalTaskService.ClaimResult.CLAIMED, "The completed card accepts one explicit claim");
+		helper.assertTrue(TerminalTaskService.notifyIfCompleted(player),
+				"Completion automatically advances the task and delivers its reward");
 		helper.assertValueEqual(player.getInventory().countItem(Items.BREAD) - breadBefore, 6,
 				"The first task grants its displayed reward");
 		helper.assertValueEqual(TerminalTaskService.claim(player, ready.index()),
@@ -131,27 +143,37 @@ public final class SurvivalReworkGameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest
-	public void fullInventoryKeepsCompletedRewardUnclaimed(GameTestHelper helper) {
+	public void fullInventoryDropsCompletedRewardNearby(GameTestHelper helper) {
 		ServerPlayer player = helper.makeMockServerPlayerInLevel();
+		player.gameMode.changeGameModeForPlayer(GameType.SURVIVAL);
+		BlockPos loadedTestPos = helper.absolutePos(new BlockPos(1, 2, 1));
+		player.snapTo(loadedTestPos.getX() + 0.5D, loadedTestPos.getY(),
+				loadedTestPos.getZ() + 0.5D, 0.0F, 0.0F);
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
 		data.updateTerminalRecord(player.getUUID(), record ->
 				record.putInt(TerminalData.TERMINAL_PAGE_VISIT_MASK, TerminalTaskService.ALL_PAGES_MASK));
-		for (int slot = 0; slot < 36; slot++) {
+		for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
 			if (player.getInventory().getItem(slot).isEmpty()) {
 				player.getInventory().setItem(slot, new ItemStack(Items.COBBLESTONE, 64));
 			}
 		}
 		player.getInventory().setChanged();
 
-		helper.assertValueEqual(TerminalTaskService.claim(player, 0),
-				TerminalTaskService.ClaimResult.INVENTORY_FULL,
-				"A full inventory rejects the claim without dropping the reward");
+		helper.assertTrue(TerminalTaskService.notifyIfCompleted(player),
+				"A full inventory still completes automatic reward delivery");
 		var record = data.terminalRecord(player.getUUID()).orElseThrow();
-		helper.assertValueEqual(record.getIntOr(TerminalData.TASK_REWARD_CLAIMED_MASK, 0), 0,
-				"The reward remains available after the failed claim");
-		helper.assertTrue(TerminalTaskService.current(record).claimable(),
-				"The completed card stays in its claimable state");
-		helper.succeed();
+		helper.assertTrue((record.getIntOr(TerminalData.TASK_REWARD_CLAIMED_MASK, 0) & 1) != 0,
+				"The completed task advances even when inventory is full");
+		helper.runAfterDelay(1, () -> {
+			int droppedBread = helper.getLevel().getEntitiesOfClass(ItemEntity.class,
+							player.getBoundingBox().inflate(2.0D)).stream()
+					.filter(entity -> entity.getItem().is(Items.BREAD))
+					.mapToInt(entity -> entity.getItem().getCount())
+					.sum();
+			helper.assertValueEqual(droppedBread, 6,
+					"The reward remainder is dropped at the player's feet");
+			helper.succeed();
+		});
 	}
 
 	@Override

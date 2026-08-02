@@ -147,6 +147,10 @@ public final class AlphaLoadSessionController {
 		return active && corruptionInProgress;
 	}
 
+	public static boolean shouldPrepareInitialCorruptionScreen() {
+		return !presentationRetired && !corruptionEverPlayed;
+	}
+
 	public static boolean shouldRenderLegacyLoadingScreen() {
 		return shouldUsePersistentAlphaLoadingStyle();
 	}

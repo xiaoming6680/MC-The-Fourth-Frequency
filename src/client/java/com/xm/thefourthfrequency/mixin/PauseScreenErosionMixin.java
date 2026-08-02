@@ -1,6 +1,7 @@
 package com.xm.thefourthfrequency.mixin;
 
 import com.xm.thefourthfrequency.client_ui.MenuErosionState;
+import com.xm.thefourthfrequency.client_ui.PursuitPresentationClient;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -8,6 +9,7 @@ import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.network.chat.Component;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -15,12 +17,38 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(PauseScreen.class)
 public abstract class PauseScreenErosionMixin {
 	@Shadow private Button disconnectButton;
+	@Unique private Component thefourthfrequency$originalDisconnectMessage;
+	@Unique private boolean thefourthfrequency$originalDisconnectActive;
 
 	@Inject(method = "init", at = @At("TAIL"))
 	private void thefourthfrequency$erodeSingleplayerExit(CallbackInfo callback) {
-		if (!Minecraft.getInstance().hasSingleplayerServer() || disconnectButton == null) return;
+		if (disconnectButton == null) return;
+		thefourthfrequency$originalDisconnectMessage = disconnectButton.getMessage();
+		thefourthfrequency$originalDisconnectActive = disconnectButton.active;
+		thefourthfrequency$updateDisconnectButton();
+	}
+
+	@Inject(method = "render", at = @At("HEAD"))
+	private void thefourthfrequency$lockPursuitExit(GuiGraphics graphics, int mouseX, int mouseY,
+			float partialTick, CallbackInfo callback) {
+		thefourthfrequency$updateDisconnectButton();
+	}
+
+	@Unique
+	private void thefourthfrequency$updateDisconnectButton() {
+		if (disconnectButton == null || thefourthfrequency$originalDisconnectMessage == null) return;
+		disconnectButton.setMessage(thefourthfrequency$originalDisconnectMessage);
+		disconnectButton.active = thefourthfrequency$originalDisconnectActive;
+		if (PursuitPresentationClient.locksPauseExit()) {
+			disconnectButton.setMessage(Component.translatable(
+					"message.thefourthfrequency.pursuit.exit_locked"));
+			disconnectButton.active = false;
+			return;
+		}
+		if (!Minecraft.getInstance().hasSingleplayerServer()) return;
 		switch (MenuErosionState.stage()) {
-			case MID -> disconnectButton.setMessage(Component.literal("你现在还有机会逃离"));
+			case MID -> disconnectButton.setMessage(Component.translatable(
+					"message.thefourthfrequency.menu_erosion.escape_window"));
 			case LATE -> disconnectButton.active = false;
 			default -> { }
 		}

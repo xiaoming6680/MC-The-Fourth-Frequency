@@ -21,6 +21,18 @@ final class TerminalGuidancePolicyTest {
 	}
 
 	@Test
+	void strongholdToolUnlocksOnlyAfterThreeEyesOfEnderWereObtained() {
+		int unrelatedProgress = SurvivalMilestone.CRAFTED_EYE.mask()
+				| SurvivalMilestone.FOUND_STRONGHOLD.mask()
+				| SurvivalMilestone.ENTERED_END.mask();
+		int twoEyes = TerminalGuidancePolicy.availableToolsMask(unrelatedProgress, false, 2);
+		assertFalse(TerminalGuidancePolicy.available(twoEyes, TerminalTool.STRONGHOLD));
+
+		int threeEyes = TerminalGuidancePolicy.availableToolsMask(0, false, 3);
+		assertTrue(TerminalGuidancePolicy.available(threeEyes, TerminalTool.STRONGHOLD));
+	}
+
+	@Test
 	void homeOnlyReceivesASecondSuggestionAfterStallOrImmediateShelterNeed() {
 		int milestones = SurvivalMilestone.MINED_LOGS.mask() | SurvivalMilestone.IRON.mask();
 		int tools = TerminalGuidancePolicy.availableToolsMask(milestones, false, 0);

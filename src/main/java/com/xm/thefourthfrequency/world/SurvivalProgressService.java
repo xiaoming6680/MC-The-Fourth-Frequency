@@ -1,18 +1,12 @@
 package com.xm.thefourthfrequency.world;
 
-import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
-import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.content.TerminalData;
-import com.xm.thefourthfrequency.correction.CorrectionState;
-import com.xm.thefourthfrequency.terminal.SignalBand;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
-import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
 import com.xm.thefourthfrequency.pursuit.PursuitDimensions;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.stats.Stats;
@@ -24,8 +18,6 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 
-import java.util.List;
-
 /** Server-authoritative vanilla-survival milestones replacing the legacy timed body counter. */
 public final class SurvivalProgressService {
 	public static final int REQUIRED_WOOD = 12;
@@ -33,11 +25,9 @@ public final class SurvivalProgressService {
 	public static final int REQUIRED_LOGS = REQUIRED_WOOD;
 	public static final int REQUIRED_IRON = 12;
 	public static final int REQUIRED_BLAZE_RODS = 8;
+	public static final int REQUIRED_STRONGHOLD_UNLOCK_EYES = 3;
 	public static final int REQUIRED_CRAFTED_EYES = 4;
 	public static final int REQUIRED_EYE_SAMPLES = 3;
-	private static final int SCENE_ANOMALY = 1;
-	private static final int SCENE_CORRECTION = 1 << 1;
-	private static final int SCENE_EXPLAINED = 1 << 2;
 	private static boolean initialized;
 
 	private SurvivalProgressService() {
@@ -66,7 +56,6 @@ public final class SurvivalProgressService {
 		int craftedEyes = Math.max(before.getIntOr(TerminalData.CRAFTED_EYE_COUNT, 0), craftedEyeSamples(player));
 		int add = 0;
 		if (wood >= REQUIRED_WOOD) add |= SurvivalMilestone.MINED_LOGS.mask();
-		if (hasHome(player, before)) add |= SurvivalMilestone.HOME.mask();
 		if (iron >= REQUIRED_IRON) add |= SurvivalMilestone.IRON.mask();
 		if (preparedForNether(player)) add |= SurvivalMilestone.PREPARED_NETHER.mask();
 		if (blazeRods >= REQUIRED_BLAZE_RODS) add |= SurvivalMilestone.COLLECTED_BLAZE_RODS.mask();
@@ -92,9 +81,6 @@ public final class SurvivalProgressService {
 						Math.clamp(craftedEyes, 0, REQUIRED_CRAFTED_EYES));
 			});
 		}
-		CompoundTag current = data.terminalRecord(player.getUUID()).orElse(before);
-		maybeStartSignatureScene(player, data, current);
-		maybeExplainRecoveredTools(player, data, current);
 		TerminalRuntimeService.synchronizeAttentionProjection(player, data);
 	}
 
@@ -172,10 +158,6 @@ public final class SurvivalProgressService {
 		return Math.clamp(Math.max(crafted, accounted), 0, REQUIRED_CRAFTED_EYES);
 	}
 
-	private static boolean hasHome(ServerPlayer player, CompoundTag tag) {
-		return player.getRespawnConfig() != null;
-	}
-
 	private static boolean preparedForNether(ServerPlayer player) {
 		if (hasAny(player, Items.FLINT_AND_STEEL) || count(player, Items.OBSIDIAN) >= 10) return true;
 		for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
@@ -204,78 +186,6 @@ public final class SurvivalProgressService {
 				tag.getStringOr(TerminalData.STRONGHOLD_DIMENSION, ""))) return false;
 		BlockPos target = BlockPos.of(tag.getLongOr(TerminalData.STRONGHOLD_POSITION, 0L));
 		return player.blockPosition().distSqr(target) <= 128L * 128L;
-	}
-
-	private static void maybeStartSignatureScene(ServerPlayer player, FrequencyWorldData data, CompoundTag record) {
-		int milestones = record.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0);
-		int scenes = record.getIntOr(TerminalData.SIGNATURE_SCENE_MASK, 0);
-		if (!SurvivalMilestone.IRON.present(milestones) || (scenes & SCENE_ANOMALY) != 0
-				|| player.level().dimension() != Level.OVERWORLD) return;
-		BlockPos trace = findTracePosition(player);
-		if (trace == null) return;
-		player.level().setBlockAndUpdate(trace, ModBlocks.NASCENT_BODY_ORGAN.defaultBlockState());
-		CorrectionState.setOrganPosition(data, trace, player.getUUID());
-		long now = player.level().getGameTime();
-		long disabledUntil = now
-				+ (RuntimeServices.config().pacing().developerAcceleration() ? 200L : 1_200L);
-		data.updateTerminalRecord(player.getUUID(), tag -> {
-			tag.putInt(TerminalData.SIGNATURE_SCENE_MASK,
-					tag.getIntOr(TerminalData.SIGNATURE_SCENE_MASK, 0) | SCENE_ANOMALY | SCENE_CORRECTION);
-			tag.putLong(TerminalData.TOOLS_DISABLED_UNTIL, disabledUntil);
-			appendOnce(tag, player, "signature_anomaly", trace, 2);
-			appendOnce(tag, player, "signature_correction", trace, 1);
-		});
-		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
-				Component.translatable("message.thefourthfrequency.signature.started"));
-		TerminalRuntimeService.synchronizeProjection(player);
-		TerminalRuntimeService.refresh(player);
-	}
-
-	private static BlockPos findTracePosition(ServerPlayer player) {
-		BlockPos origin = player.blockPosition();
-		for (BlockPos position : List.of(origin.offset(6, 0, 0), origin.offset(-6, 0, 0),
-				origin.offset(0, 0, 6), origin.offset(0, 0, -6), origin.offset(4, 1, 4))) {
-			if (player.level().isLoaded(position) && player.level().getBlockState(position).isAir()
-					&& player.level().getBlockState(position.above()).isAir()) return position;
-		}
-		return null;
-	}
-
-	private static void maybeExplainRecoveredTools(ServerPlayer player, FrequencyWorldData data, CompoundTag record) {
-		int scenes = record.getIntOr(TerminalData.SIGNATURE_SCENE_MASK, 0);
-		if ((scenes & (SCENE_ANOMALY | SCENE_EXPLAINED)) != SCENE_ANOMALY) return;
-		if (record.getLongOr(TerminalData.TOOLS_DISABLED_UNTIL, 0L) > player.level().getGameTime()) return;
-		completeSceneForPlayer(player, data, player.blockPosition());
-	}
-
-	public static void completeCorrectionScene(MinecraftServer server, BlockPos position) {
-		FrequencyWorldData data = FrequencyWorldData.get(server);
-		var owner = CorrectionState.anomalyTraceOwner(data, position);
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-			if (owner.isPresent() && !owner.get().equals(player.getUUID())) continue;
-			if (data.terminalRecord(player.getUUID()).isPresent()) completeSceneForPlayer(player, data, position);
-		}
-	}
-
-	private static void completeSceneForPlayer(ServerPlayer player, FrequencyWorldData data, BlockPos position) {
-		CompoundTag before = data.terminalRecord(player.getUUID()).orElse(null);
-		if (before == null || (before.getIntOr(TerminalData.SIGNATURE_SCENE_MASK, 0) & SCENE_EXPLAINED) != 0) return;
-		data.updateTerminalRecord(player.getUUID(), tag -> {
-			tag.putInt(TerminalData.SIGNATURE_SCENE_MASK,
-					tag.getIntOr(TerminalData.SIGNATURE_SCENE_MASK, 0) | SCENE_EXPLAINED);
-			tag.putLong(TerminalData.TOOLS_DISABLED_UNTIL, 0L);
-			appendOnce(tag, player, "signature_explained", position, 1);
-		});
-		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
-				Component.translatable("message.thefourthfrequency.signature.recovered"));
-		TerminalRuntimeService.synchronizeProjection(player);
-		TerminalRuntimeService.refresh(player);
-	}
-
-	private static void appendOnce(CompoundTag tag, ServerPlayer player, String type, BlockPos position, int severity) {
-		if (TerminalSignalLog.containsType(tag, type)) return;
-		TerminalSignalLog.append(tag, SignalBand.UNKNOWN, type, player.level().getGameTime(), player.level().getDayTime(),
-				player.level().dimension().identifier().toString(), position.asLong(), 0, severity, true);
 	}
 
 	public static int completedCount(CompoundTag tag) {

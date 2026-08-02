@@ -8,6 +8,7 @@ import com.xm.thefourthfrequency.networking.AnomalyStartS2C;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
@@ -32,6 +33,7 @@ public final class AnomalyRuntimeService {
 		ServerPlayerEvents.LEAVE.register(player -> interrupt(player, false));
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> interrupt(oldPlayer, false));
 		ServerPlayerEvents.JOIN.register(AnomalyRuntimeService::clearStaleProjection);
+		ServerLifecycleEvents.SERVER_STOPPING.register(AnomalyRuntimeService::interruptAll);
 	}
 
 	public static boolean start(ServerPlayer player, AnomalyDefinition definition, int variant, long seed,

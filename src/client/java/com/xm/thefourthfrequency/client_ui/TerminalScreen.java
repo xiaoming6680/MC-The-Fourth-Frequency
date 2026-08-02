@@ -37,6 +37,7 @@ import java.util.Map;
 
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.ALERT_BACKGROUND;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.AMBER;
+import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.CLAIMABLE;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.CYAN;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.DARK_BORDER;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.DIM;
@@ -47,12 +48,14 @@ import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.LCD_BACKGR
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.LCD_BORDER;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.MUTED;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.MUTED_DARK;
+import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.READING_META;
+import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.READING_TEXT;
+import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.READING_TITLE;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.SELECTED;
 import static com.xm.thefourthfrequency.terminal.TerminalNavigationVisualPolicy.animatedProbeDots;
 import static com.xm.thefourthfrequency.terminal.TerminalNavigationVisualPolicy.corruptNavigationName;
-import static com.xm.thefourthfrequency.terminal.TerminalNavigationVisualPolicy.navigationNeedleFlashActive;
-import static com.xm.thefourthfrequency.terminal.TerminalNavigationVisualPolicy.navigationNeedleFlashVisible;
 import static com.xm.thefourthfrequency.terminal.TerminalNavigationVisualPolicy.sideRouteGlitchActive;
+import static com.xm.thefourthfrequency.terminal.TerminalNavigationVisualPolicy.targetNeedleVisible;
 
 public final class TerminalScreen extends Screen {
 	private static final int BASE_WIDTH = 512;
@@ -62,6 +65,16 @@ public final class TerminalScreen extends Screen {
 	private static final long WAVE_COLOR_MILLIS = 180L;
 	private static final long FILE_UNLOCK_FADE_MILLIS = 1_000L;
 	private static final int ROW_HEIGHT = 10;
+	private static final int FILE_TEXT_INSET = 8;
+	private static final int FILE_SCROLLBAR_GUTTER = 7;
+	private static final float FILE_TITLE_SCALE = 0.90F;
+	private static final float FILE_BODY_SCALE = 0.78F;
+	private static final float FILE_NOTE_SCALE = 0.68F;
+	private static final int FILE_TITLE_ROW_HEIGHT = 11;
+	private static final int FILE_BODY_ROW_HEIGHT = 9;
+	private static final int FILE_NOTE_ROW_HEIGHT = 8;
+	private static final int FILE_TITLE_GAP = 5;
+	private static final int FILE_PARAGRAPH_GAP = 4;
 	private static final int SIGNAL_ROW_HEIGHT = 12;
 	private static final int WAVE_SAMPLES = 48;
 
@@ -74,6 +87,7 @@ public final class TerminalScreen extends Screen {
 	private int age;
 	private double renderAge;
 	private double unreadFlashStartedAt;
+	private double unreadFileFlashStartedAt;
 	private long renderNowMillis;
 	private final TuningTransition tuningTransition;
 	private final TuningTransition waveformMorphTransition;
@@ -96,6 +110,7 @@ public final class TerminalScreen extends Screen {
 	private boolean toolOpenedFromHome;
 	private TerminalTool homeLiveTool;
 	private boolean localNavigationTargetChosen;
+	private boolean initialRecordsAcknowledged;
 	private int hoveredToolSlot = -1;
 	private boolean localTuningOnly;
 	private double navigationNeedleFlashStartedAt = -100.0D;
@@ -123,7 +138,7 @@ public final class TerminalScreen extends Screen {
 		super(Component.translatable("screen.thefourthfrequency.terminal"));
 		this.snapshot = new TerminalSnapshot(payload);
 		this.mode = snapshot.mode();
-		this.page = TerminalPage.initialPage(mode);
+		this.page = TerminalPage.fromIndex(snapshot.initialPage());
 		this.tuning = snapshot.tuning();
 		this.tuningTransition = new TuningTransition(tuning, TRANSITION_MILLIS);
 		this.waveformMorphTransition = new TuningTransition(
@@ -133,6 +148,16 @@ public final class TerminalScreen extends Screen {
 		this.displayedObjectiveFraction = snapshot.objectiveFraction();
 		this.targetObjectiveFraction = displayedObjectiveFraction;
 		this.animatedObjectiveId = snapshot.objectiveId();
+	}
+
+	@Override
+	protected void init() {
+		super.init();
+		if (!initialRecordsAcknowledged && page == TerminalPage.RECORDS) {
+			initialRecordsAcknowledged = true;
+			send(TerminalControlPayload.VISIT_PAGE, TerminalPage.RECORDS.ordinal());
+			if (snapshot.unreadCount() > 0) send(TerminalControlPayload.MARK_RECORDS_READ, 0);
+		}
 	}
 
 	public void update(TerminalSnapshotPayload payload) {
@@ -145,6 +170,7 @@ public final class TerminalScreen extends Screen {
 			diaryUnlockStartedAtMillis = nowMillis();
 		}
 		if (next.unreadCount() > snapshot.unreadCount()) unreadFlashStartedAt = age;
+		if (next.unreadFileCount() > snapshot.unreadFileCount()) unreadFileFlashStartedAt = age;
 		long nowMillis = nowMillis();
 		int nextTuning = next.tuning();
 		if (nextTuning != tuning && (!localTuningOnly || receiverGameplayActive())) {
@@ -278,15 +304,21 @@ public final class TerminalScreen extends Screen {
 		drawTab(graphics, TerminalUiLayout.TOOLS_TAB, TerminalPage.TOOLS,
 				"terminal.thefourthfrequency.tab.tools", false);
 		drawTab(graphics, TerminalUiLayout.RECORDS_TAB, TerminalPage.RECORDS,
-				"terminal.thefourthfrequency.tab.records", snapshot.unreadCount() > 0);
+				"terminal.thefourthfrequency.tab.records", snapshot.unreadCount() > 0, unreadFlashStartedAt);
 		drawTab(graphics, TerminalUiLayout.FILES_TAB, TerminalPage.FILES,
-				"terminal.thefourthfrequency.tab.files", false);
+				"terminal.thefourthfrequency.tab.files", snapshot.unreadFileCount() > 0,
+				unreadFileFlashStartedAt);
 	}
 
 	private void drawTab(GuiGraphics graphics, TerminalUiLayout.Bounds bounds,
 			TerminalPage tab, String key, boolean unread) {
+		drawTab(graphics, bounds, tab, key, unread, unreadFlashStartedAt);
+	}
+
+	private void drawTab(GuiGraphics graphics, TerminalUiLayout.Bounds bounds,
+			TerminalPage tab, String key, boolean unread, double flashStartedAt) {
 		boolean selected = page == tab;
-		boolean flashOn = unread && TerminalUiLayout.unreadFlashOn(renderAge - unreadFlashStartedAt);
+		boolean flashOn = unread && TerminalUiLayout.unreadFlashOn(renderAge - flashStartedAt);
 		int background = flashOn ? ALERT_BACKGROUND : selected ? SELECTED : GLASS;
 		graphics.fill(bounds.left(), bounds.top(), bounds.right(), bounds.bottom(), background);
 		if (flashOn) graphics.renderOutline(bounds.left(), bounds.top(), bounds.width(), bounds.height(), HOT);
@@ -298,7 +330,7 @@ public final class TerminalScreen extends Screen {
 	}
 
 	private void drawHome(GuiGraphics graphics) {
-		drawCard(graphics, TerminalUiLayout.HOME_TASK, snapshot.objectiveClaimable() ? HOT : pageAccent());
+		drawCard(graphics, TerminalUiLayout.HOME_TASK, snapshot.objectiveClaimable() ? CLAIMABLE : pageAccent());
 		graphics.drawString(font, Component.translatable("terminal.thefourthfrequency.home.current_task"),
 				TerminalUiLayout.HOME_TASK.left() + 7, TerminalUiLayout.HOME_TASK.top() + 6, AMBER, false);
 		drawTaskReward(graphics);
@@ -308,7 +340,7 @@ public final class TerminalScreen extends Screen {
 				TerminalUiLayout.HOME_TASK.top() + 20, GREEN, false);
 		if (snapshot.objectiveClaimable()) {
 			graphics.drawString(font, Component.translatable("terminal.thefourthfrequency.home.claim_reward"),
-					TerminalUiLayout.HOME_TASK.left() + 7, TerminalUiLayout.HOME_TASK.top() + 31, HOT, false);
+					TerminalUiLayout.HOME_TASK.left() + 7, TerminalUiLayout.HOME_TASK.top() + 31, CLAIMABLE, false);
 		}
 		int progressWidth = TerminalUiLayout.HOME_TASK.width() - 14;
 		int filled = (int) Math.round(progressWidth * Math.clamp(displayedObjectiveFraction, 0.0D, 1.0D));
@@ -317,7 +349,7 @@ public final class TerminalScreen extends Screen {
 				TerminalUiLayout.HOME_TASK.right() - 7, progressY + 3, DARK_BORDER);
 		graphics.fill(TerminalUiLayout.HOME_TASK.left() + 7, progressY,
 				TerminalUiLayout.HOME_TASK.left() + 7 + filled, progressY + 3,
-				snapshot.objectiveClaimable() ? HOT : pageAccent());
+				snapshot.objectiveClaimable() ? CLAIMABLE : pageAccent());
 
 		if (homeLiveTool != null) {
 			drawHomeToolDetail(graphics, homeLiveTool);
@@ -340,7 +372,7 @@ public final class TerminalScreen extends Screen {
 		int x = TerminalUiLayout.HOME_TASK.right() - 24;
 		int y = TerminalUiLayout.HOME_TASK.top() + 4;
 		graphics.fill(x - 2, y - 2, x + 18, y + 18, 0xA006100A);
-		graphics.renderOutline(x - 2, y - 2, 20, 20, snapshot.objectiveClaimable() ? HOT : AMBER);
+		graphics.renderOutline(x - 2, y - 2, 20, 20, snapshot.objectiveClaimable() ? CLAIMABLE : AMBER);
 		graphics.renderItem(reward, x, y);
 		if (reward.getCount() > 1) {
 			String count = Integer.toString(reward.getCount());
@@ -359,8 +391,12 @@ public final class TerminalScreen extends Screen {
 			return;
 		}
 		drawCard(graphics, bounds, GREEN);
-		graphics.drawString(font, Component.translatable("terminal.thefourthfrequency.home.quick"),
-				bounds.left() + 7, bounds.top() + 6, DIM, false);
+		boolean mineralSurvey = tool == TerminalTool.MINERALS && tools.mineralSurveyNearby();
+		Component heading = Component.translatable(mineralSurvey
+				? "terminal.thefourthfrequency.tool.minerals.nearby_short"
+				: "terminal.thefourthfrequency.home.quick");
+		graphics.drawString(font, ellipsize(heading.getString(), bounds.width() - 14),
+				bounds.left() + 7, bounds.top() + 6, mineralSurvey ? AMBER : DIM, false);
 		graphics.drawString(font, toolName(tool), bounds.left() + 7, bounds.top() + 20, GREEN, false);
 		graphics.drawString(font, Component.translatable("terminal.thefourthfrequency.tool.open"),
 				bounds.right() - 7 - font.width(Component.translatable("terminal.thefourthfrequency.tool.open")),
@@ -530,6 +566,8 @@ public final class TerminalScreen extends Screen {
 					lines.add(mineralScanningLine());
 				} else if (mineralTargetLocated()) {
 					lines.add(snapshot.navigationLine(navigation, tools.playerY()));
+				} else if (tools.mineralSurveyNearby()) {
+					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.nearby"));
 				} else if (tools.selectedResource() == TerminalResource.NONE) {
 					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.waiting"));
 				} else {
@@ -757,7 +795,7 @@ public final class TerminalScreen extends Screen {
 			int[] parts = candidateParts(entry.type());
 			int slot = parts[1];
 			BlockPos position = BlockPos.of(entry.position());
-			Component structure = Component.translatable("terminal.thefourthfrequency.structure." + Math.clamp(entry.variant(), 0, 13));
+			Component structure = snapshot.fragmentLocationName(entry);
 			Component place = Component.translatable("terminal.thefourthfrequency.structure.location."
 					+ Math.clamp(entry.severity(), 0, 2));
 			String dimension = dimensionLabel(entry.dimension());
@@ -935,28 +973,82 @@ public final class TerminalScreen extends Screen {
 
 	private void drawLogDetail(GuiGraphics graphics) {
 		var content = TerminalUiLayout.FILE_CONTENT;
-		List<Component> lines = detailLines();
-		List<StyledRow> rows = new ArrayList<>();
-		for (int i = 0; i < lines.size(); i++) {
-			rows.addAll(styledRows(List.of(lines.get(i)), content.width() - 12, i == 0 ? AMBER : GREEN, 5, false));
+		List<FileRow> rows = new ArrayList<>();
+		int wrapWidth = content.width() - FILE_TEXT_INSET * 2 - FILE_SCROLLBAR_GUTTER;
+		rows.addAll(fileRows(snapshot.fileTitle(detailFile), wrapWidth,
+				READING_TITLE, FILE_TITLE_SCALE, FILE_TITLE_ROW_HEIGHT));
+		rows.add(FileRow.gap(FILE_TITLE_GAP));
+		List<Component> paragraphs = snapshot.fileContent(detailFile);
+		for (int index = 0; index < paragraphs.size(); index++) {
+			boolean damagedNotice = HiddenFilePolicy.isHiddenFile(detailFile.id()) && index == 0;
+			int color = damagedNotice
+					|| detailFile.id().equals("encrypted_witness_file") && index == 0
+					? READING_META : READING_TEXT;
+			rows.addAll(fileRows(paragraphs.get(index), wrapWidth,
+					color, damagedNotice ? FILE_NOTE_SCALE : FILE_BODY_SCALE,
+					damagedNotice ? FILE_NOTE_ROW_HEIGHT : FILE_BODY_ROW_HEIGHT));
+			if (index + 1 < paragraphs.size()) {
+				rows.add(FileRow.gap(FILE_PARAGRAPH_GAP));
+			}
 		}
-		int visible = Math.max(1, (content.height() - 8) / ROW_HEIGHT);
-		fileContentMaxScroll = Math.max(0, rows.size() - visible);
+		int viewportHeight = content.height() - 8;
+		fileContentMaxScroll = maxFileScroll(rows, viewportHeight);
 		fileContentScroll = Math.clamp(fileContentScroll, 0, fileContentMaxScroll);
 		int y = content.top() + 4;
-		for (int index = fileContentScroll; index < rows.size() && index < fileContentScroll + visible; index++) {
-			StyledRow row = rows.get(index);
-			if (row.text() != null) graphics.drawString(font, row.text(), content.left() + row.indent(), y, row.color(), false);
-			y += ROW_HEIGHT;
+		for (int index = fileContentScroll; index < rows.size() && y < content.bottom() - 4; index++) {
+			FileRow row = rows.get(index);
+			if (row.text() != null) {
+				drawScaledFileText(graphics, row, content.left() + FILE_TEXT_INSET, y);
+			}
+			y += row.height();
 		}
+		drawFileScrollbar(graphics, content, filePixelHeight(rows), viewportHeight);
 	}
 
-	private List<Component> detailLines() {
-		if (detailFile == null) return List.of();
-		List<Component> result = new ArrayList<>();
-		result.add(snapshot.fileTitle(detailFile));
-		result.addAll(snapshot.fileContent(detailFile));
-		return List.copyOf(result);
+	private void drawFileScrollbar(GuiGraphics graphics, TerminalUiLayout.Bounds content,
+			int totalHeight, int viewportHeight) {
+		if (fileContentMaxScroll <= 0 || totalHeight <= viewportHeight) return;
+		int x = content.right() - 4;
+		int top = content.top() + 4;
+		int bottom = content.bottom() - 4;
+		int trackHeight = bottom - top;
+		graphics.fill(x, top, x + 2, bottom, DARK_BORDER);
+		int thumbHeight = Math.max(8, Math.round(trackHeight * viewportHeight / (float) totalHeight));
+		int thumbTop = top + Math.round((trackHeight - thumbHeight)
+				* fileContentScroll / (float) fileContentMaxScroll);
+		graphics.fill(x, thumbTop, x + 2, thumbTop + thumbHeight, AMBER);
+	}
+
+	private List<FileRow> fileRows(Component text, int width, int color, float scale, int height) {
+		int logicalWidth = Math.max(1, (int) Math.floor(width / scale));
+		List<FormattedCharSequence> wrapped = font.split(text, logicalWidth);
+		List<FileRow> rows = new ArrayList<>();
+		if (wrapped.isEmpty()) rows.add(new FileRow(null, color, scale, height));
+		else for (FormattedCharSequence line : wrapped) rows.add(new FileRow(line, color, scale, height));
+		return rows;
+	}
+
+	private int maxFileScroll(List<FileRow> rows, int viewportHeight) {
+		int suffixHeight = 0;
+		for (int index = rows.size() - 1; index >= 0; index--) {
+			if (suffixHeight + rows.get(index).height() > viewportHeight) return index + 1;
+			suffixHeight += rows.get(index).height();
+		}
+		return 0;
+	}
+
+	private int filePixelHeight(List<FileRow> rows) {
+		int height = 0;
+		for (FileRow row : rows) height += row.height();
+		return height;
+	}
+
+	private void drawScaledFileText(GuiGraphics graphics, FileRow row, int x, int y) {
+		graphics.pose().pushMatrix();
+		graphics.pose().translate(x, y);
+		graphics.pose().scale(row.scale(), row.scale());
+		graphics.drawString(font, row.text(), 0, 0, row.color(), false);
+		graphics.pose().popMatrix();
 	}
 
 	private void drawLockedDiary(GuiGraphics graphics) {
@@ -1022,8 +1114,7 @@ public final class TerminalScreen extends Screen {
 		graphics.fill(cx - 16, cy, cx - 13, cy + 1, DIM);
 
 		double flashAge = renderAge - navigationNeedleFlashStartedAt;
-		boolean flashVisible = navigationNeedleFlashVisible(flashAge);
-		if ((navigation.navigable() || navigationNeedleFlashActive(flashAge)) && flashVisible) {
+		if (targetNeedleVisible(tools.guidanceTool() != null, navigation.navigable(), flashAge)) {
 			drawTargetNeedle(graphics, cx, cy, mineralNeedle);
 		}
 		drawNorthNeedle(graphics, cx, cy, northNeedle);
@@ -1149,9 +1240,7 @@ public final class TerminalScreen extends Screen {
 	}
 
 	private boolean receiverGameplayActive() {
-		return (page == TerminalPage.TOOLS || page == TerminalPage.HOME)
-				&& selectedTool == TerminalTool.NAVIGATION && tools.available(TerminalTool.NAVIGATION)
-				&& tools.receiverAvailable() && !tools.toolsDisabled();
+		return tools.receiverAvailable() && !tools.toolsDisabled();
 	}
 
 	private boolean receiverMechanicalInteractive() {
@@ -1476,6 +1565,10 @@ public final class TerminalScreen extends Screen {
 				send(TerminalControlPayload.MARK_RECORDS_READ, 0);
 				TerminalClientAudio.click();
 			}
+			if (next == TerminalPage.FILES && snapshot.unreadFileCount() > 0) {
+				send(TerminalControlPayload.MARK_FILES_SEEN, 0);
+				TerminalClientAudio.click();
+			}
 			if (selectedTool != null && (next == TerminalPage.TOOLS || next == TerminalPage.HOME)) {
 				clearSelectedTool(true);
 			}
@@ -1485,7 +1578,10 @@ public final class TerminalScreen extends Screen {
 		if (selectedTool != null) clearSelectedTool(false);
 		page = next;
 		if (next == TerminalPage.RECORDS) send(TerminalControlPayload.MARK_RECORDS_READ, 0);
-		if (next == TerminalPage.FILES && previous != TerminalPage.FILES) resetLogView();
+		if (next == TerminalPage.FILES) {
+			send(TerminalControlPayload.MARK_FILES_SEEN, 0);
+			if (previous != TerminalPage.FILES) resetLogView();
+		}
 		recordsScrollRow = next == TerminalPage.RECORDS ? recordsScrollRow : 0;
 		TerminalClientAudio.click();
 		setMode(next.wireMode());
@@ -1662,6 +1758,7 @@ public final class TerminalScreen extends Screen {
 	public void markAllReadForTesting() { send(TerminalControlPayload.MARK_RECORDS_READ, 0); }
 	public int hiddenFileReadPercentForTesting() { return snapshot.hiddenFileReadPercent(); }
 	public int unreadCountForTesting() { return snapshot.unreadCount(); }
+	public int unreadFileCountForTesting() { return snapshot.unreadFileCount(); }
 	public boolean unreadFlashOnForTesting() {
 		return snapshot.unreadCount() > 0 && TerminalUiLayout.unreadFlashOn(age - unreadFlashStartedAt);
 	}
@@ -1683,6 +1780,7 @@ public final class TerminalScreen extends Screen {
 	}
 	public boolean toolReturnsHomeForTesting() { return toolOpenedFromHome; }
 	public int tuningForTesting() { return tuning; }
+	public boolean receiverGameplayActiveForTesting() { return receiverGameplayActive(); }
 	public double displayedTuningForTesting(long nowMillis) { return tuningTransition.valueAt(nowMillis); }
 	public int selectedFileForTesting() { return selectedFile; }
 	public int fileScrollRowForTesting() { return fileListScroll; }
@@ -1693,7 +1791,10 @@ public final class TerminalScreen extends Screen {
 	public int discoveredHiddenFileCountForTesting() { return snapshot.discoveredHiddenFileCount(); }
 	public boolean diaryUnlockFadeActiveForTesting() { return diaryUnlockStartedAtMillis >= 0L; }
 	public double waveformMorphTargetForTesting() { return waveformMorphTarget(tuning); }
-	public boolean navigationActiveForTesting() { return navigation.navigable(); }
+	public boolean navigationTargetLocatedForTesting() { return navigation.located(); }
+	public boolean navigationActiveForTesting() {
+		return tools.guidanceTool() != null && navigation.navigable();
+	}
 	public void moveFileSelectionForTesting(int delta) { moveFileSelection(delta); }
 	public void openSelectedFileForTesting() { openDirectoryEntry(selectedFile); }
 
@@ -1884,6 +1985,11 @@ public final class TerminalScreen extends Screen {
 
 	private enum LogView { DIRECTORY, DETAIL, LOCKED_DIARY }
 	private record StyledRow(FormattedCharSequence text, int color, int indent, boolean marker) { }
+	private record FileRow(FormattedCharSequence text, int color, float scale, int height) {
+		private static FileRow gap(int height) {
+			return new FileRow(null, DIM, 1.0F, height);
+		}
+	}
 	private record CardDetail(Component text, int navigation) { }
 	private record SignalRow(FormattedCharSequence text, int color, boolean marker, String cardKey,
 			boolean header, int navigationValue) { }

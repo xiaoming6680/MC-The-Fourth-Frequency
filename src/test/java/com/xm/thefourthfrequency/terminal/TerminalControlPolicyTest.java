@@ -47,15 +47,6 @@ final class TerminalControlPolicyTest {
 	}
 
 	@Test
-	void derivesNormalCyanAndRedHardwareStagesFromStoryThresholds() {
-		assertEquals(0, TerminalControlPolicy.visualStage(1, 0));
-		assertEquals(0, TerminalControlPolicy.visualStage(2, 0));
-		assertEquals(1, TerminalControlPolicy.visualStage(3, 0));
-		assertEquals(1, TerminalControlPolicy.visualStage(4, 2));
-		assertEquals(2, TerminalControlPolicy.visualStage(2, 3));
-	}
-
-	@Test
 	void derivesNewHardwareStagesFromPersonalPursuitProgress() {
 		assertEquals(0, TerminalControlPolicy.pursuitVisualStage(0, 5, 5));
 		assertEquals(1, TerminalControlPolicy.pursuitVisualStage(1, 1, 1));

@@ -28,9 +28,9 @@ public final class AnomalyTestTimeline {
 	private static Map<String, Timeline> timelines() {
 		Map<String, Timeline> values = new LinkedHashMap<>();
 		add(values, "phantom_echo", 28, 14, "start", "sound_peak", "restore");
-		add(values, "light_dropout", 24, 10, "start", "hidden", "restore");
+		add(values, "light_dropout", 24, 10, "start", "server_extinguished", "restore");
 		add(values, "surface_fracture", 24, 14, "start", "crack_peak", "restore");
-		add(values, "peripheral_residue", 32, 27, "fast_enter", "corruption_impact", "hold", "restore");
+		add(values, "peripheral_residue", 32, 27, "fast_enter", "corruption_impact_and_hands_removed", "restore");
 		add(values, "watcher_alignment", 28, 12, "start", "aligned", "restore");
 		add(values, "dark_watcher", 32, 12, "spawn", "visible", "remove");
 		add(values, "action_echo", 84, 48, "history", "spawn", "replay", "restore");

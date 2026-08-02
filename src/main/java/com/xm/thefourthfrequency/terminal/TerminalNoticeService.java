@@ -14,14 +14,28 @@ public final class TerminalNoticeService {
 		send(player, message, TerminalNoticePayload.TONE_NONE);
 	}
 
-	public static void unread(ServerPlayer player) {
-		send(player, Component.translatable("message.thefourthfrequency.terminal.unread"),
+	public static void unreadReminder(ServerPlayer player, int unreadCount) {
+		send(player, Component.translatable("message.thefourthfrequency.terminal.unread_reminder", unreadCount),
 				TerminalNoticePayload.TONE_UNREAD);
 	}
 
 	public static void taskComplete(ServerPlayer player) {
 		send(player, Component.translatable("message.thefourthfrequency.task.completed"),
 				TerminalNoticePayload.TONE_TASK_COMPLETE);
+	}
+
+	public static void rewardClaimed(ServerPlayer player, Component rewardName, int rewardCount) {
+		send(player, Component.translatable(
+				"message.thefourthfrequency.task.reward_claimed", rewardName, rewardCount),
+				TerminalNoticePayload.TONE_TASK_COMPLETE);
+	}
+
+	public static void pursuitWarning(ServerPlayer player) {
+		pursuit(player, Component.translatable("message.thefourthfrequency.pursuit.warning"));
+	}
+
+	public static void pursuit(ServerPlayer player, Component message) {
+		send(player, message, TerminalNoticePayload.TONE_PURSUIT_WARNING);
 	}
 
 	private static void send(ServerPlayer player, Component message, int tone) {

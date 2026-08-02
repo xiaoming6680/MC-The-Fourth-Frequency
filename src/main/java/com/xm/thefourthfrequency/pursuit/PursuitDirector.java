@@ -6,14 +6,12 @@ import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
 /** Converts personal mainline transitions into one pending, tutorial-gated pursuit. */
 public final class PursuitDirector {
 	private static final int CHECK_TICKS = 20;
-	private static final long WARNING_LEAD_TICKS = 90L * 20L;
 	private static boolean initialized;
 
 	private PursuitDirector() {
@@ -23,6 +21,27 @@ public final class PursuitDirector {
 		if (initialized) return;
 		initialized = true;
 		ServerTickEvents.END_SERVER_TICK.register(PursuitDirector::tick);
+	}
+
+	public static DebugStartResult debugStart(ServerPlayer player, int requestedForm) {
+		if (requestedForm < 1 || requestedForm > 5) return DebugStartResult.INVALID_FORM;
+		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
+		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
+		if (record == null) return DebugStartResult.NO_TERMINAL_RECORD;
+		if (record.getBooleanOr(TerminalData.PURSUIT_ACTIVE, false)
+				|| PursuitDimensions.isMirror(player.level())) return DebugStartResult.ALREADY_ACTIVE;
+		var family = PursuitDimensions.sourceFamily(player.level().dimension()).orElse(null);
+		if (family == null || family == PursuitDimensions.Family.END) {
+			return DebugStartResult.UNSUPPORTED_DIMENSION;
+		}
+		if (!PursuitSafetyPolicy.canBegin(player, record, data)) return DebugStartResult.UNSAFE;
+		var lease = PursuitSlotManager.acquire(player.level().getServer(), player.getUUID(), family).orElse(null);
+		if (lease == null) return DebugStartResult.NO_SLOT;
+		if (!PursuitSessionService.enterEmptyMirror(player, lease, requestedForm, true)) {
+			PursuitSlotManager.release(player.getUUID());
+			return DebugStartResult.TRANSFER_REJECTED;
+		}
+		return DebugStartResult.STARTED;
 	}
 
 	private static void tick(MinecraftServer server) {
@@ -58,23 +77,7 @@ public final class PursuitDirector {
 		if (!pending || PursuitProgressPolicy.complete(resolved)) return;
 		int form = PursuitProgressPolicy.actualForm(resolved);
 		int demoMask = record.getIntOr(TerminalData.PURSUIT_TUTORIAL_DEMO_MASK, 0);
-		int warningMask = record.getIntOr(TerminalData.PURSUIT_TUTORIAL_WARNING_MASK, 0);
-		if (PursuitTutorialPolicy.demonstrated(demoMask, form)
-				&& !PursuitTutorialPolicy.warned(warningMask, form)) {
-			data.updateTerminalRecord(player.getUUID(), tag -> {
-				tag.putInt(TerminalData.PURSUIT_TUTORIAL_WARNING_MASK,
-						PursuitTutorialPolicy.mark(warningMask, form));
-				tag.putLong(TerminalData.PURSUIT_NEXT_ELIGIBLE_TICK,
-						Math.max(tag.getLongOr(TerminalData.PURSUIT_NEXT_ELIGIBLE_TICK, 0L),
-								now + WARNING_LEAD_TICKS));
-			});
-			player.displayClientMessage(Component.translatable(
-					"message.thefourthfrequency.pursuit.warning." + form), true);
-			TerminalRuntimeService.refresh(player);
-			return;
-		}
-		boolean tutorialReady = PursuitTutorialPolicy.readyForFormalPursuit(demoMask,
-				record.getIntOr(TerminalData.PURSUIT_TUTORIAL_WARNING_MASK, warningMask), form);
+		boolean tutorialReady = PursuitTutorialPolicy.demonstrated(demoMask, form);
 		if (!PursuitProgressPolicy.canStart(pending, allowed, resolved, tutorialReady, now,
 				record.getLongOr(TerminalData.PURSUIT_NEXT_ELIGIBLE_TICK, 0L))) return;
 		if (!PursuitSafetyPolicy.canBegin(player, record, data)) return;
@@ -90,4 +93,16 @@ public final class PursuitDirector {
 				tag.putLong(TerminalData.NEXT_AMBIENT_ANOMALY_TICK,
 						now + AnomalyIntensity.DIMENSION_GRACE_TICKS + 5L * 60L * 20L));
 	}
+
+	public enum DebugStartResult {
+		STARTED,
+		INVALID_FORM,
+		NO_TERMINAL_RECORD,
+		ALREADY_ACTIVE,
+		UNSUPPORTED_DIMENSION,
+		UNSAFE,
+		NO_SLOT,
+		TRANSFER_REJECTED
+	}
+
 }

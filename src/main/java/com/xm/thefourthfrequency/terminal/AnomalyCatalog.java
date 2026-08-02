@@ -12,7 +12,7 @@ import static com.xm.thefourthfrequency.terminal.AnomalyDefinition.Scope.SHARED;
 public final class AnomalyCatalog {
 	private static final List<AnomalyDefinition> DEFINITIONS = List.of(
 			new AnomalyDefinition("phantom_echo", 1, PRIVATE, false, false),
-			new AnomalyDefinition("light_dropout", 1, PRIVATE, false, false),
+			new AnomalyDefinition("light_dropout", 1, SHARED, false, false),
 			new AnomalyDefinition("surface_fracture", 1, PRIVATE, false, false),
 			new AnomalyDefinition("peripheral_residue", 2, PRIVATE, false, false),
 			new AnomalyDefinition("watcher_alignment", 2, SHARED, false, false),

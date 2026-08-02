@@ -10,7 +10,8 @@ import com.xm.thefourthfrequency.networking.TerminalSnapshotPayload;
 import com.xm.thefourthfrequency.networking.TerminalToolSnapshotPayload;
 import com.xm.thefourthfrequency.networking.TerminalLogEntryPayload;
 import com.xm.thefourthfrequency.networking.TerminalFilePayload;
-import com.xm.thefourthfrequency.world.RiftArchiveService;
+import com.xm.thefourthfrequency.world.ResourceGuidanceService;
+import com.xm.thefourthfrequency.narrative.ArchiveUnlockService;
 import com.xm.thefourthfrequency.narrative.HiddenFilePolicy;
 import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
@@ -62,9 +63,16 @@ public final class TerminalRuntimeService {
 		}
 		int mode = REMEMBERED_MODES.getOrDefault(player.getUUID(), TerminalControlPolicy.Mode.SIGNAL.ordinal());
 		int tuning = REMEMBERED_TUNING.getOrDefault(player.getUUID(), TerminalControlPolicy.DEFAULT_TUNING);
+		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
+		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
+		boolean openRecords = record != null
+				&& record.getBooleanOr(TerminalData.PURSUIT_WARNING_RECORDS_REDIRECT, false);
+		if (openRecords) data.updateTerminalRecord(player.getUUID(),
+				tag -> tag.putBoolean(TerminalData.PURSUIT_WARNING_RECORDS_REDIRECT, false));
+		int initialPage = openRecords ? TerminalPage.RECORDS.ordinal() : TerminalPage.initialPage(mode).ordinal();
 		int serverTick = player.level().getServer().getTickCount();
-		ViewState view = new ViewState(hand, TerminalControlPolicy.mode(mode), TerminalControlPolicy.tuning(tuning),
-				0L, 0L, "", serverTick, TerminalToolService.NO_TOOL);
+		ViewState view = new ViewState(hand, TerminalControlPolicy.mode(mode), initialPage,
+				TerminalControlPolicy.tuning(tuning), 0L, 0L, "", serverTick, TerminalToolService.NO_TOOL);
 		OPEN_VIEWS.put(player.getUUID(), view);
 		if (com.xm.thefourthfrequency.world.StructureNavigationService.acknowledgeCompletion(player)) {
 			synchronizeProjection(player);
@@ -84,7 +92,6 @@ public final class TerminalRuntimeService {
 			}
 			case TerminalControlPayload.TUNE -> {
 				if (!TerminalControlPolicy.validTuning(value)
-						|| view.selectedTool != TerminalTool.NAVIGATION.slot()
 						|| !receiverAvailable(player)) return;
 				applyTuning(player, view, value);
 			}
@@ -96,8 +103,6 @@ public final class TerminalRuntimeService {
 			case TerminalControlPayload.SELECT_TOOL -> {
 				if (!TerminalToolService.selectTool(player, value)) return;
 				view.selectedTool = value;
-				if (value != TerminalTool.NAVIGATION.slot()) resetReceiver(view,
-						player.level().getServer().getTickCount());
 			}
 			case TerminalControlPayload.SELECT_STRUCTURE_TARGET -> {
 				if (!com.xm.thefourthfrequency.world.StructureNavigationService.selectTarget(player, value)) return;
@@ -129,6 +134,9 @@ public final class TerminalRuntimeService {
 			case TerminalControlPayload.MARK_RECORDS_READ -> {
 				if (value != 0 || !markRecordsRead(player)) return;
 			}
+			case TerminalControlPayload.MARK_FILES_SEEN -> {
+				if (value != 0 || !markFilesSeen(player)) return;
+			}
 			case TerminalControlPayload.READ_HIDDEN_FILE -> {
 				if (!markHiddenFileRead(player, value)) return;
 			}
@@ -154,6 +162,7 @@ public final class TerminalRuntimeService {
 			default -> { return; }
 		}
 		sendSnapshot(player, view);
+		sendNavigation(player);
 	}
 
 	private static boolean markTruthRead(ServerPlayer player) {
@@ -178,7 +187,23 @@ public final class TerminalRuntimeService {
 		data.updateTerminalRecord(player.getUUID(), tag -> {
 			TerminalSignalLog.markAllRead(tag);
 			tag.putBoolean(TerminalData.UNREAD_ALERT_ACTIVE,
-					tag.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_UNREAD, false));
+					TerminalFileState.unreadCount(tag) > 0
+							|| tag.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_UNREAD, false));
+		});
+		synchronizeAttentionProjection(player, data);
+		return true;
+	}
+
+	private static boolean markFilesSeen(ServerPlayer player) {
+		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
+		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
+		if (record == null) return false;
+		if (TerminalFileState.unreadCount(record) == 0) return true;
+		data.updateTerminalRecord(player.getUUID(), tag -> {
+			TerminalFileState.markAllSeen(tag);
+			tag.putBoolean(TerminalData.UNREAD_ALERT_ACTIVE,
+					TerminalSignalLog.unreadCount(tag) > 0
+							|| tag.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_UNREAD, false));
 		});
 		synchronizeAttentionProjection(player, data);
 		return true;
@@ -199,7 +224,7 @@ public final class TerminalRuntimeService {
 			completed[0] = HiddenFilePolicy.allDiscovered(tag) && HiddenFilePolicy.allRead(tag)
 					&& !TerminalFileState.unlocked(tag, HiddenFilePolicy.COMPLETE_FILE_ID);
 		});
-		if (completed[0]) RiftArchiveService.unlockArchiveFromHiddenFiles(player);
+		if (completed[0]) ArchiveUnlockService.unlockFromHiddenFiles(player);
 		synchronizeProjection(player, data);
 		return true;
 	}
@@ -249,9 +274,6 @@ public final class TerminalRuntimeService {
 		CompoundTag tag = data.terminalRecord(player.getUUID()).orElse(null);
 		if (tag == null) return;
 		ServerLevel level = player.level();
-		BlockPos pos = player.blockPosition();
-		BlockPos rift = BlockPos.of(tag.getLongOr(TerminalData.RIFT_POSITION, 0L));
-		int bodyStage = tag.getIntOr(TerminalData.BODY_STAGE, 0);
 		boolean bound = tag.getBooleanOr(TerminalData.BOUND, false);
 		java.util.List<TerminalLogEntryPayload> logs = TerminalSignalLog.entries(tag).stream()
 				.map(entry -> new TerminalLogEntryPayload(entry.sequence(), entry.band().wireId(), entry.type(), entry.gameTime(),
@@ -264,6 +286,7 @@ public final class TerminalRuntimeService {
 				TerminalSnapshotPayload.CURRENT_PROTOCOL_VERSION,
 				0,
 				view.mode,
+				view.initialPage,
 				view.tuning,
 				TerminalControlPolicy.pursuitVisualStage(
 						tag.getIntOr(TerminalData.PURSUIT_RESOLVED_CHASES, 0),
@@ -277,17 +300,11 @@ public final class TerminalRuntimeService {
 				tag.getBooleanOr(TerminalData.CONTINUITY_LEARNED, false),
 				Math.clamp(tag.getIntOr(TerminalData.CONTINUITY_CONFIDENCE, 0), 0, 100),
 				nonNegative(tag.getIntOr(TerminalData.PORTAL_TRANSITIONS, 0)),
-				Math.clamp(tag.getIntOr(TerminalData.BODY_PROGRESS, 0), 0, 1000),
-				Math.clamp(bodyStage, 0, 4),
-				capabilityMask(tag.getStringOr(TerminalData.TERMINAL_CAPABILITIES, "")),
 				tag.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false),
-				tag.getBooleanOr(TerminalData.RIFT_LOCATED, false),
-				boundedDelta(rift.getX() - pos.getX()),
-				boundedDelta(rift.getZ() - pos.getZ()),
-				rift.getY(),
 				tag.getBooleanOr(TerminalData.TERMINAL_CAPTURED, false),
 				now,
 				TerminalSignalLog.unreadCount(tag),
+				TerminalFileState.unreadCount(tag),
 				logs,
 				tag.getStringOr(TerminalData.ACTIVE_ANOMALY_ID, "none"),
 				(int) Math.clamp(tag.getLongOr(TerminalData.ACTIVE_ANOMALY_UNTIL, 0L) - now, 0L, 1200L),
@@ -329,14 +346,27 @@ public final class TerminalRuntimeService {
 		int dx = 0;
 		int dz = 0;
 		int targetY = 0;
-		TerminalTool tool = TerminalTool.fromSlot(guidance);
+		ViewState view = OPEN_VIEWS.get(player.getUUID());
+		TerminalTool preview = view == null ? null : TerminalTool.fromSlot(view.selectedTool);
+		TerminalTool tool = preview != null ? preview : TerminalTool.fromSlot(guidance);
 		if (tool != null) {
 			switch (tool) {
 				case MINERALS -> {
 					kind = targetKind(navigation.kind());
 					located = TerminalNavigationPayload.isMineral(kind) && navigation.located();
-					sameDimension = player.level().dimension().identifier().toString().equals(navigation.dimension());
 					BlockPos target = BlockPos.of(navigation.position());
+					String targetDimension = navigation.dimension();
+					if (!located) {
+						ResourceGuidanceService.SurveyTarget surveyed =
+								ResourceGuidanceService.automaticSurveyTarget(player, tag);
+						if (surveyed.located()) {
+							kind = targetKind(surveyed.resource().id());
+							located = true;
+							target = surveyed.position();
+							targetDimension = surveyed.dimension();
+						}
+					}
+					sameDimension = player.level().dimension().identifier().toString().equals(targetDimension);
 					dx = boundedDelta(target.getX() - playerPos.getX());
 					dz = boundedDelta(target.getZ() - playerPos.getZ());
 					targetY = target.getY();
@@ -443,23 +473,16 @@ public final class TerminalRuntimeService {
 		};
 	}
 
-	private static int capabilityMask(String value) {
-		int mask = 0;
-		if (value.contains("identity_continuity")) mask |= 1;
-		if (value.contains("fracture_resonance")) mask |= 2;
-		if (value.contains("private_differentiation")) mask |= 4;
-		if (value.contains("body_mapping")) mask |= 8;
-		if (value.contains("behavior_prediction")) mask |= 16;
-		return mask;
-	}
-
 	public static boolean isOpen(ServerPlayer player) {
 		return OPEN_VIEWS.containsKey(player.getUUID());
 	}
 
 	public static void refresh(ServerPlayer player) {
 		ViewState view = OPEN_VIEWS.get(player.getUUID());
-		if (view != null) sendSnapshot(player, view);
+		if (view != null) {
+			sendSnapshot(player, view);
+			sendNavigation(player);
+		}
 	}
 
 	public static void synchronizeProjection(ServerPlayer player) {
@@ -514,7 +537,7 @@ public final class TerminalRuntimeService {
 
 	private static void advanceNearbyReceiver(ServerPlayer player, ViewState view, long now) {
 		var nearby = FragmentInvestigationService.nearby(player).orElse(null);
-		if (view.selectedTool != TerminalTool.NAVIGATION.slot() || nearby == null || !receiverAvailable(player)
+		if (nearby == null || !receiverAvailable(player)
 				|| !TerminalControlPolicy.receiverLocked(view.tuning, nearby.tuning())) {
 			resetReceiver(view, now);
 			return;
@@ -530,8 +553,7 @@ public final class TerminalRuntimeService {
 
 	private static int receiverLockTicks(ServerPlayer player, ViewState view, long now) {
 		var nearby = FragmentInvestigationService.nearby(player).orElse(null);
-		if (view.selectedTool != TerminalTool.NAVIGATION.slot() || nearby == null
-				|| !nearby.key().equals(view.fragmentCandidateKey)
+		if (nearby == null || !nearby.key().equals(view.fragmentCandidateKey)
 				|| !TerminalControlPolicy.receiverLocked(view.tuning, nearby.tuning())) return 0;
 		return (int) Math.clamp(now - view.fragmentLockedSinceTick, 0L, 20L);
 	}
@@ -544,6 +566,7 @@ public final class TerminalRuntimeService {
 	private static final class ViewState {
 		private final InteractionHand hand;
 		private int mode;
+		private final int initialPage;
 		private int tuning;
 		private long nextSyncTick;
 		private long nextNavigationSyncTick;
@@ -551,10 +574,12 @@ public final class TerminalRuntimeService {
 		private long fragmentLockedSinceTick;
 		private int selectedTool;
 
-		private ViewState(InteractionHand hand, int mode, int tuning, long nextSyncTick, long nextNavigationSyncTick,
-				String fragmentCandidateKey, long fragmentLockedSinceTick, int selectedTool) {
+		private ViewState(InteractionHand hand, int mode, int initialPage, int tuning, long nextSyncTick,
+				long nextNavigationSyncTick, String fragmentCandidateKey, long fragmentLockedSinceTick,
+				int selectedTool) {
 			this.hand = hand;
 			this.mode = mode;
+			this.initialPage = initialPage;
 			this.tuning = tuning;
 			this.nextSyncTick = nextSyncTick;
 			this.nextNavigationSyncTick = nextNavigationSyncTick;

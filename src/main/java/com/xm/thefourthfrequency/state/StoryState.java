@@ -16,10 +16,7 @@ public record StoryState(
 		boolean watcherWitnessed,
 		String proofRoute,
 		boolean localFileUnlocked,
-		boolean riftObserved,
-		boolean continuityLearned,
-		int bodyProgress,
-		int bodyStage
+		boolean continuityLearned
 ) {
 	public StoryState {
 		bandStage = Math.clamp(bandStage, 0, 3);
@@ -27,8 +24,6 @@ public record StoryState(
 		calibratedBandsMask &= 0b111;
 		preludeAnomalyMask &= 0b1111;
 		proofRoute = safe(proofRoute, "none");
-		bodyProgress = Math.clamp(bodyProgress, 0, 1000);
-		bodyStage = Math.clamp(bodyStage, 0, 3);
 	}
 
 	public static StoryState read(CompoundTag tag) {
@@ -44,10 +39,7 @@ public record StoryState(
 				tag.getBooleanOr(TerminalData.WATCHER_WITNESSED, false),
 				tag.getStringOr(TerminalData.PROOF_ROUTE, "none"),
 				tag.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false),
-				tag.getBooleanOr(TerminalData.RIFT_OBSERVED, false),
-				tag.getBooleanOr(TerminalData.CONTINUITY_LEARNED, false),
-				tag.getIntOr(TerminalData.BODY_PROGRESS, 0),
-				tag.getIntOr(TerminalData.BODY_STAGE, 0));
+				tag.getBooleanOr(TerminalData.CONTINUITY_LEARNED, false));
 	}
 
 	public void writeTo(CompoundTag tag) {
@@ -62,10 +54,7 @@ public record StoryState(
 		tag.putBoolean(TerminalData.WATCHER_WITNESSED, watcherWitnessed);
 		tag.putString(TerminalData.PROOF_ROUTE, proofRoute);
 		tag.putBoolean(TerminalData.LOCAL_FILE_UNLOCKED, localFileUnlocked);
-		tag.putBoolean(TerminalData.RIFT_OBSERVED, riftObserved);
 		tag.putBoolean(TerminalData.CONTINUITY_LEARNED, continuityLearned);
-		tag.putInt(TerminalData.BODY_PROGRESS, bodyProgress);
-		tag.putInt(TerminalData.BODY_STAGE, bodyStage);
 	}
 
 	public int preludeExposure() {

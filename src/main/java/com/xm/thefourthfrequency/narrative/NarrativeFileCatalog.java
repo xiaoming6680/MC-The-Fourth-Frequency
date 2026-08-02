@@ -29,7 +29,7 @@ public final class NarrativeFileCatalog {
 			if (stream == null) throw new IllegalStateException("Missing terminal file catalog " + RESOURCE);
 			List<Definition> values = new Gson().fromJson(new InputStreamReader(stream, StandardCharsets.UTF_8),
 					new TypeToken<List<Definition>>() { }.getType());
-			if (values == null || values.size() != 12) throw new IllegalStateException("Expected 12 terminal files");
+			if (values == null || values.size() != 7) throw new IllegalStateException("Expected 7 terminal files");
 			return List.copyOf(values);
 		} catch (Exception exception) {
 			throw new IllegalStateException("Unable to load terminal file catalog", exception);

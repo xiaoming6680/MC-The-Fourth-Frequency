@@ -36,10 +36,6 @@ public abstract class BlockRenderDispatcherAnomalyMixin {
 			BlockAndTintGetter level, PoseStack pose, VertexConsumer consumer, boolean checkSides,
 			List<BlockModelPart> modelParts, CallbackInfo callback) {
 		if (REPLACING.get()) return;
-		if (AnomalyPresentationController.isLightSourceHidden(pos)) {
-			callback.cancel();
-			return;
-		}
 		BlockState replacement = AnomalyPresentationController.visualReplacement(pos, state);
 		if (replacement == state) return;
 		AnomalyPresentationController.markTraceRendered(pos);

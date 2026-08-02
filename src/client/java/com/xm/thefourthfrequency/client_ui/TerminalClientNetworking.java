@@ -30,8 +30,6 @@ public final class TerminalClientNetworking {
 		ClientPlayNetworking.registerGlobalReceiver(TerminalNoticePayload.TYPE, (payload, context) ->
 				context.client().execute(() -> {
 					TerminalNoticeHud.enqueue(payload.message(), payload.tone());
-					if (payload.tone() != TerminalNoticePayload.TONE_NONE)
-						TerminalClientAudio.attention(payload.tone());
 				}));
 		ClientPlayNetworking.registerGlobalReceiver(TerminalClosedPayload.TYPE, (payload, context) ->
 				context.client().execute(() -> {

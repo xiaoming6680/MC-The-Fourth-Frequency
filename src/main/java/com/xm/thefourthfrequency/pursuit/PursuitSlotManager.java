@@ -13,7 +13,17 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-/** Main-thread allocator for the two globally concurrent pursuit sessions. */
+/**
+ * Main-thread allocator for the two globally concurrent pursuit sessions.
+ *
+ * <p>Every entry point here - {@link #acquire}, {@link #release}, {@link #lease},
+ * {@link #activeCount} and the two {@link ServerLifecycleEvents} callbacks - runs on the
+ * server tick thread; Fabric API fires {@code SERVER_STARTED}/{@code SERVER_STOPPED} there,
+ * same as every other server-side event this codebase relies on elsewhere. {@code ACTIVE} is a
+ * plain {@link HashMap} and is never touched off that thread, so no synchronization is needed
+ * for it; do not reintroduce it piecemeal on individual methods without also covering the two
+ * {@code clear()} calls below, or the two access patterns disagree about the threading model.</p>
+ */
 public final class PursuitSlotManager {
 	public static final int MAX_ACTIVE_PURSUITS = 2;
 	private static final Map<UUID, Lease> ACTIVE = new HashMap<>();
@@ -29,7 +39,7 @@ public final class PursuitSlotManager {
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> ACTIVE.clear());
 	}
 
-	public static synchronized Optional<Lease> acquire(MinecraftServer server, UUID playerId,
+	public static Optional<Lease> acquire(MinecraftServer server, UUID playerId,
 			PursuitDimensions.Family family) {
 		Lease existing = ACTIVE.get(playerId);
 		if (existing != null) return Optional.of(existing);
@@ -51,15 +61,15 @@ public final class PursuitSlotManager {
 		return Optional.empty();
 	}
 
-	public static synchronized void release(UUID playerId) {
+	public static void release(UUID playerId) {
 		ACTIVE.remove(playerId);
 	}
 
-	public static synchronized Optional<Lease> lease(UUID playerId) {
+	public static Optional<Lease> lease(UUID playerId) {
 		return Optional.ofNullable(ACTIVE.get(playerId));
 	}
 
-	public static synchronized int activeCount() {
+	public static int activeCount() {
 		return ACTIVE.size();
 	}
 
@@ -71,10 +81,11 @@ public final class PursuitSlotManager {
 					.map(record -> record.getBooleanOr(TerminalData.PURSUIT_ACTIVE, false))
 					.orElse(false)) {
 				data.updateTerminalRecord(ownerId, record -> {
+					boolean debugSession = record.getBooleanOr(TerminalData.PURSUIT_SESSION_DEBUG, false);
 					record.putBoolean(TerminalData.PURSUIT_ACTIVE, false);
 					record.putString(TerminalData.PURSUIT_SESSION_PHASE, "recovery_pending");
 					record.putInt(TerminalData.PURSUIT_MIRROR_SLOT, -1);
-					record.putBoolean(TerminalData.PURSUIT_PENDING, true);
+					if (!debugSession) record.putBoolean(TerminalData.PURSUIT_PENDING, true);
 				});
 			}
 		}

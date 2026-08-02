@@ -77,6 +77,26 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest
+	public void bodyMappingWarningRequiresThreeRecordedEyeThrows(GameTestHelper helper) {
+		ServerPlayer player = helper.makeMockServerPlayerInLevel();
+		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
+		data.updateTerminalRecord(player.getUUID(),
+				record -> record.putInt(TerminalData.EYE_SAMPLE_COUNT, 2));
+		TerminalSignalService.updatePlayerForTesting(player);
+		helper.assertFalse(TerminalFileState.discovered(
+						data.terminalRecord(player.getUUID()).orElseThrow(), "body_mapping_warning"),
+				"Two recorded throws must not reveal the altar warning");
+
+		data.updateTerminalRecord(player.getUUID(),
+				record -> record.putInt(TerminalData.EYE_SAMPLE_COUNT, 3));
+		TerminalSignalService.updatePlayerForTesting(player);
+		helper.assertTrue(TerminalFileState.discovered(
+						data.terminalRecord(player.getUUID()).orElseThrow(), "body_mapping_warning"),
+				"The third recorded throw reveals the altar warning");
+		helper.succeed();
+	}
+
+	@GameTest
 	public void earlyResourceGuidanceDoesNotSkipNarrativeBinding(GameTestHelper helper) {
 		ServerPlayer player = helper.makeMockServerPlayerInLevel();
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
@@ -159,18 +179,20 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 		StoryProgressService.update(anomalous, data);
 		helper.assertValueEqual(data.terminalRecord(anomalous.getUUID()).orElseThrow()
 				.getIntOr(TerminalData.BAND_STAGE, 0), 0,
-				"Repeated ambient anomalies still do not replace the survival signature scene");
+				"Repeated ambient anomalies do not replace the mining milestone");
 		data.updateTerminalRecord(anomalous.getUUID(), record -> {
 			record.putBoolean(TerminalData.BOUND, true);
 			record.putBoolean(TerminalData.NIGHT_WITNESSED, true);
-			record.putInt(TerminalData.SIGNATURE_SCENE_MASK, 1);
+			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK,
+					record.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0)
+							| SurvivalMilestone.IRON.mask());
 		});
 		StoryProgressService.update(anomalous, data);
 		anomalyRecord = data.terminalRecord(anomalous.getUUID()).orElseThrow();
 		helper.assertValueEqual(anomalyRecord.getIntOr(TerminalData.BAND_STAGE, 0), 1,
-				"Unknown reveals only after the deterministic survival signature scene begins");
-		helper.assertValueEqual(TerminalSignalLog.entries(anomalyRecord, SignalBand.UNKNOWN).size(), 2,
-				"Only the two witnessed anomalies are logged");
+				"Unknown reveals from mining progression without a forced correction scene");
+		helper.assertValueEqual(TerminalSignalLog.entries(anomalyRecord, SignalBand.UNKNOWN).size(), 0,
+				"Witnessed anomalies advance the prelude without entering terminal history");
 		helper.succeed();
 	}
 
@@ -178,7 +200,7 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 	public void openingRecordsClearsUnreadEventsAcrossLegacyBands(GameTestHelper helper) {
 		ServerPlayer player = helper.makeMockServerPlayerInLevel();
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
-		TerminalSignalService.record(player, SignalBand.UNKNOWN, "fracture", 0, 2, true);
+		TerminalSignalService.record(player, SignalBand.UNKNOWN, "continuity", 0, 2, true);
 		TerminalSignalService.record(player, SignalBand.WEATHER, "weather_changed", 1, 1, true);
 		player.setItemInHand(InteractionHand.MAIN_HAND, findTerminal(player));
 		TerminalRuntimeService.open(player, 0);
@@ -218,13 +240,15 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 				1L, 1L, "minecraft:overworld", 0L, 1, 1, true);
 		TerminalSignalLog.append(record, SignalBand.MINING, "resource_target_located",
 				2L, 2L, "minecraft:overworld", 0L, 1, 1, true);
+		TerminalSignalLog.append(record, SignalBand.UNKNOWN, "phantom_echo",
+				3L, 3L, "minecraft:overworld", 0L, 0, 1, true);
 		TerminalSignalLog.append(record, SignalBand.UNKNOWN, "fragment_candidate_2_1",
-				3L, 3L, "minecraft:overworld", 0L, 1, 1, false);
+				4L, 4L, "minecraft:overworld", 0L, 1, 1, false);
 		TerminalSignalLog.append(record, SignalBand.PUBLIC, "fragment_shared_0",
-				4L, 4L, "minecraft:overworld", 0L, 0, 1, true);
+				5L, 5L, "minecraft:overworld", 0L, 0, 1, true);
 
 		helper.assertTrue(TerminalSignalLog.pruneOperationalTelemetry(record),
-				"Existing operational telemetry is compacted once");
+				"Existing operational telemetry and anomaly history are compacted once");
 		var types = TerminalSignalLog.entries(record).stream().map(TerminalSignalLog.Entry::type).toList();
 		helper.assertValueEqual(types.size(), 2, "Only useful and tool-owned entries remain");
 		helper.assertTrue(types.contains("fragment_candidate_2_1"),
@@ -281,8 +305,7 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 
 		helper.assertValueEqual(TerminalSignalLog.entries(
 				data.terminalRecord(first.getUUID()).orElseThrow(), SignalBand.UNKNOWN).size(),
-				AmbientAnomalyService.TYPES.length,
-				"Every formal catalog anomaly can be decoded in the target player's terminal history");
+				0, "Formal catalog anomalies do not enter the target player's terminal history");
 		helper.assertValueEqual(TerminalSignalLog.entries(
 				data.terminalRecord(second.getUUID()).orElseThrow(), SignalBand.UNKNOWN).size(), 0,
 				"A second player receives no shared anomaly record");
@@ -297,7 +320,7 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest
-	public void strongAndWeakEventsShareOneBoundedNewestFirstLog(GameTestHelper helper) {
+	public void strongAndWeakAnomaliesStayOutOfTheTerminalLog(GameTestHelper helper) {
 		ServerPlayer player = helper.makeMockServerPlayerInLevel();
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
 		data.updateTerminalRecord(player.getUUID(), record -> {
@@ -310,12 +333,11 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 		TerminalAnomalyLogService.record(player, "experience_gap", 2, 2, 120, false);
 		var record = data.terminalRecord(player.getUUID()).orElseThrow();
 		var entries = TerminalSignalLog.entries(record, SignalBand.UNKNOWN);
-		helper.assertValueEqual(entries.size(), 2, "Both explicit events share one signal log");
-		helper.assertValueEqual(entries.getFirst().type(), "experience_gap", "Newest record first");
-		helper.assertValueEqual(entries.getFirst().severity(), 2, "Strong event severity retained");
-		helper.assertValueEqual(entries.get(1).severity(), 1, "Light event severity retained");
-		helper.assertValueEqual(TerminalSignalLog.unreadCount(record), 2,
-				"Unread state shared across strengths");
+		helper.assertValueEqual(entries.size(), 0, "Neither weak nor strong anomalies enter the signal log");
+		helper.assertValueEqual(TerminalSignalLog.unreadCount(record), 0,
+				"Anomalies do not create unread record attention");
+		helper.assertValueEqual(record.getStringOr(TerminalData.ACTIVE_ANOMALY_ID, ""), "experience_gap",
+				"Removing terminal history does not remove active anomaly bookkeeping");
 		helper.succeed();
 	}
 
@@ -383,6 +405,47 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 				AnomalyRuntimeService.interrupt(player, false);
 				helper.succeed();
 			});
+		});
+	}
+
+	@GameTest(maxTicks = 40)
+	public void lightDropoutExtinguishesAllNearbyLightsAndRestoresThem(GameTestHelper helper) {
+		ServerPlayer player = helper.makeMockServerPlayerInLevel();
+		AnomalyRuntimeService.interrupt(player, false);
+		// Isolate this real-light test vertically from protected stations and neighboring parallel structures.
+		BlockPos origin = player.blockPosition().above(40);
+		player.snapTo(origin.getX() + 0.5D, origin.getY(), origin.getZ() + 0.5D, 0.0F, 0.0F);
+		BlockPos glowstone = origin.offset(4, 1, 0);
+		BlockPos torch = origin.offset(-4, 1, 0);
+		BlockPos campfire = origin.offset(0, 1, 5);
+		helper.getLevel().setBlockAndUpdate(torch.below(), Blocks.STONE.defaultBlockState());
+		helper.getLevel().setBlockAndUpdate(campfire.below(), Blocks.STONE.defaultBlockState());
+		helper.getLevel().setBlockAndUpdate(glowstone, Blocks.GLOWSTONE.defaultBlockState());
+		helper.getLevel().setBlockAndUpdate(torch, Blocks.TORCH.defaultBlockState());
+		helper.getLevel().setBlockAndUpdate(campfire, Blocks.CAMPFIRE.defaultBlockState()
+				.setValue(BlockStateProperties.LIT, true));
+
+		helper.assertTrue(AnomalyGameTestBridge.start(player, "light_dropout", 0x2200B22L, 12),
+				"Light dropout starts when any nearby extinguishable light exists");
+		helper.assertTrue(helper.getLevel().getBlockState(glowstone).isAir(),
+				"Solid luminous blocks are temporarily extinguished");
+		helper.assertTrue(helper.getLevel().getBlockState(torch).isAir(),
+				"Nearby torches are temporarily extinguished");
+		helper.assertFalse(helper.getLevel().getBlockState(campfire).getValue(BlockStateProperties.LIT),
+				"Lit blocks use their real unlit state");
+
+		helper.runAfterDelay(13, () -> {
+			helper.assertTrue(helper.getLevel().getBlockState(glowstone).is(Blocks.GLOWSTONE),
+					"Solid luminous blocks return after the anomaly");
+			helper.assertTrue(helper.getLevel().getBlockState(torch).is(Blocks.TORCH),
+					"Torches return after the anomaly");
+			helper.assertTrue(helper.getLevel().getBlockState(campfire).getValue(BlockStateProperties.LIT),
+					"Lit blocks return to their original state after the anomaly");
+			AnomalyRuntimeService.interrupt(player, false);
+			for (BlockPos pos : java.util.List.of(glowstone, torch, torch.below(), campfire, campfire.below())) {
+				helper.getLevel().setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
+			}
+			helper.succeed();
 		});
 	}
 

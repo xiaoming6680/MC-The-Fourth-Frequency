@@ -3,19 +3,26 @@ package com.xm.thefourthfrequency.client_ui;
 import java.util.List;
 
 public final class AlphaLoadTimeline {
-	public static final int NORMAL_PROGRESS_END_TICK = 50;
+	/*
+	 * The real first-entry progress is already capped at 50% before the session is
+	 * claimed. Keep only the one-second pause here instead of replaying 0 -> 50%.
+	 */
+	public static final int NORMAL_PROGRESS_END_TICK = 0;
 	public static final int NORMAL_PAUSE_TICKS = 20;
 	public static final int GLITCH_START_TICK = NORMAL_PROGRESS_END_TICK + NORMAL_PAUSE_TICKS;
-	public static final int FAILURE_TICK = GLITCH_START_TICK + 8;
-	public static final int MAX_FAILURE_COPIES = 50;
-	public static final int FLOOD_START_TICK = GLITCH_START_TICK + 64;
-	public static final int LARGE_PASTE_START_TICK = FLOOD_START_TICK + 66;
-	public static final int SMALL_PASTE_COMPLETE_TICK = FLOOD_START_TICK + 80;
-	public static final int FLOOD_COMPLETE_TICK = FLOOD_START_TICK + 132;
-	public static final int MAX_SMALL_FAILURE_COPIES = 240;
-	public static final int MAX_LARGE_FAILURE_COPIES = 128;
+	public static final int FAILURE_TICK = GLITCH_START_TICK + 24;
+	public static final int OBSERVER_MESSAGE_START_TICK = FAILURE_TICK + 24;
+	public static final int OBSERVER_MESSAGE_END_TICK = FAILURE_TICK + 48;
+	public static final int MAX_FAILURE_COPIES = 28;
+	public static final int FLOOD_START_TICK = FAILURE_TICK + 52;
+	public static final int ACTIVE_FAILURE_WALL_TICKS = 28;
+	public static final int FROZEN_FAILURE_WALL_TICKS = 12;
+	public static final int FLOOD_COMPLETE_TICK = FLOOD_START_TICK + ACTIVE_FAILURE_WALL_TICKS;
 	public static final int FREEZE_START_TICK = FLOOD_COMPLETE_TICK;
-	public static final int LEGACY_RECOVERY_START_TICK = FREEZE_START_TICK + 40;
+	public static final int BLACKOUT_START_TICK =
+			FREEZE_START_TICK + FROZEN_FAILURE_WALL_TICKS;
+	public static final int BLACKOUT_TICKS = 40;
+	public static final int LEGACY_RECOVERY_START_TICK = BLACKOUT_START_TICK + BLACKOUT_TICKS;
 	public static final int MIN_LOADING_SCREEN_TICKS = LEGACY_RECOVERY_START_TICK + 50;
 	public static final int MAX_RESOURCE_RELOAD_WAIT_TICKS = MIN_LOADING_SCREEN_TICKS + 64;
 	public static final int VERSION_STEP_TICKS = 28;
@@ -48,33 +55,36 @@ public final class AlphaLoadTimeline {
 		return screenTicks < GLITCH_START_TICK;
 	}
 
+	public static boolean observerMessageVisible(int screenTicks) {
+		if (screenTicks < OBSERVER_MESSAGE_START_TICK
+				|| screenTicks >= OBSERVER_MESSAGE_END_TICK) return false;
+		int age = screenTicks - OBSERVER_MESSAGE_START_TICK;
+		return age < 8 || Math.floorMod(age, 7) != 1;
+	}
+
 	public static float initialNormalProgress(int screenTicks) {
-		return Math.clamp(screenTicks / (float) NORMAL_PROGRESS_END_TICK, 0.0F, 1.0F) * 0.5F;
+		return 0.5F;
 	}
 
 	public static int copiedFailureLines(int screenTicks) {
 		if (screenTicks < FAILURE_TICK) return 0;
 		float progress = Math.clamp((screenTicks - FAILURE_TICK)
 				/ (float) (FLOOD_START_TICK - FAILURE_TICK), 0.0F, 1.0F);
-		return 1 + Math.round(progress * progress * (MAX_FAILURE_COPIES - 1));
+		return 1 + Math.round((float) Math.sqrt(progress) * (MAX_FAILURE_COPIES - 1));
 	}
 
-	public static int smallFailureCopies(int screenTicks) {
-		if (screenTicks < FLOOD_START_TICK) return 0;
-		float progress = Math.clamp((screenTicks - FLOOD_START_TICK)
-				/ (float) (SMALL_PASTE_COMPLETE_TICK - FLOOD_START_TICK), 0.0F, 1.0F);
-		return 6 + Math.round(progress * progress * (MAX_SMALL_FAILURE_COPIES - 6));
-	}
-
-	public static int largeFailureCopies(int screenTicks) {
-		if (screenTicks < LARGE_PASTE_START_TICK) return 0;
-		float progress = Math.clamp((screenTicks - LARGE_PASTE_START_TICK)
-				/ (float) (FLOOD_COMPLETE_TICK - LARGE_PASTE_START_TICK), 0.0F, 1.0F);
-		return 1 + Math.round(progress * progress * (MAX_LARGE_FAILURE_COPIES - 1));
+	public static boolean fullScreenFailureWall(int screenTicks) {
+		return screenTicks >= FLOOD_START_TICK
+				&& screenTicks < BLACKOUT_START_TICK;
 	}
 
 	public static boolean frozenFailureFrame(int screenTicks) {
-		return screenTicks >= FREEZE_START_TICK && screenTicks < LEGACY_RECOVERY_START_TICK;
+		return screenTicks >= FREEZE_START_TICK && screenTicks < BLACKOUT_START_TICK;
+	}
+
+	public static boolean blackoutFrame(int screenTicks) {
+		return screenTicks >= BLACKOUT_START_TICK
+				&& screenTicks < LEGACY_RECOVERY_START_TICK;
 	}
 
 	public static boolean legacyRecoveryFrame(int screenTicks) {

@@ -64,9 +64,12 @@ public final class WorldInterfacePresentationController {
 
 	/** Visual-only progressive replacement for the End island; no world block is mutated. */
 	public static BlockState failureBlockReplacement(BlockPos pos, BlockState original) {
-		Minecraft client = Minecraft.getInstance();
-		WorldInterfaceSnapshotS2C encounter = failureEncounter(client);
-		if (encounter == null || client.level.dimension() != Level.END) return original;
+		// Read client.level exactly once: the main thread can null it out (disconnect, dimension
+		// change) between two separate reads, and this method may run on a chunk-build worker
+		// thread via the render mixins, so a re-read here was a real, if narrow, NPE race.
+		var level = Minecraft.getInstance().level;
+		WorldInterfaceSnapshotS2C encounter = failureEncounter(level);
+		if (encounter == null || level.dimension() != Level.END) return original;
 		long dx = pos.getX() - encounter.center().getX();
 		long dz = pos.getZ() - encounter.center().getZ();
 		if (dx * dx + dz * dz > 160L * 160L) return original;
@@ -77,9 +80,9 @@ public final class WorldInterfacePresentationController {
 
 	/** Entity and player textures flip deterministically as the same failure erosion advances. */
 	public static boolean corruptEntityTexture(Identifier id) {
-		Minecraft client = Minecraft.getInstance();
-		WorldInterfaceSnapshotS2C encounter = failureEncounter(client);
-		if (encounter == null || client.level.dimension() != Level.END) return false;
+		var level = Minecraft.getInstance().level;
+		WorldInterfaceSnapshotS2C encounter = failureEncounter(level);
+		if (encounter == null || level.dimension() != Level.END) return false;
 		String path = id.getPath();
 		if (!(path.startsWith("textures/entity/") || path.startsWith("skins/")
 				|| path.contains("player_skin"))) return false;
@@ -88,8 +91,8 @@ public final class WorldInterfacePresentationController {
 		return erosionThreshold(textureSeed) <= encounter.failureProgress();
 	}
 
-	private static WorldInterfaceSnapshotS2C failureEncounter(Minecraft client) {
-		if (client == null || client.level == null) return null;
+	private static WorldInterfaceSnapshotS2C failureEncounter(net.minecraft.client.multiplayer.ClientLevel level) {
+		if (level == null) return null;
 		WorldInterfaceSnapshotS2C encounter = WorldInterfaceClientState.snapshot().encounter();
 		return encounter != null
 				&& encounter.stage() == WorldInterfaceProtocol.Stage.FAILURE_RESOLUTION

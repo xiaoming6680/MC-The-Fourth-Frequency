@@ -14,7 +14,8 @@ public final class TerminalRecordPolicy {
 	private TerminalRecordPolicy() { }
 
 	public static boolean retainedInLog(String type) {
-		if (type == null || type.isBlank() || HIDDEN_TELEMETRY.contains(type)) return false;
+		if (type == null || type.isBlank() || HIDDEN_TELEMETRY.contains(type)
+				|| AnomalyCatalog.contains(type)) return false;
 		return !type.startsWith("resource_");
 	}
 

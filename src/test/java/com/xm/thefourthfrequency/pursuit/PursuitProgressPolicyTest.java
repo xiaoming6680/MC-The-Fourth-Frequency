@@ -9,6 +9,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class PursuitProgressPolicyTest {
 	@Test
+	void warningLeadsFormalPursuitByTenSeconds() {
+		assertEquals(10L * 20L, PursuitProgressPolicy.WARNING_LEAD_TICKS);
+	}
+
+	@Test
 	void formOneUsesMultipleActivityRoutesAndNeverDependsOnIron() {
 		assertFalse(PursuitProgressPolicy.earlyFormEligible(false, 1,
 				PursuitActivityProof.MINING.mask(), 0L));
@@ -59,6 +64,13 @@ final class PursuitProgressPolicyTest {
 		assertFalse(PursuitProgressPolicy.canStart(true, 1, 0, true, 99L, 100L));
 		assertTrue(PursuitProgressPolicy.canStart(true, 1, 0, true, 100L, 100L));
 		assertFalse(PursuitProgressPolicy.canStart(true, 5, 5, true, 100L, 0L));
+	}
+
+	@Test
+	void finalEyeRequiresOnlyOneResolvedPursuit() {
+		assertFalse(PursuitProgressPolicy.finalEyeReady(-1));
+		assertFalse(PursuitProgressPolicy.finalEyeReady(0));
+		assertTrue(PursuitProgressPolicy.finalEyeReady(1));
 	}
 
 	@Test

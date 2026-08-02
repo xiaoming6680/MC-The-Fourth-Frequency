@@ -5,6 +5,7 @@ import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.client.input.CharacterEvent;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.network.chat.Component;
 
 /** Native Minecraft chat UI whose input is scripted locally and cannot reach the connection. */
 public final class ChannelOverrideScreen extends ChatScreen {
@@ -29,7 +30,10 @@ public final class ChannelOverrideScreen extends ChatScreen {
 	}
 
 	public static String scriptedText(int tick) {
-		return ChannelOverrideScript.textAt(tick);
+		return ChannelOverrideScript.textAt(tick,
+				Component.translatable("message.thefourthfrequency.anomaly.channel_override.line_1").getString(),
+				Component.translatable("message.thefourthfrequency.anomaly.channel_override.line_2").getString(),
+				Component.translatable("message.thefourthfrequency.anomaly.channel_override.line_3").getString());
 	}
 
 	@Override public boolean keyPressed(KeyEvent event) { return true; }

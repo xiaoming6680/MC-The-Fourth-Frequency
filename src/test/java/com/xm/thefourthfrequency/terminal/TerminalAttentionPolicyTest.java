@@ -24,4 +24,17 @@ final class TerminalAttentionPolicyTest {
 		assertFalse(TerminalAttentionPolicy.unreadStarted(true, true));
 		assertFalse(TerminalAttentionPolicy.unreadStarted(false, true));
 	}
+
+	@Test
+	void unreadReminderWaitsOneMinuteAndOnlyFiresOncePerContinuousCycle() {
+		long started = 500L;
+		assertFalse(TerminalAttentionPolicy.unreadReminderDue(3, started,
+				started + TerminalAttentionPolicy.UNREAD_REMINDER_DELAY_TICKS - 1L, false));
+		assertTrue(TerminalAttentionPolicy.unreadReminderDue(3, started,
+				started + TerminalAttentionPolicy.UNREAD_REMINDER_DELAY_TICKS, false));
+		assertFalse(TerminalAttentionPolicy.unreadReminderDue(3, started,
+				started + TerminalAttentionPolicy.UNREAD_REMINDER_DELAY_TICKS, true));
+		assertFalse(TerminalAttentionPolicy.unreadReminderDue(0, started,
+				started + TerminalAttentionPolicy.UNREAD_REMINDER_DELAY_TICKS, false));
+	}
 }

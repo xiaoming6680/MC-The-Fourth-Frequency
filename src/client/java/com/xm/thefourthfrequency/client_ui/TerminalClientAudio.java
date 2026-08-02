@@ -17,7 +17,6 @@ public final class TerminalClientAudio {
 	private static long nextContactTick;
 	private static int loopStarts;
 	private static int lockPlays;
-	private static int anomalyPlays;
 	private static int noticeOpeningPlays;
 	private static int noticeStablePlays;
 	private static long nextAttentionMillis;
@@ -70,17 +69,14 @@ public final class TerminalClientAudio {
 		play(ModSounds.TERMINAL_LOCK, 0.82F, 0.48F);
 	}
 
-	public static void anomaly() {
-		anomalyPlays++;
-		play(ModSounds.TERMINAL_ANOMALY, 1.0F, 0.58F);
-	}
-
 	public static void attention(int tone) {
 		long now = Util.getMillis();
 		if (now < nextAttentionMillis) return;
 		nextAttentionMillis = now + 300L;
 		attentionPlays++;
-		if (tone == TerminalNoticePayload.TONE_TASK_COMPLETE) {
+		if (tone == TerminalNoticePayload.TONE_PURSUIT_WARNING) {
+			play(ModSounds.TERMINAL_ANOMALY, 0.72F, 0.66F);
+		} else if (tone == TerminalNoticePayload.TONE_TASK_COMPLETE) {
 			play(SoundEvents.UI_TOAST_CHALLENGE_COMPLETE, 1.0F, 0.92F);
 		} else {
 			play(SoundEvents.NOTE_BLOCK_CHIME.value(), 1.18F, 0.84F);
@@ -110,7 +106,6 @@ public final class TerminalClientAudio {
 	public static boolean loopActiveForTesting() { return tuningLoop != null && !tuningLoop.isStopped(); }
 	public static float loopVolumeForTesting() { return tuningLoop == null ? 0.0F : tuningLoop.currentVolume(); }
 	public static int lockPlaysForTesting() { return lockPlays; }
-	public static int anomalyPlaysForTesting() { return anomalyPlays; }
 	public static int noticeOpeningPlaysForTesting() { return noticeOpeningPlays; }
 	public static int noticeStablePlaysForTesting() { return noticeStablePlays; }
 	public static int attentionPlaysForTesting() { return attentionPlays; }

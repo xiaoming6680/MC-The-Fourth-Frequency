@@ -23,7 +23,6 @@ public final class TerminalNetworking {
 		PayloadTypeRegistry.playS2C().register(TerminalNoticePayload.TYPE, TerminalNoticePayload.CODEC);
 		PayloadTypeRegistry.playS2C().register(AnomalyStartS2C.TYPE, AnomalyStartS2C.CODEC);
 		PayloadTypeRegistry.playS2C().register(AnomalyPhaseS2C.TYPE, AnomalyPhaseS2C.CODEC);
-		PayloadTypeRegistry.playS2C().register(TerminalAnomalyLoggedS2C.TYPE, TerminalAnomalyLoggedS2C.CODEC);
 		PayloadTypeRegistry.playS2C().register(MenuErosionStageS2C.TYPE, MenuErosionStageS2C.CODEC);
 		PayloadTypeRegistry.playC2S().register(AnomalyCompleteC2S.TYPE, AnomalyCompleteC2S.CODEC);
 		ServerPlayNetworking.registerGlobalReceiver(TerminalOpenPayload.TYPE,

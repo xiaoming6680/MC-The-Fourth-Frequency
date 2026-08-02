@@ -38,10 +38,10 @@ public final class StoryProgressService {
 		String route = proofRoute(player, before);
 		int milestones = before.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0);
 		boolean earlySurvival = SurvivalMilestone.MINED_LOGS.present(milestones)
-				|| SurvivalMilestone.HOME.present(milestones) || SurvivalMilestone.IRON.present(milestones);
+				|| SurvivalMilestone.IRON.present(milestones);
 		boolean bind = earlySurvival && !story.bound();
 		boolean reveal = story.bandStage() == 0 && story.bound()
-				&& before.getIntOr(TerminalData.SIGNATURE_SCENE_MASK, 0) != 0;
+				&& SurvivalMilestone.IRON.present(milestones);
 		boolean nightEntered = story.nightEntered();
 		boolean nightCompleted = !night && nightEntered && !story.nightWitnessed();
 		if (!bind && !reveal && !(night && !nightEntered) && !nightCompleted && route.equals(story.proofRoute())) return;
@@ -147,7 +147,6 @@ public final class StoryProgressService {
 		int milestones = tag.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0);
 		if (SurvivalMilestone.IRON.present(milestones)) return "mining";
 		if (SurvivalMilestone.MINED_LOGS.present(milestones)) return "building";
-		if (SurvivalMilestone.HOME.present(milestones)) return "building";
 		PlayerPatternState pattern = PlayerPatternState.read(tag);
 		if (pattern.mined() >= 32) return "mining";
 		if (pattern.crafted() >= 8 && pattern.placed() >= 8) return "building";

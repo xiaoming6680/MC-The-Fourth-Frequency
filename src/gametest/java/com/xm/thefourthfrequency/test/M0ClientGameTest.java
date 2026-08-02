@@ -14,7 +14,6 @@ import com.xm.thefourthfrequency.world.ResourceGuidanceService;
 import com.xm.thefourthfrequency.world.SurvivalProgressService;
 import com.xm.thefourthfrequency.world.TerminalActivityTracker;
 import com.xm.thefourthfrequency.world.FragmentInvestigationService;
-import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.client_ui.TerminalScreen;
 import com.xm.thefourthfrequency.client_ui.EmptySegmentClient;
 import com.xm.thefourthfrequency.client_ui.EmptySegmentOverlayScreen;
@@ -33,13 +32,7 @@ import com.xm.thefourthfrequency.terminal.TerminalSignalService;
 import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
-import com.xm.thefourthfrequency.body.BodyConstructionService;
-import com.xm.thefourthfrequency.correction.CorrectionOrganService;
-import com.xm.thefourthfrequency.correction.CorrectionState;
-import com.xm.thefourthfrequency.correction.CorrectionTargetService;
 import com.xm.thefourthfrequency.correction.EmptySegmentService;
-import com.xm.thefourthfrequency.correction.TrendSwarmService;
-import com.xm.thefourthfrequency.entity.ReworkEntity;
 import com.xm.thefourthfrequency.world.DebugPanelService;
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.TerminalLifecycleService;
@@ -56,28 +49,21 @@ import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.gui.screens.options.VideoSettingsScreen;
 import net.minecraft.client.gui.screens.packs.PackSelectionModel;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.EntitySpawnReason;
-import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.entity.Mob;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
-import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.resources.Identifier;
 
 import java.nio.file.Files;
 import java.util.Set;
 import java.util.List;
-import java.util.UUID;
 import java.util.stream.Stream;
 
 public final class M0ClientGameTest implements FabricClientGameTest {
@@ -279,8 +265,50 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			singleplayer.getServer().runOnServer(server -> {
 				var player = server.getPlayerList().getPlayers().getFirst();
 				var data = FrequencyWorldData.get(server);
-				BlockPos orePosition = player.blockPosition().below(2);
+				BlockPos orePosition = player.blockPosition().below(4);
 				server.overworld().setBlockAndUpdate(orePosition, Blocks.IRON_ORE.defaultBlockState());
+				data.updateTerminalRecord(player.getUUID(), record -> {
+					record.putBoolean(TerminalData.MINERAL_SURVEY_PROXIMITY, true);
+					record.putBoolean(TerminalData.MINERAL_SURVEY_NEARBY, true);
+					record.putLong(TerminalData.MINERAL_SURVEY_POSITION, orePosition.asLong());
+					record.putString(TerminalData.MINERAL_SURVEY_DIMENSION,
+							player.level().dimension().identifier().toString());
+				});
+			});
+			openTerminalThroughClientCallback(context);
+			context.waitForScreen(TerminalScreen.class);
+			context.waitTicks(4);
+			context.runOnClient(client -> ((TerminalScreen) client.screen)
+					.openToolForTesting(TerminalTool.MINERALS.slot()));
+			context.waitTicks(4);
+			context.runOnClient(client -> {
+				TerminalScreen terminal = (TerminalScreen) client.screen;
+				if (!terminal.navigationTargetLocatedForTesting()
+						|| terminal.navigationActiveForTesting()
+						|| terminal.guidanceToolForTesting() != TerminalToolService.NO_TOOL) {
+					throw new AssertionError(
+							"Automatic survey detail must show its target without activating the compass needle");
+				}
+			});
+			context.takeScreenshot("r-terminal-tool-minerals-auto-survey");
+			context.runOnClient(client -> ((TerminalScreen) client.screen).activateSelectedToolForTesting());
+			context.waitTicks(5);
+			context.runOnClient(client -> {
+				TerminalScreen terminal = (TerminalScreen) client.screen;
+				if (terminal.guidanceToolForTesting() != TerminalTool.MINERALS.slot()
+						|| terminal.homeLiveToolForTesting() != TerminalTool.MINERALS.slot()) {
+					throw new AssertionError("Automatic survey navigation button did not start mineral guidance");
+				}
+				terminal.closeHomeLiveToolForTesting();
+			});
+			context.waitTicks(3);
+			context.runOnClient(client -> client.screen.onClose());
+			context.waitTicks(4);
+
+			singleplayer.getServer().runOnServer(server -> {
+				var player = server.getPlayerList().getPlayers().getFirst();
+				var data = FrequencyWorldData.get(server);
+				BlockPos orePosition = player.blockPosition().below(4);
 				data.updateTerminalRecord(player.getUUID(), record -> {
 					record.putInt(TerminalData.SELECTED_RESOURCE, TerminalResource.IRON.wireId());
 					record.putLong(TerminalData.MINERAL_SCAN_READY_GAME_TIME, player.level().getGameTime());
@@ -335,7 +363,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				singleplayer.getServer().runOnServer(server -> {
 					var player = server.getPlayerList().getPlayers().getFirst();
 					TerminalSignalService.record(player, com.xm.thefourthfrequency.terminal.SignalBand.UNKNOWN,
-							"signature_anomaly", 0, 1, true);
+							"pursuit_return_instability", 0, 1, true);
 				});
 				context.waitTicks(2);
 				context.runOnClient(client -> {
@@ -354,6 +382,29 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				});
 				context.takeScreenshot("r-terminal-unread-top-bar-settled");
 				closeTerminal(context);
+				singleplayer.getServer().runOnServer(server -> {
+					var player = server.getPlayerList().getPlayers().getFirst();
+					FrequencyWorldData.get(server).updateTerminalRecord(player.getUUID(), record ->
+							record.putBoolean(TerminalData.PURSUIT_WARNING_RECORDS_REDIRECT, true));
+				});
+				openTerminalThroughClientCallback(context);
+				context.waitForScreen(TerminalScreen.class);
+				context.waitTicks(2);
+				context.runOnClient(client -> {
+					if (!"RECORDS".equals(((TerminalScreen) client.screen).pageForTesting())) {
+						throw new AssertionError("A pursuit warning did not redirect the next terminal open to RECORDS");
+					}
+				});
+				closeTerminal(context);
+				openTerminalThroughClientCallback(context);
+				context.waitForScreen(TerminalScreen.class);
+				context.waitTicks(2);
+				context.runOnClient(client -> {
+					if (!"HOME".equals(((TerminalScreen) client.screen).pageForTesting())) {
+						throw new AssertionError("The pursuit warning RECORDS redirect was not consumed after one open");
+					}
+				});
+				closeTerminal(context);
 				return;
 			}
 			closeTerminal(context);
@@ -366,7 +417,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			});
 			context.waitTicks(120);
 			context.runOnClient(client -> client.getToastManager().clear());
-			assertSignatureBoundTerminal(context);
+			assertMiningCompletionState(context);
 			singleplayer.getServer().runOnServer(server -> {
 				var player = server.getPlayerList().getPlayers().getFirst();
 				if (!DebugPanelService.setEnabled(player, true)) throw new AssertionError("Debug permission was not enabled");
@@ -375,8 +426,9 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.waitForScreen(DebugPanelScreen.class);
 			context.runOnClient(client -> {
 				DebugPanelScreen debug = (DebugPanelScreen) client.screen;
-				if (debug.sectionCountForTesting() != 3 || debug.anomalyCountForTesting() != 16)
-					throw new AssertionError("M debug workbench must expose four sections and all sixteen anomalies");
+				if (debug.sectionCountForTesting() != 4 || debug.anomalyCountForTesting() != 16
+						|| debug.fileCountForTesting() != 7 || debug.liveRefreshTicksForTesting() != 10)
+					throw new AssertionError("M debug workbench must live-refresh four sections, sixteen anomalies, and seven files");
 				debug.triggerAnomalyForTesting("local_rule_collapse");
 			});
 			context.waitFor(client -> client.screen == null, 100);
@@ -405,7 +457,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.takeScreenshot("r-terminal-survival-objective-prepare-nether");
 			context.runOnClient(client -> ((TerminalScreen) client.screen).selectPageForTesting(2));
 			context.waitTicks(2);
-			context.takeScreenshot("r-terminal-records-signature-scene");
+			context.takeScreenshot("r-terminal-records-after-mining");
 			setTerminalView(context, 0, TerminalControlPolicy.DEFAULT_TUNING, 0);
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
@@ -440,6 +492,16 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.waitTicks(2);
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
+				if (terminal.selectedToolForTesting() != TerminalToolService.NO_TOOL
+						|| !terminal.receiverGameplayActiveForTesting()) {
+					throw new AssertionError(
+							"Arriving at a side-route source must enable tuning before navigation is opened");
+				}
+				terminal.setTuningForTesting(Math.max(0, m4Fixture.tuning() - 4));
+			});
+			context.waitTicks(3);
+			context.runOnClient(client -> {
+				TerminalScreen terminal = (TerminalScreen) client.screen;
 				terminal.selectPageForTesting(1);
 				terminal.openToolForTesting(TerminalTool.NAVIGATION.slot());
 			});
@@ -454,6 +516,14 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.runOnClient(client -> ((TerminalScreen) client.screen).expandFirstSignalCardForTesting());
 			context.waitTicks(2);
 			context.takeScreenshot("m4-candidate-card-coordinates-expanded");
+			context.runOnClient(client -> {
+				TerminalScreen terminal = (TerminalScreen) client.screen;
+				terminal.backFromToolForTesting();
+				if (terminal.selectedToolForTesting() != TerminalToolService.NO_TOOL
+						|| !terminal.receiverGameplayActiveForTesting()) {
+					throw new AssertionError("Nearby tuning incorrectly depends on the navigation detail page");
+				}
+			});
 			verifyReceiverAudioLifecycle(context, m4Fixture.tuning());
 			context.takeScreenshot("m4-lcd-nearby-unrecorded-signal");
 			context.waitTicks(25);
@@ -570,11 +640,6 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.waitTicks(20);
 			closeTerminal(context);
 
-			singleplayer.getServer().runOnServer(M0ClientGameTest::prepareM5Fixture);
-			context.waitTicks(30);
-			context.takeScreenshot("m5-trend-swarm-rework-body");
-			context.waitTicks(20);
-			context.takeScreenshot("m5-trend-swarm-rework-body-confirm");
 			singleplayer.getServer().runOnServer(server -> triggerEmptySegment(
 					server, EmptySegmentService.EventType.VIEWPOINT_SEPARATION, 50));
 			context.waitTicks(12);
@@ -594,21 +659,18 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			});
 
 			singleplayer.getServer().runOnServer(M0ClientGameTest::beginM6NetherCrossing);
-			waitForM6NetherRift(singleplayer, context);
 			assertLockedRenderDistance(context, Level.NETHER,
 					DimensionViewDistancePolicy.NETHER_CHUNKS);
-			BlockPos netherRift = singleplayer.getServer().computeOnServer(M0ClientGameTest::observeM6NetherRift);
 			context.waitTicks(8);
 			context.runOnClient(client -> {
 				client.getToastManager().clear();
 				client.gui.getChat().clearMessages(true);
-				if (!PrivateAnomalyClient.anomalyId().equals("fracture") || client.level == null
-						|| client.level.dimension() != Level.NETHER
-						|| !client.level.getBlockState(netherRift).is(ModBlocks.NETHER_RULE_FRACTURE_CORE)) {
-					throw new AssertionError("M6 private fracture presentation or physical Nether core was not visible");
+				if (!PrivateAnomalyClient.anomalyId().equals("continuity") || client.level == null
+						|| client.level.dimension() != Level.NETHER) {
+					throw new AssertionError("M6 private continuity presentation was not visible after crossing");
 				}
 			});
-			context.takeScreenshot("m6-nether-fracture-private-anomaly");
+			context.takeScreenshot("m6-nether-continuity-private-anomaly");
 			openTerminalThroughClientCallback(context);
 			context.waitForScreen(TerminalScreen.class);
 			setTerminalView(context, 0, TerminalControlPolicy.DEFAULT_TUNING, 0);
@@ -700,9 +762,9 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				terminal.openLogDirectoryForTesting();
 				terminal.moveFileSelectionForTesting(1);
 				terminal.moveFileSelectionForTesting(7);
-				if (terminal.fileCountForTesting() != 12 || terminal.selectedFileForTesting() != 7
-						|| terminal.fileScrollRowForTesting() != 2) {
-					throw new AssertionError("The FILES list did not expose all 12 stable file records in one column");
+				if (terminal.fileCountForTesting() != 7 || terminal.selectedFileForTesting() != 6
+						|| terminal.fileScrollRowForTesting() != 1) {
+					throw new AssertionError("The FILES list did not expose all 7 consolidated file records in one column");
 				}
 				int fragmentFiles = 0;
 				for (int index = 0; index < terminal.fileCountForTesting(); index++) {
@@ -722,7 +784,6 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				var player = server.getPlayerList().getPlayers().getFirst();
 				var worldData = FrequencyWorldData.get(server);
 				var record = worldData.terminalRecord(player.getUUID()).orElseThrow();
-				var correction = CorrectionState.get(worldData);
 				return new TerminalPersistenceProof(
 						record.getStringOr(TerminalData.WORLD_ID, ""),
 						record.getStringOr(TerminalData.TERMINAL_ID, ""),
@@ -732,14 +793,8 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 						record.getIntOr(TerminalData.CRAFTED_ITEMS, 0),
 						record.getStringOr(TerminalData.ACCEPTED_ADVICE, ""),
 						record.getStringOr(TerminalData.LOCAL_FILE_HASH, ""),
-						record.getLongOr(TerminalData.RIFT_POSITION, 0L),
 						record.getIntOr(TerminalData.EMPTY_SEGMENT_COUNT, 0),
-						correction.getIntOr("dismantle_count", 0),
-						correction.getStringOr("rework_entity_uuid", ""),
-						record.getIntOr(TerminalData.PORTAL_TRANSITIONS, 0),
-						record.getIntOr(TerminalData.BODY_PROGRESS, 0),
-						record.getStringOr(TerminalData.TERMINAL_CAPABILITIES, ""),
-						BodyConstructionService.netherRiftState(worldData).getLongOr("origin", 0L));
+						record.getIntOr(TerminalData.PORTAL_TRANSITIONS, 0));
 			});
 
 			removedWall = stationPosition.offset(-4, 0, -3);
@@ -797,8 +852,6 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			});
 			assertSingleOwnedTerminal(context);
 			assertBoundTerminal(context);
-			reopened.getServer().runOnServer(M0ClientGameTest::loadPersistentReworkChunks);
-			context.waitTicks(10);
 			BlockPos loadedStation = reopened.getServer().computeOnServer(server -> {
 				FrequencyWorldData data = FrequencyWorldData.get(server);
 				if (!data.stationComplete()) {
@@ -822,41 +875,11 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 						|| !terminalProof.acceptedAdvice().contains("iron")
 						|| !record.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false)
 						|| !record.getStringOr(TerminalData.LOCAL_FILE_HASH, "").equals(terminalProof.localFileHash())
-						|| record.getLongOr(TerminalData.RIFT_POSITION, 0L) != terminalProof.riftPosition()
 						|| record.getIntOr(TerminalData.EMPTY_SEGMENT_COUNT, 0) != terminalProof.emptySegmentCount()
 						|| record.getBooleanOr(TerminalData.EMPTY_SEGMENT_ACTIVE, false)
 						|| record.getIntOr(TerminalData.PORTAL_TRANSITIONS, 0) != terminalProof.portalTransitions()
-						|| record.getIntOr(TerminalData.BODY_PROGRESS, 0) < terminalProof.bodyProgress()
-						|| !record.getStringOr(TerminalData.TERMINAL_CAPABILITIES, "")
-								.equals(terminalProof.terminalCapabilities())
-						|| !record.getBooleanOr(TerminalData.CONTINUITY_LEARNED, false)
-						|| !record.getBooleanOr(TerminalData.NETHER_RIFT_OBSERVED, false)
-						|| !server.overworld().getBlockState(BlockPos.of(terminalProof.riftPosition()))
-								.is(ModBlocks.RULE_FRACTURE_CORE)) {
+						|| !record.getBooleanOr(TerminalData.CONTINUITY_LEARNED, false)) {
 					throw new AssertionError("Terminal identity, personality, binding, or Fourth Frequency state changed after restart");
-				}
-				var nether = server.getLevel(Level.NETHER);
-				var netherRiftState = BodyConstructionService.netherRiftState(data);
-				if (nether == null || !netherRiftState.getBooleanOr("complete", false)
-						|| netherRiftState.getLongOr("origin", 0L) != terminalProof.netherRiftOrigin()
-						|| !nether.getBlockState(BlockPos.of(terminalProof.netherRiftOrigin()))
-								.is(ModBlocks.NETHER_RULE_FRACTURE_CORE)) {
-					throw new AssertionError("M6 Nether fracture state or physical core changed after restart");
-				}
-				var correction = CorrectionState.get(data);
-				if (correction.getIntOr("dismantle_count", 0) < terminalProof.correctionDismantles()) {
-					throw new AssertionError("Correction organ state changed after restart");
-				}
-				try {
-					if (!correction.contains("rework_entity_pos")) {
-						throw new AssertionError("Persistent rework body position was not recorded");
-					}
-					if (!(server.overworld().getEntityInAnyDimension(UUID.fromString(terminalProof.reworkEntityUuid()))
-							instanceof ReworkEntity)) {
-						throw new AssertionError("Persistent rework body entity was not restored after restart");
-					}
-				} catch (IllegalArgumentException exception) {
-					throw new AssertionError("Persisted rework body UUID was malformed", exception);
 				}
 				return data.stationPosition().orElseThrow();
 			});
@@ -1141,18 +1164,16 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 		assertBoundTerminalState(context);
 	}
 
-	private static void assertSignatureBoundTerminal(ClientGameTestContext context) {
+	private static void assertMiningCompletionState(ClientGameTestContext context) {
 		context.runOnClient(client -> {
 			if (client.player == null) throw new AssertionError("Client player was not present");
 			for (int slot = 0; slot < client.player.getInventory().getContainerSize(); slot++) {
 				var stack = client.player.getInventory().getItem(slot);
 				if (!stack.is(ModItems.OLD_TERMINAL)) continue;
-				var tag = TerminalData.copyTag(stack);
 				if (!TerminalData.isBound(stack) || !TerminalData.secondCacheUnlocked(stack))
-					throw new AssertionError("Survival signature did not preserve the bound terminal state");
-				if (TerminalData.bandStage(stack) != 1
-						|| (tag.getIntOr(TerminalData.SIGNATURE_SCENE_MASK, 0) & 0b11) != 0b11)
-					throw new AssertionError("Iron milestone did not synchronize the deterministic signature scene");
+					throw new AssertionError("Mining completion did not preserve the bound terminal state");
+				if (TerminalData.bandStage(stack) != 1)
+					throw new AssertionError("Mining completion did not synchronize the fourth-band reveal");
 				return;
 			}
 			throw new AssertionError("Client had no terminal to verify");
@@ -1188,8 +1209,8 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				if (stack.is(ModItems.OLD_TERMINAL)) {
 					var tag = TerminalData.copyTag(stack);
 					if (!tag.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false)
-							|| !tag.getBooleanOr(TerminalData.RIFT_LOCATED, false)
-							|| !"TFF-WF-01-A91C".equals(tag.getStringOr(TerminalData.LOCAL_FILE_HASH, ""))) {
+							|| !"TFF-WF-02-CONTINUITY".equals(
+									tag.getStringOr(TerminalData.LOCAL_FILE_HASH, ""))) {
 						throw new AssertionError("Server-authoritative archive result did not synchronize to the client terminal");
 					}
 					return;
@@ -1246,59 +1267,6 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 		return new FragmentInvestigationService.Candidate(fragment, group, position, "minecraft:overworld");
 	}
 
-	private static void prepareM5Fixture(MinecraftServer server) {
-		var level = server.overworld();
-		var player = server.getPlayerList().getPlayers().getFirst();
-		FrequencyWorldData data = FrequencyWorldData.get(server);
-		BlockPos center = data.stationPosition().orElse(player.blockPosition()).offset(0, 0, 64);
-		for (int x = -14; x <= 14; x++) {
-			for (int z = -14; z <= 14; z++) {
-				level.setBlock(center.offset(x, -1, z), Blocks.DEEPSLATE_TILES.defaultBlockState(), 3);
-				for (int y = 0; y <= 5; y++) {
-					level.setBlock(center.offset(x, y, z), Blocks.AIR.defaultBlockState(), 3);
-				}
-			}
-		}
-		BlockPos organ = center;
-		BlockPos secondaryOrgan = center.offset(0, 0, 7);
-		CorrectionTargetService.setOrganForTest(server, organ);
-		CorrectionTargetService.setOrganForTest(server, secondaryOrgan);
-		var correction = CorrectionState.get(data);
-		try {
-			var existing = level.getEntityInAnyDimension(UUID.fromString(
-					correction.getStringOr("rework_entity_uuid", "")));
-			if (existing instanceof ReworkEntity) {
-				existing.discard();
-			}
-		} catch (IllegalArgumentException ignored) {
-			// No prior body is a normal first-run state.
-		}
-		ReworkEntity body = CorrectionOrganService.spawnReworkBody(level, organ);
-		body.snapTo(organ.getX() + 2.5, organ.getY(), organ.getZ() + 0.5, 90.0F, 0.0F);
-		Mob cow = spawnM5Mob(level, EntityType.COW, organ.offset(5, 0, -2));
-		Mob villager = spawnM5Mob(level, EntityType.VILLAGER, organ.offset(-9, 0, 0));
-		Mob zombie = spawnM5Mob(level, EntityType.ZOMBIE, organ.offset(0, 0, 13));
-		TrendSwarmService.applyTrend(cow, organ);
-		TrendSwarmService.applyTrend(villager, organ);
-		TrendSwarmService.applyTrend(zombie, organ);
-		BlockPos observation = organ.offset(-9, 2, -9);
-		player.teleportTo(level, observation.getX() + 0.5, observation.getY(), observation.getZ() + 0.5,
-				Set.of(), -45.0F, 12.0F, true);
-	}
-
-	private static <T extends Mob> T spawnM5Mob(net.minecraft.server.level.ServerLevel level, EntityType<T> type,
-			BlockPos position) {
-		T entity = type.create(level, EntitySpawnReason.EVENT);
-		if (entity == null) {
-			throw new AssertionError("M5 client fixture entity factory returned null for " + type);
-		}
-		entity.snapTo(position.getX() + 0.5, position.getY(), position.getZ() + 0.5, 0.0F, 0.0F);
-		if (!level.addFreshEntity(entity)) {
-			throw new AssertionError("M5 client fixture could not add " + type);
-		}
-		return entity;
-	}
-
 	private static void triggerEmptySegment(MinecraftServer server, EmptySegmentService.EventType type, int duration) {
 		if (!EmptySegmentService.trigger(server.getPlayerList().getPlayers().getFirst(), type, duration)) {
 			throw new AssertionError("Could not trigger client empty-segment fixture " + type);
@@ -1309,7 +1277,6 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 		var player = server.getPlayerList().getPlayers().getFirst();
 		FrequencyWorldData data = FrequencyWorldData.get(server);
 		data.updateTerminalRecord(player.getUUID(), record -> {
-			record.putBoolean(TerminalData.RIFT_OBSERVED, true);
 			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK,
 					record.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0)
 							| SurvivalMilestone.PREPARED_NETHER.mask());
@@ -1321,42 +1288,10 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 		}
 	}
 
-	private static void waitForM6NetherRift(TestSingleplayerContext singleplayer,
-			ClientGameTestContext context) {
-		for (int tick = 0; tick < 160; tick++) {
-			boolean complete = singleplayer.getServer().computeOnServer(server ->
-					BodyConstructionService.netherRiftState(FrequencyWorldData.get(server))
-							.getBooleanOr("complete", false));
-			if (complete) {
-				return;
-			}
-			context.waitTicks(1);
-		}
-		throw new AssertionError("M6 client fixture Nether fracture did not complete within 160 ticks");
-	}
-
-	private static BlockPos observeM6NetherRift(MinecraftServer server) {
-		var player = server.getPlayerList().getPlayers().getFirst();
-		FrequencyWorldData data = FrequencyWorldData.get(server);
-		var state = BodyConstructionService.netherRiftState(data);
-		if (!state.getBooleanOr("complete", false)) {
-			throw new AssertionError("M6 client fixture Nether fracture did not complete");
-		}
-		BlockPos core = BlockPos.of(state.getLongOr("origin", 0L));
-		player.teleportTo((net.minecraft.server.level.ServerLevel) player.level(),
-				core.getX() - 8.5, core.getY() + 2.0, core.getZ() + 0.5,
-				Set.of(), -90.0F, 8.0F, true);
-		if (!BodyConstructionService.observeNetherRift(player, core)) {
-			throw new AssertionError("M6 client fixture could not observe the physical Nether fracture");
-		}
-		return core;
-	}
-
 	private static void finishM6ReturnCrossing(MinecraftServer server) {
 		var player = server.getPlayerList().getPlayers().getFirst();
 		FrequencyWorldData data = FrequencyWorldData.get(server);
-		BlockPos gallery = CorrectionState.organPosition(data)
-				.or(() -> data.stationPosition()).orElse(player.blockPosition());
+		BlockPos gallery = data.stationPosition().orElse(player.blockPosition());
 		BlockPos landing = gallery.offset(-9, 0, -9);
 		for (int x = -2; x <= 2; x++) for (int z = -2; z <= 2; z++) {
 			server.overworld().setBlock(landing.offset(x, -1, z), Blocks.DEEPSLATE_TILES.defaultBlockState(), 3);
@@ -1377,6 +1312,8 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 		var player = server.getPlayerList().getPlayers().getFirst();
 		BlockPos estimatedStronghold = player.blockPosition().offset(1_600, -24, 800);
 		FrequencyWorldData.get(server).updateTerminalRecord(player.getUUID(), record -> {
+			record.putInt(TerminalData.CRAFTED_EYE_COUNT,
+					SurvivalProgressService.REQUIRED_STRONGHOLD_UNLOCK_EYES);
 			record.putInt(TerminalData.EYE_SAMPLE_COUNT, SurvivalProgressService.REQUIRED_EYE_SAMPLES);
 			record.putLong(TerminalData.STRONGHOLD_POSITION, estimatedStronghold.asLong());
 			record.putString(TerminalData.STRONGHOLD_DIMENSION,
@@ -1395,25 +1332,6 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			}
 		});
 		TerminalRuntimeService.refresh(player);
-	}
-
-	private static void loadPersistentReworkChunks(MinecraftServer server) {
-		var correction = CorrectionState.get(FrequencyWorldData.get(server));
-		if (!correction.contains("rework_entity_pos")) {
-			throw new AssertionError("Persistent rework body position was not recorded");
-		}
-		BlockPos reworkPosition = BlockPos.of(correction.getLongOr("rework_entity_pos", 0L));
-		var player = server.getPlayerList().getPlayers().getFirst();
-		player.teleportTo(server.overworld(), reworkPosition.getX() + 4.5,
-				reworkPosition.getY() + 2.0, reworkPosition.getZ() + 4.5,
-				Set.of(), 0.0F, 0.0F, true);
-		for (int chunkX = (reworkPosition.getX() >> 4) - 1;
-				chunkX <= (reworkPosition.getX() >> 4) + 1; chunkX++) {
-			for (int chunkZ = (reworkPosition.getZ() >> 4) - 1;
-					chunkZ <= (reworkPosition.getZ() >> 4) + 1; chunkZ++) {
-				server.overworld().getChunk(chunkX, chunkZ);
-			}
-		}
 	}
 
 	private static void runAlphaRelaunch(ClientGameTestContext context) {
@@ -1620,14 +1538,8 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			int crafted,
 			String acceptedAdvice,
 			String localFileHash,
-			long riftPosition,
 			int emptySegmentCount,
-			int correctionDismantles,
-			String reworkEntityUuid,
-			int portalTransitions,
-			int bodyProgress,
-			String terminalCapabilities,
-			long netherRiftOrigin) {
+			int portalTransitions) {
 	}
 
 	private record M4ClientFixture(int tuning) {

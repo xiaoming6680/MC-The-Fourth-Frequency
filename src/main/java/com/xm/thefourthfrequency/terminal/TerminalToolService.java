@@ -6,6 +6,7 @@ import com.xm.thefourthfrequency.narrative.TerminalFileState;
 import com.xm.thefourthfrequency.state.NavigationState;
 import com.xm.thefourthfrequency.world.FragmentInvestigationService;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
+import com.xm.thefourthfrequency.world.MineralSurveyPolicy;
 import com.xm.thefourthfrequency.world.ResourceGuidanceService;
 import com.xm.thefourthfrequency.world.StoryProgressService;
 import com.xm.thefourthfrequency.world.StructureNavigationService;
@@ -14,10 +15,10 @@ import com.xm.thefourthfrequency.world.SurvivalProgressService;
 import net.fabricmc.fabric.api.entity.event.v1.ServerEntityWorldChangeEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.StructureTags;
+import net.minecraft.world.level.Level;
 
 public final class TerminalToolService {
 	public static final int NO_TOOL = 6;
@@ -34,7 +35,11 @@ public final class TerminalToolService {
 	}
 
 	private static void recordPortalArrival(ServerPlayer player, ServerLevel origin, ServerLevel destination) {
-		if (origin.dimension() == destination.dimension()) return;
+		boolean enteringNether = origin.dimension() == Level.OVERWORLD
+				&& destination.dimension() == Level.NETHER;
+		boolean returningOverworld = origin.dimension() == Level.NETHER
+				&& destination.dimension() == Level.OVERWORLD;
+		if (!enteringNether && !returningOverworld) return;
 		FrequencyWorldData data = FrequencyWorldData.get(destination.getServer());
 		if (data.terminalRecord(player.getUUID()).isEmpty()) return;
 		BlockPos arrival = player.blockPosition();
@@ -115,21 +120,33 @@ public final class TerminalToolService {
 				&& navigation.dimension().equals(player.level().dimension().identifier().toString()))
 			navigationTargets |= TerminalStructureTarget.bit(selectedNavigation);
 		boolean unstableSignal = unstableSignalAvailable(player, tag);
-		int mineralScanTicks = (int) Math.clamp(
-				tag.getLongOr(TerminalData.MINERAL_SCAN_READY_GAME_TIME, 0L) - now, 0L, 60L);
+		long mineralScanReady = tag.getLongOr(TerminalData.MINERAL_SCAN_READY_GAME_TIME, 0L);
+		int mineralScanTicks = mineralScanReady == 0L ? 0 : (int) Math.clamp(
+				Math.max(1L, mineralScanReady - now), 1L, 60L);
+		boolean mineralSurveyNearby = tag.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false)
+				&& !disabled && (available & bit(TerminalTool.MINERALS)) != 0;
 		boolean navigationCompletion = StructureNavigationService.navigationCompletionAvailable(tag);
 		int navigationCompletionDirection = navigationCompletion
 				? StructureNavigationService.navigationCompletionDirection(player, tag) : 0;
 		String objective = StoryProgressService.objective(tag, data).id();
 		TerminalGuidancePolicy.Recommendations recommendations = TerminalGuidancePolicy.recommendations(
 				objective, available, guidance, home.known(), dayTime, disabled, hintTier);
+		int recommendedPrimary = recommendations.primary();
+		int recommendedSecondary = recommendations.secondary();
+		if (mineralSurveyNearby) {
+			if (recommendedPrimary != TerminalTool.MINERALS.slot()) {
+				recommendedSecondary = recommendedPrimary;
+				recommendedPrimary = TerminalTool.MINERALS.slot();
+			}
+			if (recommendedSecondary == recommendedPrimary) recommendedSecondary = NO_TOOL;
+		}
 		return new TerminalToolSnapshotPayload(
 				TerminalToolSnapshotPayload.CURRENT_PROTOCOL_VERSION,
 				available,
 				safeSelected,
 				guidance,
-				recommendations.primary(),
-				recommendations.secondary(),
+				recommendedPrimary,
+				recommendedSecondary,
 				resourceMask,
 				navigationTargets,
 				selectedNavigation.wireId(),
@@ -138,6 +155,7 @@ public final class TerminalToolService {
 				disabledTicks,
 				selectedResource(tag).wireId(),
 				mineralScanTicks,
+				mineralSurveyNearby,
 				navigationCompletion,
 				navigationCompletionDirection,
 				weather,
@@ -190,15 +208,17 @@ public final class TerminalToolService {
 		if (tag == null || blockedByCorrection(player, tag)
 				|| (availableToolsMask(player, tag) & bit(TerminalTool.MINERALS)) == 0) return false;
 		long now = player.level().getGameTime();
-		if (tag.getLongOr(TerminalData.MINERAL_SCAN_READY_GAME_TIME, 0L) > now) return false;
+		if (tag.getLongOr(TerminalData.MINERAL_SCAN_READY_GAME_TIME, 0L) != 0L) return false;
 		TerminalResource resource = weightedResource(player.getRandom().nextInt(100));
+		boolean failed = MineralSurveyPolicy.manualScanFails(player.getRandom().nextInt(100));
 		FrequencyWorldData.get(player.level().getServer()).updateTerminalRecord(player.getUUID(), record -> {
 			StructureNavigationService.clearCompletion(record);
 			record.putInt(TerminalData.SELECTED_RESOURCE, resource.wireId());
 			record.putLong(TerminalData.MINERAL_SCAN_READY_GAME_TIME, now + 60L);
 			if (guidanceTool(record) == TerminalTool.MINERALS.slot())
 				record.putInt(TerminalData.ACTIVE_GUIDANCE_TOOL, NO_TOOL);
-			new NavigationState(resource.id(), resourceItem(resource), false, "", 0L, "", now).writeTo(record);
+			new NavigationState(failed ? ResourceGuidanceService.FAILED_SCAN_KIND : resource.id(),
+					resourceItem(resource), false, "", 0L, "", now).writeTo(record);
 		});
 		ResourceGuidanceService.restartScan(player, false);
 		TerminalRuntimeService.synchronizeProjection(player);
@@ -214,16 +234,28 @@ public final class TerminalToolService {
 		TerminalTool tool = TerminalTool.fromSlot(toolValue);
 		CompoundTag tag = record(player);
 		if (tool == null || tag == null || blockedByCorrection(player, tag)
-				|| (availableToolsMask(player, tag) & 1 << toolValue) == 0 || !hasGuidanceTarget(player, tag, tool)) {
+				|| (availableToolsMask(player, tag) & 1 << toolValue) == 0) {
 			return false;
 		}
-		int previous = guidanceTool(tag);
+		if (tool == TerminalTool.MINERALS && !hasGuidanceTarget(player, tag, tool)) {
+			ResourceGuidanceService.SurveyTarget surveyed = ResourceGuidanceService.automaticSurveyTarget(player, tag);
+			if (!surveyed.located()) return false;
+			long now = player.level().getGameTime();
+			FrequencyWorldData.get(player.level().getServer()).updateTerminalRecord(player.getUUID(), record -> {
+				record.putInt(TerminalData.SELECTED_RESOURCE, surveyed.resource().wireId());
+				new NavigationState(surveyed.resource().id(), resourceItem(surveyed.resource()), true,
+						surveyed.blockId(), surveyed.position().asLong(), surveyed.dimension(), now).writeTo(record);
+			});
+			tag = record(player);
+		}
+		if (tag == null || !hasGuidanceTarget(player, tag, tool)) return false;
 		FrequencyWorldData.get(player.level().getServer()).updateTerminalRecord(player.getUUID(), record -> {
 			StructureNavigationService.clearCompletion(record);
 			record.putInt(TerminalData.ACTIVE_GUIDANCE_TOOL, toolValue);
+			if (tool == TerminalTool.MINERALS)
+				ResourceGuidanceService.clearAutomaticSurveyState(record);
 		});
 		TerminalRuntimeService.synchronizeProjection(player);
-		guidanceFeedback(player, previous, tool);
 		return true;
 	}
 
@@ -231,7 +263,6 @@ public final class TerminalToolService {
 		if (value != 0 || record(player) == null) return false;
 		FrequencyWorldData.get(player.level().getServer()).updateTerminalRecord(player.getUUID(), record ->
 				record.putInt(TerminalData.ACTIVE_GUIDANCE_TOOL, NO_TOOL));
-		TerminalNoticeService.send(player, Component.translatable("message.thefourthfrequency.guidance.stopped"));
 		return true;
 	}
 
@@ -248,7 +279,6 @@ public final class TerminalToolService {
 		if (!toolsDisabled(tag, player.level().getGameTime())) return false;
 		FrequencyWorldData.get(player.level().getServer()).updateTerminalRecord(player.getUUID(), record ->
 				record.putInt(TerminalData.BREACH_MASK, record.getIntOr(TerminalData.BREACH_MASK, 0) | 1));
-		TerminalNoticeService.send(player, Component.translatable("message.thefourthfrequency.tool.recovering"));
 		return true;
 	}
 
@@ -286,8 +316,9 @@ public final class TerminalToolService {
 	public static int availableToolsMask(ServerPlayer player, CompoundTag tag) {
 		int milestones = tag.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0);
 		boolean portalKnown = !tag.getStringOr(TerminalData.LAST_PORTAL_DIMENSION, "").isBlank();
-		int eyeSamples = tag.getIntOr(TerminalData.EYE_SAMPLE_COUNT, 0);
-		return TerminalGuidancePolicy.availableToolsMask(milestones, portalKnown, eyeSamples);
+		int obtainedEyeCount = Math.max(tag.getIntOr(TerminalData.CRAFTED_EYE_COUNT, 0),
+				SurvivalProgressService.craftedEyeSamples(player));
+		return TerminalGuidancePolicy.availableToolsMask(milestones, portalKnown, obtainedEyeCount);
 	}
 
 	public static int availableResourcesMask(CompoundTag tag) {
@@ -330,16 +361,6 @@ public final class TerminalToolService {
 					&& !tag.getStringOr(TerminalData.STRONGHOLD_DIMENSION, "").isBlank();
 			case WEATHER -> false;
 		};
-	}
-
-	private static void guidanceFeedback(ServerPlayer player, int previous, TerminalTool next) {
-		if (validToolWire(previous) && previous != next.slot()) {
-			TerminalNoticeService.send(player, Component.translatable("message.thefourthfrequency.guidance.replaced",
-					Component.translatable("terminal.thefourthfrequency.tool." + next.id())));
-		} else {
-			TerminalNoticeService.send(player, Component.translatable("message.thefourthfrequency.guidance.started",
-					Component.translatable("terminal.thefourthfrequency.tool." + next.id())));
-		}
 	}
 
 	private static Location home(ServerPlayer player, CompoundTag tag) {

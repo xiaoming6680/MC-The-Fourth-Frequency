@@ -1,6 +1,5 @@
 package com.xm.thefourthfrequency.test;
 
-import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.narrative.HiddenFilePolicy;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
@@ -14,28 +13,21 @@ import com.xm.thefourthfrequency.terminal.TerminalTool;
 import com.xm.thefourthfrequency.terminal.TerminalToolService;
 import com.xm.thefourthfrequency.world.FragmentInvestigationService;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
-import com.xm.thefourthfrequency.world.RiftArchiveService;
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
-import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.Vec3;
 
 import java.lang.reflect.Method;
 import java.util.List;
-import java.util.Set;
 
 public final class M4GameTests implements CustomTestMethodInvoker {
 	@GameTest(maxTicks = 400)
-	public void vanillaStructuresUnlockSharedFragmentsAndRealRift(GameTestHelper helper) {
+	public void vanillaStructuresUnlockSharedFragmentsAndPersonalJournal(GameTestHelper helper) {
 		ServerPlayer discoverer = helper.makeMockServerPlayerInLevel();
 		ServerPlayer teammate = helper.makeMockServerPlayerInLevel();
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
@@ -49,11 +41,6 @@ public final class M4GameTests implements CustomTestMethodInvoker {
 			record.putInt(TerminalData.GUIDANCE_OBJECTIVE_PROGRESS, 0);
 			record.putLong(TerminalData.GUIDANCE_STALLED_TICKS, 6_000L);
 		});
-
-		int legacyFacilitiesBefore = data.narrativeState().getListOrEmpty("facilities").size();
-		RiftArchiveService.updateForTesting(helper.getLevel().getServer());
-		helper.assertValueEqual(data.narrativeState().getListOrEmpty("facilities").size(), legacyFacilitiesBefore,
-				"The current mainline must not allocate predecessor facilities");
 
 		BlockPos origin = discoverer.blockPosition();
 		List<FragmentInvestigationService.Candidate> candidates = List.of(
@@ -102,6 +89,18 @@ public final class M4GameTests implements CustomTestMethodInvoker {
 					.anyMatch(entry -> entry.type().startsWith(prefix)),
 					"Each fragment exposes its candidates only inside its assigned band");
 		}
+		FragmentInvestigationService.Candidate nearbyCandidate = candidates.get(3);
+		FragmentInvestigationService.setNearbyForTesting(discoverer, nearbyCandidate);
+		discoverer.setItemInHand(InteractionHand.MAIN_HAND, TerminalData.stackFromRecord(discovererRecord));
+		TerminalRuntimeService.open(discoverer, 0);
+		int nearbyTuning = FragmentInvestigationService.receiverTuning(nearbyCandidate);
+		TerminalRuntimeService.control(discoverer, TerminalControlPayload.TUNE, nearbyTuning);
+		helper.assertValueEqual(TerminalRuntimeService.rememberedTuning(discoverer.getUUID()), nearbyTuning,
+				"Arriving at a side-route source must enable tuning without opening the navigation tool");
+		var directReceiver = TerminalToolService.snapshot(discoverer, TerminalToolService.NO_TOOL, nearbyTuning, 0);
+		helper.assertTrue(directReceiver.receiverAvailable() && directReceiver.receiverStrength() == 100,
+				"The nearby receiver must publish full signal data while no tool detail is selected");
+		TerminalRuntimeService.control(discoverer, TerminalControlPayload.CLOSE, 0);
 
 		helper.assertTrue(FragmentInvestigationService.selectCandidate(discoverer, 3),
 				"Player can choose the first candidate for fragment two");
@@ -170,46 +169,26 @@ public final class M4GameTests implements CustomTestMethodInvoker {
 		helper.assertTrue(TerminalFileState.unlocked(discovererUnlocked, HiddenFilePolicy.COMPLETE_FILE_ID)
 				&& discovererUnlocked.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false),
 				"The first 4/4 reader unlocks only their complete diary");
-		var narrative = data.narrativeState();
-		helper.assertTrue(narrative.getBooleanOr("archive_unlocked", false)
-				&& narrative.contains("rift_entrance") && narrative.contains("rift_core"),
-				"The first 4/4 reader creates or reuses the one retained Overworld fracture");
-		long firstRiftCore = narrative.getLongOr("rift_core", 0L);
-
 		var teammateBeforeRead = data.terminalRecord(teammate.getUUID()).orElseThrow();
 		helper.assertValueEqual(HiddenFilePolicy.readCount(teammateBeforeRead), 0,
 				"A teammate retains independent unread state");
 		helper.assertFalse(TerminalFileState.unlocked(teammateBeforeRead, HiddenFilePolicy.COMPLETE_FILE_ID),
-				"A shared rift does not bypass the teammate's personal reading requirement");
+				"Another player's unlocked journal does not bypass the teammate's reading requirement");
 		readHiddenFiles(teammate, data, helper, 4);
 		TerminalRuntimeService.control(teammate, TerminalControlPayload.CLOSE, 0);
 		var teammateUnlocked = data.terminalRecord(teammate.getUUID()).orElseThrow();
 		helper.assertTrue(TerminalFileState.unlocked(teammateUnlocked, HiddenFilePolicy.COMPLETE_FILE_ID),
 				"The teammate unlocks only after personally reading all four files");
-		helper.assertValueEqual(data.narrativeState().getLongOr("rift_core", 0L), firstRiftCore,
-				"A later 4/4 reader must not allocate or move the shared rift");
 		helper.assertFalse(TerminalFileState.unlocked(data.terminalRecord(later.getUUID()).orElseThrow(),
 				HiddenFilePolicy.COMPLETE_FILE_ID),
 				"An unread later terminal remains locked after other players finish");
 
-		BlockPos rift = BlockPos.of(data.terminalRecord(discoverer.getUUID()).orElseThrow()
-				.getLongOr(TerminalData.RIFT_POSITION, 0L));
-		loadFixtureChunks(helper, rift);
-		for (int iteration = 0; iteration < 8; iteration++) {
-			RiftArchiveService.updateForTesting(helper.getLevel().getServer());
-		}
 		var record = data.terminalRecord(discoverer.getUUID()).orElseThrow();
 		WitnessArchive archive = WitnessArchive.get();
 		helper.assertValueEqual(record.getIntOr(TerminalData.LOCAL_FILE_VERSION, 0), archive.version(),
 				"Complete file version remains immutable");
 		helper.assertValueEqual(record.getStringOr(TerminalData.LOCAL_FILE_HASH, ""), archive.contentHash(),
 				"Complete file hash remains immutable");
-		helper.assertTrue(helper.getLevel().getBlockState(rift).is(ModBlocks.RULE_FRACTURE_CORE),
-				"The revealed coordinate points to a physical fracture core");
-		teleport(discoverer, rift);
-		InteractionResult result = UseBlockCallback.EVENT.invoker().interact(discoverer, helper.getLevel(),
-				InteractionHand.MAIN_HAND, new BlockHitResult(Vec3.atCenterOf(rift), Direction.UP, rift, false));
-		helper.assertValueEqual(result, InteractionResult.SUCCESS, "Physical fracture interaction remains the next step");
 		helper.succeed();
 	}
 
@@ -227,19 +206,6 @@ public final class M4GameTests implements CustomTestMethodInvoker {
 		}
 		helper.assertValueEqual(HiddenFilePolicy.readCount(data.terminalRecord(player.getUUID()).orElseThrow()), count,
 				"Each acquired hidden file contributes exactly one personal read");
-	}
-
-	private static void teleport(ServerPlayer player, BlockPos position) {
-		player.teleportTo(player.level(), position.getX() + 0.5, position.getY() + 1.0,
-				position.getZ() + 0.5, Set.of(), 0.0F, 0.0F, true);
-	}
-
-	private static void loadFixtureChunks(GameTestHelper helper, BlockPos center) {
-		int centerChunkX = center.getX() >> 4;
-		int centerChunkZ = center.getZ() >> 4;
-		for (int chunkX = centerChunkX - 1; chunkX <= centerChunkX + 1; chunkX++)
-			for (int chunkZ = centerChunkZ - 1; chunkZ <= centerChunkZ + 1; chunkZ++)
-				helper.getLevel().getChunk(chunkX, chunkZ);
 	}
 
 	@Override

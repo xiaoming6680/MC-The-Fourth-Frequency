@@ -46,11 +46,11 @@ public record AnomalyClientScenario(int catalogNumber, String id, int tier, long
 	private static List<AnomalyClientScenario> create() {
 		Map<String, Builder> values = new LinkedHashMap<>();
 		put(values, "phantom_echo", 0x1100A11L, Fixture.CAVE).sounds(1, 1);
-		put(values, "light_dropout", 0x2200B22L, Fixture.LIGHTS).overlays("light_dropout").hidden(1, 64);
+		put(values, "light_dropout", 0x2200B22L, Fixture.LIGHTS);
 		put(values, "surface_fracture", 0x3300C33L, Fixture.WALL)
 				.overlays("surface_fracture", "glitch_impact").sounds(1, 1);
 		put(values, "peripheral_residue", 0x4400D44L, Fixture.EMPTY)
-				.overlays("peripheral_hand_instances", "glitch_impact").sounds(1, 0);
+				.overlays("glitch_impact").sounds(1, 0);
 		put(values, "watcher_alignment", 0x5500E55L, Fixture.MOBS);
 		put(values, "dark_watcher", 0x6600F66L, Fixture.WATCHER_CONE).sounds(0, 1);
 		put(values, "action_echo", 0x7701077L, Fixture.ACTION_HISTORY)

@@ -60,10 +60,6 @@ public final class TerminalData {
 	public static final String LOCAL_FILE_UNLOCKED = "local_file_unlocked";
 	public static final String LOCAL_FILE_VERSION = "local_file_version";
 	public static final String LOCAL_FILE_HASH = "local_file_hash";
-	public static final String RIFT_LOCATED = "rift_located";
-	public static final String RIFT_POSITION = "rift_position";
-	public static final String RIFT_DIMENSION = "rift_dimension";
-	public static final String RIFT_OBSERVED = "rift_observed";
 	public static final String EMPTY_SEGMENT_ACTIVE = "empty_segment_active";
 	public static final String EMPTY_SEGMENT_EVENT = "empty_segment_event";
 	public static final String EMPTY_SEGMENT_RETURN_POS = "empty_segment_return_pos";
@@ -75,11 +71,6 @@ public final class TerminalData {
 	public static final String CONTINUITY_CONFIDENCE = "continuity_confidence";
 	public static final String LAST_PORTAL_ORIGIN = "last_portal_origin";
 	public static final String LAST_PORTAL_DESTINATION = "last_portal_destination";
-	public static final String NETHER_RIFT_OBSERVED = "nether_rift_observed";
-	public static final String BODY_PROGRESS = "body_progress";
-	public static final String BODY_STAGE = "body_stage";
-	public static final String BODY_PROGRESS_ANCHOR_TICK = "body_progress_anchor_tick";
-	public static final String TERMINAL_CAPABILITIES = "terminal_capabilities";
 	public static final String PRIVATE_ANOMALY_SEED = "private_anomaly_seed";
 	public static final String PRIVATE_ANOMALY_VARIANT = "private_anomaly_variant";
 	public static final String PRIVATE_ANOMALY_COUNT = "private_anomaly_count";
@@ -100,6 +91,7 @@ public final class TerminalData {
 	public static final String SIGNAL_EVENTS = "signal_events";
 	public static final String SIGNAL_EVENT_SEQUENCE = "signal_event_sequence";
 	public static final String UNREAD_SIGNAL_COUNT = "unread_signal_count";
+	public static final String UNREAD_FILE_COUNT = "unread_file_count";
 	public static final String FILE_STATES = "file_states";
 	public static final String ONLINE_SURVIVAL_TICKS = "online_survival_ticks";
 	public static final String LAST_SIGNAL_WEATHER = "last_signal_weather";
@@ -134,6 +126,10 @@ public final class TerminalData {
 	public static final String ACTIVE_GUIDANCE_TOOL = "active_guidance_tool";
 	public static final String SELECTED_RESOURCE = "selected_resource";
 	public static final String MINERAL_SCAN_READY_GAME_TIME = "mineral_scan_ready_game_time";
+	public static final String MINERAL_SURVEY_PROXIMITY = "mineral_survey_proximity";
+	public static final String MINERAL_SURVEY_NEARBY = "mineral_survey_nearby";
+	public static final String MINERAL_SURVEY_POSITION = "mineral_survey_position";
+	public static final String MINERAL_SURVEY_DIMENSION = "mineral_survey_dimension";
 	public static final String TOOLS_DISABLED_UNTIL = "tools_disabled_until";
 	public static final String HOME_POSITION = "home_position";
 	public static final String HOME_DIMENSION = "home_dimension";
@@ -152,7 +148,6 @@ public final class TerminalData {
 	public static final String TASK_COMPLETION_NOTIFIED_MASK = "task_completion_notified_mask";
 	public static final String UNREAD_ALERT_ACTIVE = "unread_alert_active";
 	public static final String BREACH_MASK = "breach_mask";
-	public static final String SIGNATURE_SCENE_MASK = "signature_scene_mask";
 	public static final String TRUTH_READ = "truth_read";
 	public static final String PORTAL_ROOM_FOUND = "portal_room_found";
 	public static final String PORTAL_ROOM_POSITION = "portal_room_position";
@@ -168,6 +163,7 @@ public final class TerminalData {
 	public static final String PURSUIT_TUTORIAL_DEMO_MASK = "pursuit_tutorial_demo_mask";
 	public static final String PURSUIT_TUTORIAL_WARNING_MASK = "pursuit_tutorial_warning_mask";
 	public static final String PURSUIT_TUTORIAL_ARCHIVE_MASK = "pursuit_tutorial_archive_mask";
+	public static final String PURSUIT_WARNING_RECORDS_REDIRECT = "pursuit_warning_records_redirect";
 	public static final String PURSUIT_PENDING = "pursuit_pending";
 	public static final String PURSUIT_NEXT_ELIGIBLE_TICK = "pursuit_next_eligible_tick";
 	public static final String PURSUIT_EFFECTIVE_ACTIVITY_TICKS = "pursuit_effective_activity_ticks";
@@ -177,6 +173,7 @@ public final class TerminalData {
 	public static final String PURSUIT_SESSION_ID = "pursuit_session_id";
 	public static final String PURSUIT_SESSION_PHASE = "pursuit_session_phase";
 	public static final String PURSUIT_SESSION_FORM = "pursuit_session_form";
+	public static final String PURSUIT_SESSION_DEBUG = "pursuit_session_debug";
 	public static final String PURSUIT_SOURCE_DIMENSION = "pursuit_source_dimension";
 	public static final String PURSUIT_SOURCE_POSITION = "pursuit_source_position";
 	public static final String PURSUIT_SOURCE_YAW = "pursuit_source_yaw";
@@ -236,22 +233,12 @@ public final class TerminalData {
 		tag.putInt(RECOVERY_COUNT, 0);
 		tag.putBoolean(LOCAL_FILE_UNLOCKED, false);
 		tag.putInt(LOCAL_FILE_VERSION, 1);
-		tag.putString(LOCAL_FILE_HASH, "TFF-WF-01-A91C");
-		tag.putBoolean(RIFT_LOCATED, false);
-		tag.putLong(RIFT_POSITION, 0L);
-		tag.putString(RIFT_DIMENSION, "minecraft:overworld");
-		tag.putBoolean(RIFT_OBSERVED, false);
+		tag.putString(LOCAL_FILE_HASH, "TFF-WF-02-CONTINUITY");
 		tag.putInt(PORTAL_TRANSITIONS, 0);
 		tag.putBoolean(CONTINUITY_LEARNED, false);
 		tag.putInt(CONTINUITY_CONFIDENCE, 0);
 		tag.putString(LAST_PORTAL_ORIGIN, "");
 		tag.putString(LAST_PORTAL_DESTINATION, "");
-		tag.putBoolean(NETHER_RIFT_OBSERVED, false);
-		tag.putInt(BODY_PROGRESS, 0);
-		tag.putInt(BODY_STAGE, 0);
-		tag.putLong(BODY_PROGRESS_ANCHOR_TICK, player.level().getGameTime());
-		tag.putString(TERMINAL_CAPABILITIES,
-				"environment;life;activity;resource_guidance;relation_inference");
 		tag.putLong(PRIVATE_ANOMALY_SEED, personalitySeed ^ 0x5446464D364C4F4EL);
 		tag.putInt(PRIVATE_ANOMALY_VARIANT, Math.floorMod(cacheVariant, 4));
 		tag.putInt(PRIVATE_ANOMALY_COUNT, 0);
@@ -299,6 +286,10 @@ public final class TerminalData {
 		tag.putInt(ACTIVE_GUIDANCE_TOOL, 6);
 		tag.putInt(SELECTED_RESOURCE, 3);
 		tag.putLong(MINERAL_SCAN_READY_GAME_TIME, 0L);
+		tag.putBoolean(MINERAL_SURVEY_PROXIMITY, false);
+		tag.putBoolean(MINERAL_SURVEY_NEARBY, false);
+		tag.putLong(MINERAL_SURVEY_POSITION, 0L);
+		tag.putString(MINERAL_SURVEY_DIMENSION, "");
 		tag.putLong(TOOLS_DISABLED_UNTIL, 0L);
 		tag.putLong(HOME_POSITION, 0L);
 		tag.putString(HOME_DIMENSION, "");
@@ -317,7 +308,6 @@ public final class TerminalData {
 		tag.putInt(TASK_COMPLETION_NOTIFIED_MASK, 0);
 		tag.putBoolean(UNREAD_ALERT_ACTIVE, false);
 		tag.putInt(BREACH_MASK, 0);
-		tag.putInt(SIGNATURE_SCENE_MASK, 0);
 		tag.putBoolean(TRUTH_READ, false);
 		tag.putBoolean(PORTAL_ROOM_FOUND, false);
 		tag.putLong(PORTAL_ROOM_POSITION, 0L);
@@ -333,6 +323,7 @@ public final class TerminalData {
 		tag.putInt(PURSUIT_TUTORIAL_DEMO_MASK, 0);
 		tag.putInt(PURSUIT_TUTORIAL_WARNING_MASK, 0);
 		tag.putInt(PURSUIT_TUTORIAL_ARCHIVE_MASK, 0);
+		tag.putBoolean(PURSUIT_WARNING_RECORDS_REDIRECT, false);
 		tag.putBoolean(PURSUIT_PENDING, false);
 		tag.putLong(PURSUIT_NEXT_ELIGIBLE_TICK, 0L);
 		tag.putLong(PURSUIT_EFFECTIVE_ACTIVITY_TICKS, 0L);
@@ -342,6 +333,7 @@ public final class TerminalData {
 		tag.putString(PURSUIT_SESSION_ID, "");
 		tag.putString(PURSUIT_SESSION_PHASE, "none");
 		tag.putInt(PURSUIT_SESSION_FORM, 0);
+		tag.putBoolean(PURSUIT_SESSION_DEBUG, false);
 		tag.putString(PURSUIT_SOURCE_DIMENSION, "");
 		tag.putLong(PURSUIT_SOURCE_POSITION, 0L);
 		tag.putDouble(PURSUIT_SOURCE_YAW, 0.0D);
@@ -354,6 +346,7 @@ public final class TerminalData {
 		tag.put(SIGNAL_EVENTS, new ListTag());
 		tag.putInt(SIGNAL_EVENT_SEQUENCE, 0);
 		tag.putInt(UNREAD_SIGNAL_COUNT, 0);
+		tag.putInt(UNREAD_FILE_COUNT, 0);
 		tag.put(FILE_STATES, new ListTag());
 		TerminalFileState.discover(tag, HiddenFilePolicy.COMPLETE_FILE_ID,
 				player.level().getGameTime(), player.level().getDayTime(), false);
@@ -411,6 +404,10 @@ public final class TerminalData {
 		if (!record.contains(SELECTED_RESOURCE)) record.putInt(SELECTED_RESOURCE,
 				resourceWire(record.getStringOr(TARGET_KIND, "unresolved")));
 		if (!record.contains(MINERAL_SCAN_READY_GAME_TIME)) record.putLong(MINERAL_SCAN_READY_GAME_TIME, 0L);
+		if (!record.contains(MINERAL_SURVEY_PROXIMITY)) record.putBoolean(MINERAL_SURVEY_PROXIMITY, false);
+		if (!record.contains(MINERAL_SURVEY_NEARBY)) record.putBoolean(MINERAL_SURVEY_NEARBY, false);
+		if (!record.contains(MINERAL_SURVEY_POSITION)) record.putLong(MINERAL_SURVEY_POSITION, 0L);
+		if (!record.contains(MINERAL_SURVEY_DIMENSION)) record.putString(MINERAL_SURVEY_DIMENSION, "");
 		if (!record.contains(GUIDANCE_OBJECTIVE_ID)) record.putString(GUIDANCE_OBJECTIVE_ID, "");
 		if (!record.contains(GUIDANCE_OBJECTIVE_PROGRESS)) record.putInt(GUIDANCE_OBJECTIVE_PROGRESS, 0);
 		if (!record.contains(GUIDANCE_STALLED_TICKS)) record.putLong(GUIDANCE_STALLED_TICKS, 0L);
@@ -439,7 +436,6 @@ public final class TerminalData {
 		if (!record.contains(TASK_COMPLETION_NOTIFIED_MASK)) record.putInt(TASK_COMPLETION_NOTIFIED_MASK, 0);
 		if (!record.contains(UNREAD_ALERT_ACTIVE)) record.putBoolean(UNREAD_ALERT_ACTIVE, false);
 		if (!record.contains(BREACH_MASK)) record.putInt(BREACH_MASK, 0);
-		if (!record.contains(SIGNATURE_SCENE_MASK)) record.putInt(SIGNATURE_SCENE_MASK, 0);
 		if (!record.contains(TRUTH_READ)) record.putBoolean(TRUTH_READ,
 				record.getBooleanOr(LOCAL_FILE_UNLOCKED, false));
 		if (!record.contains(PORTAL_ROOM_FOUND)) record.putBoolean(PORTAL_ROOM_FOUND, false);
@@ -456,6 +452,8 @@ public final class TerminalData {
 		if (!record.contains(PURSUIT_TUTORIAL_DEMO_MASK)) record.putInt(PURSUIT_TUTORIAL_DEMO_MASK, 0);
 		if (!record.contains(PURSUIT_TUTORIAL_WARNING_MASK)) record.putInt(PURSUIT_TUTORIAL_WARNING_MASK, 0);
 		if (!record.contains(PURSUIT_TUTORIAL_ARCHIVE_MASK)) record.putInt(PURSUIT_TUTORIAL_ARCHIVE_MASK, 0);
+		if (!record.contains(PURSUIT_WARNING_RECORDS_REDIRECT))
+			record.putBoolean(PURSUIT_WARNING_RECORDS_REDIRECT, false);
 		if (!record.contains(PURSUIT_PENDING)) record.putBoolean(PURSUIT_PENDING, false);
 		if (!record.contains(PURSUIT_NEXT_ELIGIBLE_TICK)) record.putLong(PURSUIT_NEXT_ELIGIBLE_TICK, 0L);
 		if (!record.contains(PURSUIT_EFFECTIVE_ACTIVITY_TICKS)) record.putLong(PURSUIT_EFFECTIVE_ACTIVITY_TICKS, 0L);
@@ -465,6 +463,7 @@ public final class TerminalData {
 		if (!record.contains(PURSUIT_SESSION_ID)) record.putString(PURSUIT_SESSION_ID, "");
 		if (!record.contains(PURSUIT_SESSION_PHASE)) record.putString(PURSUIT_SESSION_PHASE, "none");
 		if (!record.contains(PURSUIT_SESSION_FORM)) record.putInt(PURSUIT_SESSION_FORM, 0);
+		if (!record.contains(PURSUIT_SESSION_DEBUG)) record.putBoolean(PURSUIT_SESSION_DEBUG, false);
 		if (!record.contains(PURSUIT_SOURCE_DIMENSION)) record.putString(PURSUIT_SOURCE_DIMENSION, "");
 		if (!record.contains(PURSUIT_SOURCE_POSITION)) record.putLong(PURSUIT_SOURCE_POSITION, 0L);
 		if (!record.contains(PURSUIT_SOURCE_YAW)) record.putDouble(PURSUIT_SOURCE_YAW, 0.0D);
@@ -478,6 +477,7 @@ public final class TerminalData {
 		if (!record.contains(SIGNAL_EVENT_SEQUENCE)) record.putInt(SIGNAL_EVENT_SEQUENCE, 0);
 		if (!record.contains(UNREAD_SIGNAL_COUNT))
 			record.putInt(UNREAD_SIGNAL_COUNT, TerminalSignalLog.unreadCount(record));
+		if (!record.contains(UNREAD_FILE_COUNT)) record.putInt(UNREAD_FILE_COUNT, 0);
 		boolean legacyFiles = !record.contains(FILE_STATES);
 		if (legacyFiles) record.put(FILE_STATES, new ListTag());
 		if (!record.contains(ONLINE_SURVIVAL_TICKS)) record.putLong(ONLINE_SURVIVAL_TICKS,
@@ -513,12 +513,10 @@ public final class TerminalData {
 
 	private static int legacySurvivalMilestones(CompoundTag record) {
 		int mask = 0;
-		int progress = Math.clamp(record.getIntOr(BODY_PROGRESS, 0), 0, 1000);
-		if (record.getBooleanOr(BOUND, false) || progress >= 100) mask |= 1;
-		if (record.getStringOr(ACCEPTED_ADVICE, "").contains("iron") || progress >= 250) mask |= 1 << 1;
-		if (record.getBooleanOr(RIFT_OBSERVED, false) || progress >= 500) mask |= 1 << 2;
-		if (record.getIntOr(PORTAL_TRANSITIONS, 0) > 0 || progress >= 500) mask |= 1 << 3;
-		if (record.getIntOr(PORTAL_TRANSITIONS, 0) > 1 || progress >= 750) mask |= 1 << 4;
+		if (record.getBooleanOr(BOUND, false)) mask |= 1;
+		if (record.getStringOr(ACCEPTED_ADVICE, "").contains("iron")) mask |= 1 << 1;
+		if (record.getIntOr(PORTAL_TRANSITIONS, 0) > 0) mask |= 1 << 3;
+		if (record.getIntOr(PORTAL_TRANSITIONS, 0) > 1) mask |= 1 << 4;
 		return mask;
 	}
 
@@ -541,8 +539,6 @@ public final class TerminalData {
 		long issued = Math.max(0L, record.getLongOr(ISSUED_GAME_TIME, 0L));
 		long dayTime = Math.floorMod(issued, 24_000L);
 		TerminalFileState.discover(record, "maintenance_handoff", issued, dayTime, true);
-		if (record.getBooleanOr(SECOND_CACHE_UNLOCKED, false))
-			TerminalFileState.discover(record, "recovered_fragment", issued, dayTime, true);
 		if (record.getBooleanOr(LOCAL_FILE_UNLOCKED, false))
 			TerminalFileState.discover(record, "encrypted_witness_file", issued, dayTime,
 					record.getBooleanOr(LOCAL_FILE_UNLOCKED, false));
@@ -571,6 +567,7 @@ public final class TerminalData {
 				record.getIntOr(PURSUIT_ALLOWED_FORM, 0),
 				record.getIntOr(ANOMALY_TIER, 0));
 		boolean unread = record.getIntOr(UNREAD_SIGNAL_COUNT, 0) > 0
+				|| record.getIntOr(UNREAD_FILE_COUNT, 0) > 0
 				|| record.getBooleanOr(NAVIGATION_COMPLETION_UNREAD, false)
 				|| TerminalTaskService.hasClaimableReward(record);
 		CustomModelData model = new CustomModelData(List.of((float) (stage * 2 + (unread ? 1 : 0))),

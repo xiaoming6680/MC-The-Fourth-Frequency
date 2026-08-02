@@ -12,6 +12,7 @@ import org.lwjgl.glfw.GLFW;
 public final class DebugPanelClient {
 	private static KeyMapping openKey;
 	private static String pendingAnomalyId;
+	private static boolean pendingPursuitResponse;
 	private static boolean initialized;
 	private DebugPanelClient() { }
 
@@ -38,18 +39,27 @@ public final class DebugPanelClient {
 		}
 		if (!payload.allowed()) {
 			boolean anomalyResponse = pendingAnomalyId != null;
+			boolean pursuitResponse = pendingPursuitResponse;
 			pendingAnomalyId = null;
+			pendingPursuitResponse = false;
 			if (client.player != null) client.player.displayClientMessage(Component.literal(
-					(anomalyResponse ? "[异象触发失败] " : "") + payload.message()), false);
+					(anomalyResponse ? "[异象触发失败] " : pursuitResponse ? "[追逐测试失败] " : "")
+							+ payload.message()), false);
+			if (client.screen instanceof DebugPanelScreen) client.setScreen(null);
+			return;
+		}
+		boolean pursuitResponse = pendingPursuitResponse && !payload.message().isEmpty();
+		if (pursuitResponse) pendingPursuitResponse = false;
+		if (pursuitResponse && payload.message().startsWith("追逐测试已启动")) {
 			if (client.screen instanceof DebugPanelScreen) client.setScreen(null);
 			return;
 		}
 		String requestedAnomaly = pendingAnomalyId;
-		boolean anomalyResponse = requestedAnomaly != null;
+		boolean anomalyResponse = requestedAnomaly != null && !payload.message().isEmpty();
 		boolean anomalyStarted = anomalyResponse
 				&& requestedAnomaly.equals(payload.activeAnomaly())
 				&& payload.message().startsWith("已触发异象：");
-		pendingAnomalyId = null;
+		if (anomalyResponse) pendingAnomalyId = null;
 		if (anomalyResponse && client.player != null) client.player.displayClientMessage(Component.literal(
 				(anomalyStarted ? "[异象触发成功] " : "[异象触发失败] ") + payload.message()), false);
 		if (anomalyStarted) {
@@ -57,10 +67,14 @@ public final class DebugPanelClient {
 			return;
 		}
 		if (client.screen instanceof DebugPanelScreen screen) screen.update(payload);
-		else client.setScreen(new DebugPanelScreen(payload));
+		else if (!payload.message().isEmpty()) client.setScreen(new DebugPanelScreen(payload));
 	}
 
 	static void expectAnomalyResponse(String anomalyId) {
 		pendingAnomalyId = anomalyId;
+	}
+
+	static void expectPursuitResponse() {
+		pendingPursuitResponse = true;
 	}
 }

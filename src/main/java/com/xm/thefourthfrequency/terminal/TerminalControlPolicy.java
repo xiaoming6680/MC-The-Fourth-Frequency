@@ -33,10 +33,6 @@ public final class TerminalControlPolicy {
 		return Math.clamp(100 - Math.abs(tuning(tuning) - tuning(target)) * 4, 0, 100);
 	}
 
-	public static int visualStage(int plotStage, int bodyStage) {
-		return bodyStage >= 3 ? 2 : plotStage >= 3 ? 1 : 0;
-	}
-
 	public static int pursuitVisualStage(int resolvedChases, int allowedForm, int anomalyStage) {
 		return PursuitProgressPolicy.terminalVisualStage(resolvedChases, allowedForm, anomalyStage);
 	}

@@ -1,14 +1,12 @@
 package com.xm.thefourthfrequency.test;
 
-import com.xm.thefourthfrequency.body.BodyConstructionService;
-import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.content.TerminalData;
+import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.TerminalLifecycleService;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
-import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
@@ -20,7 +18,7 @@ import java.util.Set;
 
 public final class M6GameTests implements CustomTestMethodInvoker {
 	@GameTest(maxTicks = 100)
-	public void portalContinuityBuildsAndObservesBoundedNetherFracture(GameTestHelper helper) {
+	public void portalContinuityRecordsBothCrossingsWithoutPhysicalFractures(GameTestHelper helper) {
 		var server = helper.getLevel().getServer();
 		ServerPlayer player = helper.makeMockServerPlayerInLevel();
 		FrequencyWorldData data = FrequencyWorldData.get(server);
@@ -43,33 +41,8 @@ public final class M6GameTests implements CustomTestMethodInvoker {
 			helper.assertTrue(SurvivalMilestone.ENTERED_NETHER.present(
 					record.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0)),
 					"A real qualifying transition must record the Nether survival milestone");
-			helper.assertValueEqual(record.getIntOr(TerminalData.BODY_PROGRESS, 0), 0,
-					"New survival progress must never write the legacy timed field");
-			helper.assertTrue(record.getStringOr(TerminalData.TERMINAL_CAPABILITIES, "")
-					.contains("identity_continuity"), "Terminal capability model must unlock identity continuity");
-
-			CompoundTag rift = BodyConstructionService.netherRiftState(data);
-			helper.assertTrue(rift.getBooleanOr("complete", false),
-					"Nether fracture must be a completed physical bounded structure");
-			helper.assertTrue(rift.getIntOr("maximum_tick_work", 0)
-					<= BodyConstructionService.buildBudgetPerTick(), "Nether build must obey its hard Tick budget");
-			BlockPos core = BlockPos.of(rift.getLongOr("origin", 0L));
-			helper.assertTrue(nether.getBlockState(core).is(ModBlocks.NETHER_RULE_FRACTURE_CORE),
-					"Nether fracture core must exist as a real interactable block");
-			helper.assertTrue(BodyConstructionService.observeNetherRift(player, core),
-					"Bound player must physically observe the authoritative Nether fracture");
-			CompoundTag observed = data.terminalRecord(player.getUUID()).orElseThrow();
-			helper.assertTrue(observed.getBooleanOr(TerminalData.NETHER_RIFT_OBSERVED, false),
-					"Nether observation must persist per player");
-			helper.assertValueEqual(observed.getIntOr(TerminalData.BODY_PROGRESS, 0), 0,
-					"Fracture contact must not restart the legacy timed route");
-			helper.assertTrue(observed.getStringOr(TerminalData.TERMINAL_CAPABILITIES, "")
-					.contains("fracture_resonance"), "Fracture contact must unlock its terminal ability");
-			helper.assertTrue(BodyConstructionService.observeNetherRift(player, core),
-					"Repeated physical observation remains a valid interaction");
-			helper.assertValueEqual(data.terminalRecord(player.getUUID()).orElseThrow()
-					.getIntOr(TerminalData.BODY_PROGRESS, 0), 0,
-					"Repeated fracture contact must leave legacy progress unchanged");
+			helper.assertTrue(TerminalSignalLog.containsType(record, "continuity"),
+					"The crossing must appear in RECORDS without creating an extra file");
 			helper.assertTrue(player.teleportTo(server.overworld(), 0.5, 64.0, 0.5,
 					Set.of(), 0.0F, 0.0F, true), "Return continuity transition");
 		});
@@ -87,6 +60,8 @@ public final class M6GameTests implements CustomTestMethodInvoker {
 			helper.assertTrue(SurvivalMilestone.RETURNED_NETHER.present(
 					returned.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0)),
 					"A real return must complete the Nether round-trip milestone");
+			helper.assertTrue(TerminalSignalLog.containsType(returned, "return"),
+					"The return must be appended to the same RECORDS ledger");
 			helper.succeed();
 		});
 	}
@@ -115,10 +90,18 @@ public final class M6GameTests implements CustomTestMethodInvoker {
 				"Second player's private anomaly count must remain isolated");
 
 		int beforeUnrelated = firstCrossing.getIntOr(TerminalData.PORTAL_TRANSITIONS, 0);
+		long portalBeforeUnrelated = firstCrossing.getLongOr(TerminalData.LAST_PORTAL_POSITION, 0L);
+		String portalDimensionBeforeUnrelated =
+				firstCrossing.getStringOr(TerminalData.LAST_PORTAL_DIMENSION, "");
 		first.teleportTo(end, 0.5, 80.0, 0.5, Set.of(), 0.0F, 0.0F, true);
-		helper.assertValueEqual(data.terminalRecord(first.getUUID()).orElseThrow()
-				.getIntOr(TerminalData.PORTAL_TRANSITIONS, 0), beforeUnrelated,
+		CompoundTag afterUnrelated = data.terminalRecord(first.getUUID()).orElseThrow();
+		helper.assertValueEqual(afterUnrelated.getIntOr(TerminalData.PORTAL_TRANSITIONS, 0), beforeUnrelated,
 				"Nether-to-End teleport must not masquerade as portal continuity learning");
+		helper.assertValueEqual(afterUnrelated.getLongOr(TerminalData.LAST_PORTAL_POSITION, 0L),
+				portalBeforeUnrelated, "Unrelated dimension travel must not overwrite the portal navigation target");
+		helper.assertTrue(afterUnrelated.getStringOr(TerminalData.LAST_PORTAL_DIMENSION, "")
+				.equals(portalDimensionBeforeUnrelated),
+				"Unrelated dimension travel must preserve the portal target dimension");
 		first.teleportTo(server.overworld(), 40.5, 64.0, 0.5, Set.of(), 0.0F, 0.0F, true);
 		for (int index = 0; index < 4; index++) {
 			ServerLevel destination = first.level().dimension() == Level.NETHER ? server.overworld() : nether;
@@ -128,19 +111,12 @@ public final class M6GameTests implements CustomTestMethodInvoker {
 		helper.assertTrue(SurvivalMilestone.RETURNED_NETHER.present(
 				modeled.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0)),
 				"Repeated real crossings must retain the vanilla survival milestones");
-		helper.assertValueEqual(modeled.getIntOr(TerminalData.BODY_PROGRESS, 0), 0,
-				"Repeated real crossings must not advance the retired timer");
-		helper.assertValueEqual(data.terminalRecord(second.getUUID()).orElseThrow()
-				.getIntOr(TerminalData.BODY_PROGRESS, 0), 0,
-				"One player's later crossings must never mutate another player's legacy record");
 		helper.succeed();
 	}
 
 	private static void prepareEligible(ServerPlayer player, FrequencyWorldData data) {
-		data.updateNarrativeState(narrative -> narrative.putBoolean("archive_unlocked", true));
 		data.updateTerminalRecord(player.getUUID(), record -> {
 			record.putBoolean(TerminalData.BOUND, true);
-			record.putBoolean(TerminalData.RIFT_OBSERVED, true);
 			record.putInt(TerminalData.PLOT_STAGE, 4);
 			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK,
 					SurvivalMilestone.PREPARED_NETHER.mask());

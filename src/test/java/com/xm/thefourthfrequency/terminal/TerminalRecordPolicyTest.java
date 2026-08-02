@@ -12,6 +12,7 @@ final class TerminalRecordPolicyTest {
 		assertTrue(TerminalRecordPolicy.visibleInRecords("fragment_shared_0"));
 		assertTrue(TerminalRecordPolicy.visibleInRecords("fragment_candidate_2_0"));
 		assertTrue(TerminalRecordPolicy.visibleInRecords("fragment_near_2"));
+		assertTrue(TerminalRecordPolicy.visibleInRecords("pursuit_warning_1"));
 		assertTrue(TerminalRecordPolicy.retainedInLog("fragment_candidate_2_1"));
 		assertFalse(TerminalRecordPolicy.visibleInRecords("fragment_candidate_2_1"));
 		assertFalse(TerminalRecordPolicy.visibleInRecords("fragment_candidate_2_2"));
@@ -28,5 +29,13 @@ final class TerminalRecordPolicyTest {
 		assertFalse(TerminalRecordPolicy.visibleInRecords("resource_monitor_initialized"));
 		assertFalse(TerminalRecordPolicy.retainedInLog("weather_changed"));
 		assertFalse(TerminalRecordPolicy.retainedInLog("resource_target_located"));
+	}
+
+	@Test
+	void allCatalogAnomaliesStayOutOfTerminalRecordsAndStoredLogs() {
+		for (AnomalyDefinition anomaly : AnomalyCatalog.definitions()) {
+			assertFalse(TerminalRecordPolicy.visibleInRecords(anomaly.id()), anomaly.id());
+			assertFalse(TerminalRecordPolicy.retainedInLog(anomaly.id()), anomaly.id());
+		}
 	}
 }

@@ -7,8 +7,12 @@ final class TerminalVisualTheme {
 	static final int DIM = 0xFF58725B;
 	static final int AMBER = 0xFFD3B56F;
 	static final int HOT = 0xFFE06565;
+	static final int CLAIMABLE = 0xFF66FF66;
 	static final int MUTED = 0xFF405244;
 	static final int MUTED_DARK = 0xFF243229;
+	static final int READING_TITLE = 0xFFE8C978;
+	static final int READING_TEXT = 0xFFC7DBC3;
+	static final int READING_META = 0xFF8FA99B;
 	static final int GLASS = 0xD907110B;
 	static final int SELECTED = 0xFF243A29;
 	static final int ALERT_BACKGROUND = 0xFF481B20;

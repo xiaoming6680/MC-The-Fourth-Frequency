@@ -1,7 +1,6 @@
 package com.xm.thefourthfrequency.terminal;
 
 import com.xm.thefourthfrequency.content.TerminalData;
-import com.xm.thefourthfrequency.correction.CorrectionState;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import com.xm.thefourthfrequency.world.TerminalLifecycleService;
@@ -14,9 +13,13 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 public final class TerminalSignalService {
+	private static final Map<UUID, UnreadReminderState> UNREAD_REMINDERS = new HashMap<>();
 	private static boolean initialized;
 
 	private TerminalSignalService() { }
@@ -31,6 +34,7 @@ public final class TerminalSignalService {
 		if (server.getTickCount() % 20 != 0) return;
 		FrequencyWorldData data = FrequencyWorldData.get(server);
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) updatePlayer(player, data);
+		UNREAD_REMINDERS.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
 	}
 
 	private static void updatePlayer(ServerPlayer player, FrequencyWorldData data) {
@@ -55,26 +59,15 @@ public final class TerminalSignalService {
 
 			if (tag.getBooleanOr(TerminalData.BOUND, false))
 				ensureFile(tag, "maintenance_handoff", true, now, dayTime, fileNotifications);
-			if (tag.getBooleanOr(TerminalData.SECOND_CACHE_UNLOCKED, false))
-				ensureFile(tag, "recovered_fragment", true, now, dayTime, fileNotifications);
 			projectionChanged[0] |= FragmentInvestigationService.synchronizeSharedFiles(tag, player, data, sharedReceipts);
 			projectionChanged[0] |= FragmentInvestigationService.ensureSignalMarkers(tag, player);
 			projectionChanged[0] |= FragmentInvestigationService.appendCandidateLogs(tag, player, data);
 			if (tag.getBooleanOr(TerminalData.LOCAL_FILE_UNLOCKED, false)
 					&& TerminalFileState.discovered(tag, "encrypted_witness_file"))
 				ensureFile(tag, "encrypted_witness_file", true, now, dayTime, fileNotifications);
-			if (CorrectionState.active(data))
-				ensureFile(tag, "correction_response_record", true, now, dayTime, fileNotifications);
-			if (tag.getBooleanOr(TerminalData.RIFT_OBSERVED, false))
-				ensureFile(tag, "overworld_fracture_record", true, now, dayTime, fileNotifications);
-			if (tag.getBooleanOr(TerminalData.CONTINUITY_LEARNED, false)
-					&& tag.getBooleanOr(TerminalData.NETHER_RIFT_OBSERVED, false))
-				ensureFile(tag, "continuity_report", true, now, dayTime, fileNotifications);
-			if (SurvivalMilestone.THREW_EYE.present(
-					tag.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0)))
+			if (tag.getIntOr(TerminalData.EYE_SAMPLE_COUNT, 0)
+					>= com.xm.thefourthfrequency.world.SurvivalProgressService.REQUIRED_EYE_SAMPLES)
 				ensureFile(tag, "body_mapping_warning", true, now, dayTime, fileNotifications);
-			if (tag.getBooleanOr(TerminalData.PORTAL_ROOM_FOUND, false))
-				ensureFile(tag, "world_interface_entry_record", true, now, dayTime, fileNotifications);
 
 			recordStageEvents(tag, player, projectionChanged);
 			if (!fileNotifications.isEmpty()) projectionChanged[0] = true;
@@ -105,6 +98,7 @@ public final class TerminalSignalService {
 
 	public static void record(ServerPlayer player, SignalBand band, String type, int variant,
 			int severity, boolean unread) {
+		if (AnomalyCatalog.contains(type)) return;
 		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
 		if (data.terminalRecord(player.getUUID()).isEmpty()) return;
 		data.updateTerminalRecord(player.getUUID(), tag -> append(tag, player, band, type, variant, severity, unread));
@@ -114,19 +108,44 @@ public final class TerminalSignalService {
 	}
 
 	private static void updateUnreadAlert(ServerPlayer player, FrequencyWorldData data) {
-		boolean[] started = {false};
+		boolean[] cycleStarted = {false};
+		int[] unreadCount = {0};
 		data.updateTerminalRecord(player.getUUID(), tag -> {
-			boolean hasUnread = TerminalSignalLog.unreadCount(tag) > 0
-					|| tag.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_UNREAD, false);
+			unreadCount[0] = totalUnreadCount(tag);
+			boolean hasUnread = unreadCount[0] > 0;
 			boolean latched = tag.getBooleanOr(TerminalData.UNREAD_ALERT_ACTIVE, false);
 			if (TerminalAttentionPolicy.unreadStarted(hasUnread, latched)) {
 				tag.putBoolean(TerminalData.UNREAD_ALERT_ACTIVE, true);
-				started[0] = true;
+				cycleStarted[0] = true;
 			} else if (!hasUnread && latched) {
 				tag.putBoolean(TerminalData.UNREAD_ALERT_ACTIVE, false);
 			}
 		});
-		if (started[0]) TerminalNoticeService.unread(player);
+		UUID playerId = player.getUUID();
+		if (unreadCount[0] <= 0) {
+			UNREAD_REMINDERS.remove(playerId);
+			return;
+		}
+		long now = player.level().getGameTime();
+		UnreadReminderState state = UNREAD_REMINDERS.get(playerId);
+		if (state == null || cycleStarted[0] || unreadCount[0] < state.lastUnreadCount) {
+			state = new UnreadReminderState(now, unreadCount[0], false);
+			UNREAD_REMINDERS.put(playerId, state);
+		} else if (unreadCount[0] != state.lastUnreadCount) {
+			state = new UnreadReminderState(state.unreadSince, unreadCount[0], state.sent);
+			UNREAD_REMINDERS.put(playerId, state);
+		}
+		if (TerminalAttentionPolicy.unreadReminderDue(
+				unreadCount[0], state.unreadSince, now, state.sent)) {
+			UNREAD_REMINDERS.put(playerId, new UnreadReminderState(state.unreadSince, unreadCount[0], true));
+			TerminalNoticeService.unreadReminder(player, unreadCount[0]);
+		}
+	}
+
+	private static int totalUnreadCount(CompoundTag tag) {
+		return TerminalSignalLog.unreadCount(tag)
+				+ TerminalFileState.unreadCount(tag)
+				+ (tag.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_UNREAD, false) ? 1 : 0);
 	}
 
 	private static void recordStageEvents(CompoundTag tag, ServerPlayer player, boolean[] changed) {
@@ -134,19 +153,9 @@ public final class TerminalSignalService {
 		if (bandStage >= 2) changed[0] |= appendOnce(tag, player, SignalBand.UNKNOWN, "terminal_bound", 0);
 		if (tag.getIntOr(TerminalData.PLOT_STAGE, 1) >= 3)
 			changed[0] |= appendOnce(tag, player, SignalBand.UNKNOWN, "investigation_stage", 0);
-		if (CorrectionState.active(FrequencyWorldData.get(player.level().getServer())))
-			changed[0] |= appendOnce(tag, player, SignalBand.UNKNOWN, "correction_active", 0);
-		if (tag.getBooleanOr(TerminalData.RIFT_OBSERVED, false))
-			changed[0] |= appendOnce(tag, player, SignalBand.UNKNOWN, "overworld_fracture_observed", 0);
-		if (tag.getBooleanOr(TerminalData.CONTINUITY_LEARNED, false))
-			changed[0] |= appendOnce(tag, player, SignalBand.UNKNOWN, "continuity_learned", 0);
 		int milestones = tag.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0);
-		if (SurvivalMilestone.HOME.present(milestones))
-			changed[0] |= appendOnce(tag, player, SignalBand.PUBLIC, "survival_home", 0);
 		if (SurvivalMilestone.IRON.present(milestones))
 			changed[0] |= appendOnce(tag, player, SignalBand.MINING, "survival_iron", 0);
-		if (SurvivalMilestone.RETURNED_NETHER.present(milestones))
-			changed[0] |= appendOnce(tag, player, SignalBand.WEATHER, "survival_nether_return", 0);
 		if (SurvivalMilestone.THREW_EYE.present(milestones))
 			changed[0] |= appendOnce(tag, player, SignalBand.UNKNOWN, "survival_eye", 0);
 		if (SurvivalMilestone.FOUND_STRONGHOLD.present(milestones))
@@ -170,6 +179,9 @@ public final class TerminalSignalService {
 			List<String> notifications) {
 		boolean existed = TerminalFileState.discovered(tag, id);
 		if (TerminalFileState.discover(tag, id, now, dayTime, unlocked) && !existed) notifications.add(id);
+	}
+
+	private record UnreadReminderState(long unreadSince, int lastUnreadCount, boolean sent) {
 	}
 
 }

@@ -27,6 +27,7 @@ public final class TheFourthFrequencyClient implements ClientModInitializer {
 		WorldInterfaceEndingClient.initialize();
 		AlphaLoadSessionController.initialize();
 		DimensionViewDistanceController.initialize();
+		PursuitPresentationClient.initialize();
 		EntityModelLayerRegistry.registerModelLayer(ReworkBodyRenderer.STAGE_1_LAYER,
 				ReworkBodyModel::createStage1Layer);
 		EntityModelLayerRegistry.registerModelLayer(ReworkBodyRenderer.STAGE_2_LAYER,

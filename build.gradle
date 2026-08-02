@@ -114,20 +114,46 @@ tasks.withType(Jar).configureEach {
 
 def unitTest = tasks.register("unitTest", JavaExec) {
 	group = "verification"
-	description = "Runs pure unit tests with the JUnit Console Launcher and writes XML reports."
+	description = "Runs unit tests with the JUnit Console Launcher and writes XML reports."
 	dependsOn tasks.named("testClasses")
 	javaLauncher = javaToolchains.launcherFor {
 		languageVersion = JavaLanguageVersion.of(21)
 	}
-	classpath = files(sourceSets.main.output, sourceSets.gametest.output, sourceSets.test.output,
-			configurations.unitTestRuntime)
+	// The classpath must be able to load every class a test method's *signature* references
+	// (not just what its body executes), or JUnit's discovery silently drops the whole class
+	// with a DEBUG-level NoClassDefFoundError and no test/error is ever recorded for it. Several
+	// test classes reference Minecraft types (CompoundTag, StreamCodec, ItemLike, ...) in helper
+	// method signatures, so the plain JUnit-only classpath previously used here made those
+	// classes vanish without a trace. sourceSets.test.runtimeClasspath is the classpath Loom
+	// already wires up with the remapped Minecraft/Fabric jars for the (disabled) "test" task,
+	// so reusing it here gives unitTest the same visibility.
+	classpath = sourceSets.test.runtimeClasspath + configurations.unitTestRuntime
 	mainClass = "org.junit.platform.console.ConsoleLauncher"
-	args "execute",
-			"--scan-class-path",
-			"--fail-if-no-tests",
-			"--disable-ansi-colors",
-			"--details=summary",
-			"--reports-dir=${layout.buildDirectory.dir('test-results/unit').get().asFile.absolutePath}"
+	doFirst {
+		// --scan-class-path silently drops any class JUnit fails to load during discovery
+		// instead of reporting it as an error, and it also picks up unrelated *Tests-suffixed
+		// classes from the gametest source set that happen to be on this classpath. Enumerating
+		// every compiled test class explicitly via --select-class makes both failure modes into
+		// hard, visible errors instead of silent gaps in the report.
+		List<String> selectors = []
+		sourceSets.test.output.classesDirs.filter { it.exists() }.each { dir ->
+			fileTree(dir) { include "**/*.class" }.each { classFile ->
+				String relative = dir.toPath().relativize(classFile.toPath()).toString()
+				if (relative.contains('$')) return // nested/anonymous/local classes
+				String fqcn = relative.replace(File.separator, ".") - ".class"
+				selectors << fqcn
+			}
+		}
+		if (selectors.isEmpty()) {
+			throw new GradleException("No compiled test classes found under ${sourceSets.test.output.classesDirs.files}")
+		}
+		args = ["execute"] +
+				selectors.collectMany { ["--select-class", it] } +
+				["--fail-if-no-tests",
+				 "--disable-ansi-colors",
+				 "--details=summary",
+				 "--reports-dir=${layout.buildDirectory.dir('test-results/unit').get().asFile.absolutePath}"]
+	}
 }
 
 tasks.named("compileTestJava") {
@@ -165,7 +191,10 @@ tasks.named("runClientGameTest") {
 			new File(configDir, "thefourthfrequency-safety-notice.version").setText("3\n", "UTF-8")
 		}
 	}
-	jvmArgs "-Dthefourthfrequency.clientTestSuite=${clientTestSuite.get()}",
+	// Minecraft includes hardware details in its startup crash report. Bound OSHI's Windows WMI
+	// queries so a broken local provider cannot leave the client test runner hanging indefinitely.
+	jvmArgs "-Doshi.util.wmi.timeout=5000",
+			"-Dthefourthfrequency.clientTestSuite=${clientTestSuite.get()}",
 			"-Dthefourthfrequency.anomaly=${clientAnomaly.get()}",
 			"-Dthefourthfrequency.projectDir=${project.projectDir.absolutePath}"
 	if (["rework-forms", "watcher-model", "world-interface"].contains(clientTestSuite.get().trim().toLowerCase(Locale.ROOT))) {

@@ -1,9 +1,7 @@
 package com.xm.thefourthfrequency.test;
 
-import com.xm.thefourthfrequency.correction.CorrectionOrganService;
-import com.xm.thefourthfrequency.correction.CorrectionState;
+import com.xm.thefourthfrequency.content.ModEntities;
 import com.xm.thefourthfrequency.entity.ReworkEntity;
-import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
@@ -13,6 +11,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -25,6 +24,7 @@ import java.util.UUID;
 public final class ReworkBodyClientGameTest implements FabricClientGameTest {
 	private static final double CAMERA_DISTANCE = 5.0D;
 	private static final double DARK_CAMERA_DISTANCE = 3.25D;
+	private static final UUID VISUAL_OWNER = new UUID(0L, 0L);
 
 	@Override
 	public void runTest(ClientGameTestContext context) {
@@ -71,18 +71,17 @@ public final class ReworkBodyClientGameTest implements FabricClientGameTest {
 				level.setBlockAndUpdate(center.offset(x, y, z), Blocks.AIR.defaultBlockState());
 			}
 		}
-		FrequencyWorldData data = FrequencyWorldData.get(server);
-		CorrectionState.update(data, state -> {
-			state.putInt("dismantle_count", 0);
-			state.remove("rework_entity_uuid");
-			state.remove("rework_entity_pos");
-		});
-		ReworkEntity body = CorrectionOrganService.spawnReworkBody(level, center);
+		ReworkEntity body = ModEntities.REWORK_BODY.create(level, EntitySpawnReason.EVENT);
+		if (body == null) throw new AssertionError("Registered rework body factory returned null");
+		body.configurePursuit(VISUAL_OWNER, "visual-fixture", 1);
 		body.setInvulnerable(true);
 		body.setNoAi(true);
 		body.snapTo(center.getX() + 0.5, center.getY(), center.getZ() + 0.5, 0.0F, 0.0F);
 		body.setYBodyRot(0.0F);
 		body.setYHeadRot(0.0F);
+		if (!level.addFreshEntity(body)) {
+			throw new AssertionError("Could not add the visual Rework Body fixture");
+		}
 		return new StudioFixture(center, body.getUUID());
 	}
 
@@ -92,9 +91,7 @@ public final class ReworkBodyClientGameTest implements FabricClientGameTest {
 		if (!(entity instanceof ReworkEntity body)) {
 			throw new AssertionError("Rework Body disappeared from the visual fixture");
 		}
-		FrequencyWorldData data = FrequencyWorldData.get(server);
-		CorrectionState.update(data, state -> state.putInt("dismantle_count", stage - 1));
-		body.initializeFormStageFromWorld(data);
+		body.configurePursuit(VISUAL_OWNER, "visual-fixture", stage);
 		body.setNoAi(true);
 		body.snapTo(fixture.center().getX() + 0.5, fixture.center().getY(),
 				fixture.center().getZ() + 0.5, 0.0F, 0.0F);

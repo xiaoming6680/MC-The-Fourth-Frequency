@@ -3,31 +3,38 @@ package com.xm.thefourthfrequency.pursuit;
 import com.xm.thefourthfrequency.content.ModEntities;
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.entity.ReworkEntity;
+import com.xm.thefourthfrequency.networking.PursuitPresentationPayload;
 import com.xm.thefourthfrequency.terminal.AnomalyIntensity;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.BlockPos;
-import net.minecraft.network.chat.Component;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.level.ServerBossEvent;
-import net.minecraft.world.BossEvent;
+import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.phys.Vec3;
 
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /** Server-side five-form chase mechanics and authoritative resolution. */
 public final class PursuitFormController {
+	private static final long RESOLUTION_TICKS = 60L;
+	private static final double HEART_HEALTH_POINTS = 2.0D;
+	private static final double MIN_PLAYER_MAX_HEALTH = 2.0D;
+	private static final double MAX_PLAYER_MAX_HEALTH = 40.0D;
 	private static final Map<UUID, Runtime> ACTIVE = new HashMap<>();
+	private static final Set<DefeatKey> DEFEATED = new HashSet<>();
 	private static boolean initialized;
 
 	private PursuitFormController() {
@@ -37,52 +44,98 @@ public final class PursuitFormController {
 		if (initialized) return;
 		initialized = true;
 		ServerTickEvents.END_SERVER_TICK.register(PursuitFormController::tick);
-		ServerLifecycleEvents.SERVER_STOPPED.register(server -> ACTIVE.clear());
+		// ReworkEntity.setPersistenceRequired() means any pursuit mob still alive when the world
+		// saves gets written into the mirror dimension's region file and never removes itself on
+		// its own (losing its owner only makes it stop, see ReworkEntity.customServerAiStep). Left
+		// unhandled, every session still in flight at shutdown becomes a permanent ghost entity
+		// that accumulates across restarts. SERVER_STOPPING fires before the world save that
+		// happens during shutdown, so discarding here actually keeps them out of the save file.
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+			for (Runtime runtime : ACTIVE.values()) discardMirrorEntity(server, runtime);
+		});
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+			ACTIVE.clear();
+			DEFEATED.clear();
+		});
 	}
 
-	public static boolean begin(ServerPlayer player, String sessionId, int form) {
+	/** Best-effort removal of a session's mirror-dimension mob; the lease may already be gone. */
+	private static void discardMirrorEntity(MinecraftServer server, Runtime runtime) {
+		PursuitSlotManager.lease(runtime.playerId).ifPresent(lease -> {
+			ServerLevel level = server.getLevel(lease.dimension());
+			if (level == null) return;
+			Entity entity = level.getEntity(runtime.entityId);
+			if (entity != null) entity.discard();
+		});
+	}
+
+	public static boolean begin(ServerPlayer player, String sessionId, int form, boolean debugSession) {
 		if (!(player.level() instanceof ServerLevel level) || !PursuitDimensions.isMirror(level)
 				|| ACTIVE.containsKey(player.getUUID())) return false;
 		ReworkEntity entity = spawn(level, player, sessionId, form);
 		if (entity == null) return false;
 		long now = level.getGameTime();
 		int normalizedForm = Math.clamp(form, 1, 5);
-		ServerBossEvent waveform = new ServerBossEvent(
-				Component.translatable("message.thefourthfrequency.pursuit.waveform"),
-				BossEvent.BossBarColor.BLUE, BossEvent.BossBarOverlay.PROGRESS);
-		waveform.addPlayer(player);
 		ACTIVE.put(player.getUUID(), new Runtime(player.getUUID(), sessionId, Math.clamp(form, 1, 5),
-				entity.getUUID(), now, now + PursuitFormPolicy.forForm(normalizedForm).durationTicks(),
-				player.position(), waveform));
+				entity.getUUID(), now + PursuitFormPolicy.forForm(normalizedForm).durationTicks(),
+				player.position(), debugSession));
 		PursuitVisibilityService.isolate(player);
-		player.displayClientMessage(Component.translatable(
-				"message.thefourthfrequency.pursuit.begin." + form), true);
 		return true;
 	}
 
 	public static void interrupt(ServerPlayer player) {
 		Runtime runtime = ACTIVE.remove(player.getUUID());
 		if (runtime == null) return;
-		runtime.waveform.removeAllPlayers();
+		DEFEATED.remove(new DefeatKey(runtime.playerId, runtime.sessionId));
 		if (player.level() instanceof ServerLevel level) {
 			Entity entity = level.getEntity(runtime.entityId);
 			if (entity != null) entity.discard();
 		}
 	}
 
+	public static void recordPursuitDefeat(ReworkEntity entity, DamageSource source) {
+		if (!entity.pursuitMode() || entity.pursuitOwner() == null
+				|| !(source.getEntity() instanceof ServerPlayer player)
+				|| !player.getUUID().equals(entity.pursuitOwner())) return;
+		DEFEATED.add(new DefeatKey(entity.pursuitOwner(), entity.pursuitSessionId()));
+	}
+
 	private static void tick(MinecraftServer server) {
 		for (Runtime runtime : Map.copyOf(ACTIVE).values()) {
 			ServerPlayer player = server.getPlayerList().getPlayer(runtime.playerId);
 			if (player == null) {
+				// A normal disconnect is already handled by ServerPlayerEvents.LEAVE
+				// (PursuitSessionService.deferDisconnectedSession), which runs while the
+				// ServerPlayer is still reachable and calls interrupt()/cancel()/release() itself.
+				// This branch is the defensive fallback for a player vanishing from the player
+				// list some other way (e.g. a forced removal that skips LEAVE): it used to only
+				// drop the ACTIVE entry, leaving the mirror mob to wander (and get saved to disk),
+				// the streaming snapshot session running, and - worse - the slot lease held
+				// forever, permanently starving one of only MAX_ACTIVE_PURSUITS=2 server-wide
+				// slots. interrupt(player) can't be reused here: it needs a live ServerPlayer to
+				// read player.level() from. All three calls below are idempotent, so this is safe
+				// to run even when deferDisconnectedSession already did the same cleanup.
 				ACTIVE.remove(runtime.playerId);
+				DEFEATED.remove(new DefeatKey(runtime.playerId, runtime.sessionId));
+				discardMirrorEntity(server, runtime);
+				PursuitSnapshotBuilder.cancel(runtime.playerId);
+				PursuitSlotManager.release(runtime.playerId);
 				continue;
 			}
 			if (!(player.level() instanceof ServerLevel level) || !PursuitDimensions.isMirror(level)) {
 				interrupt(player);
 				continue;
 			}
+			if (runtime.resolution != Resolution.NONE) {
+				tickResolution(player, runtime, level.getGameTime());
+				continue;
+			}
 			if (!PursuitSnapshotBuilder.active(player.getUUID())) {
 				capture(player, runtime, "snapshot_stream_lost");
+				continue;
+			}
+			if (DEFEATED.remove(new DefeatKey(runtime.playerId, runtime.sessionId))) {
+				succeed(player, runtime, SuccessKind.COUNTERATTACK);
 				continue;
 			}
 			Entity raw = level.getEntity(runtime.entityId);
@@ -103,21 +156,20 @@ public final class PursuitFormController {
 			}
 			tickForm(level, player, rework, runtime);
 			if (server.getTickCount() % 40 == 0) removeAmbientHostiles(level, player, rework);
+			runtime.escapeCounters = PursuitEscapePolicy.advance(runtime.escapeCounters,
+					Math.sqrt(rework.distanceToSqr(player)), rework.hasLineOfSight(player));
+			if (PursuitEscapePolicy.escaped(runtime.escapeCounters)) {
+				succeed(player, runtime, SuccessKind.ESCAPE);
+				continue;
+			}
 			if (player.getHealth() <= 2.0F
 					|| runtime.captureGrace <= 0 && rework.distanceToSqr(player) <= 2.25D) {
 				capture(player, runtime, "caught");
 				continue;
 			}
 			long now = level.getGameTime();
-			runtime.waveform.setProgress(Math.clamp(
-					(float) (runtime.deadline - now) / Math.max(1.0F, runtime.deadline - runtime.startTick),
-					0.0F, 1.0F));
 			if (now >= runtime.deadline) {
-				succeed(player, runtime);
-			} else if (server.getTickCount() % 200 == 0) {
-				player.displayClientMessage(Component.translatable(
-						"message.thefourthfrequency.pursuit.remaining",
-						Math.max(1L, (runtime.deadline - now) / 20L)), true);
+				succeed(player, runtime, SuccessKind.SURVIVED);
 			}
 		}
 	}
@@ -138,11 +190,6 @@ public final class PursuitFormController {
 		runtime.deadline++;
 		runtime.captureGrace = Math.max(runtime.captureGrace, 10);
 		runtime.lastPlayerPosition = player.position();
-		if (level.getGameTime() >= runtime.nextStreamNoticeTick) {
-			player.displayClientMessage(Component.translatable(
-					"message.thefourthfrequency.pursuit.stream_wait"), true);
-			runtime.nextStreamNoticeTick = level.getGameTime() + 40L;
-		}
 		return false;
 	}
 
@@ -153,28 +200,20 @@ public final class PursuitFormController {
 			case 1 -> {
 				boolean noisy = !player.isCrouching() && movement.horizontalDistanceSqr() > 0.0025D;
 				rework.setPursuitTracking(noisy || rework.distanceToSqr(player) < 25.0D);
-				if (level.getGameTime() % 100L == 0L) player.displayClientMessage(
-						Component.translatable("message.thefourthfrequency.pursuit.hint.1"), true);
 			}
 			case 2 -> {
 				rework.setPursuitTracking(true);
-				if (level.getGameTime() % 140L == 0L) player.displayClientMessage(
-						Component.translatable("message.thefourthfrequency.pursuit.hint.2"), true);
 			}
 			case 3 -> {
 				rework.setPursuitTracking(true);
 				if (level.getGameTime() % 100L == 0L && movement.horizontalDistanceSqr() > 0.01D) {
 					Vec3 direction = movement.multiply(1.0D, 0.0D, 1.0D).normalize();
 					reposition(level, rework, player.position().add(direction.scale(10.0D)), runtime);
-					player.displayClientMessage(
-							Component.translatable("message.thefourthfrequency.pursuit.hint.3"), true);
 				}
 			}
 			case 4 -> {
 				rework.setPursuitTracking(true);
 				long cycle = level.getGameTime() % 140L;
-				if (cycle == 110L) player.displayClientMessage(
-						Component.translatable("message.thefourthfrequency.pursuit.lunge"), true);
 				if (cycle == 130L) {
 					Vec3 behind = player.getLookAngle().multiply(-4.0D, 0.0D, -4.0D)
 							.add(player.position()).add(0.0D, 2.5D, 0.0D);
@@ -183,12 +222,6 @@ public final class PursuitFormController {
 			}
 			case 5 -> {
 				rework.setPursuitTracking(true);
-				if (level.getGameTime() % 100L == 0L) {
-					int falseX = player.blockPosition().getX() + player.getRandom().nextIntBetweenInclusive(-96, 96);
-					int falseZ = player.blockPosition().getZ() + player.getRandom().nextIntBetweenInclusive(-96, 96);
-					player.displayClientMessage(Component.translatable(
-							"message.thefourthfrequency.pursuit.false_coordinate", falseX, falseZ), true);
-				}
 			}
 			default -> rework.setPursuitTracking(true);
 		}
@@ -209,7 +242,7 @@ public final class PursuitFormController {
 	}
 
 	private static ReworkEntity spawn(ServerLevel level, ServerPlayer player, String sessionId, int form) {
-		BlockPos spawn = findSpawn(level, player.blockPosition());
+		BlockPos spawn = findSpawn(level, player);
 		if (spawn == null) return null;
 		ReworkEntity body = ModEntities.REWORK_BODY.create(level, EntitySpawnReason.EVENT);
 		if (body == null) return null;
@@ -221,10 +254,12 @@ public final class PursuitFormController {
 		return level.addFreshEntity(body) ? body : null;
 	}
 
-	private static BlockPos findSpawn(ServerLevel level, BlockPos target) {
-		int[][] offsets = {{18, 0}, {-18, 0}, {0, 18}, {0, -18}, {12, 12}, {-12, -12}};
-		for (int[] offset : offsets) {
-			BlockPos origin = target.offset(offset[0], 0, offset[1]);
+	private static BlockPos findSpawn(ServerLevel level, ServerPlayer player) {
+		BlockPos target = player.blockPosition();
+		Vec3 look = player.getLookAngle();
+		for (PursuitSpawnPolicy.Offset offset : PursuitSpawnPolicy.hiddenOffsets(look.x, look.z)) {
+			if (!PursuitSpawnPolicy.outsideForwardHemisphere(look.x, look.z, offset.x(), offset.z())) continue;
+			BlockPos origin = target.offset(offset.x(), 0, offset.z());
 			for (int dy = 5; dy >= -5; dy--) {
 				BlockPos candidate = origin.offset(0, dy, 0);
 				if (level.getBlockState(candidate).getCollisionShape(level, candidate).isEmpty()
@@ -245,48 +280,72 @@ public final class PursuitFormController {
 	}
 
 	private static void capture(ServerPlayer player, Runtime runtime, String reason) {
-		ACTIVE.remove(player.getUUID());
-		runtime.waveform.removeAllPlayers();
+		if (!"caught".equals(reason)) {
+			PursuitSessionService.returnToSource(player, reason);
+			return;
+		}
+		DEFEATED.remove(new DefeatKey(runtime.playerId, runtime.sessionId));
 		if (player.level() instanceof ServerLevel level) {
 			Entity entity = level.getEntity(runtime.entityId);
 			if (entity != null) entity.discard();
+			runtime.resolutionEndsAt = level.getGameTime() + RESOLUTION_TICKS;
 		}
 		if (player.getHealth() < 6.0F) player.setHealth(6.0F);
-		player.displayClientMessage(Component.translatable(
-				"message.thefourthfrequency.pursuit.caught." + runtime.form), true);
-		PursuitSessionService.returnToSource(player, reason);
+		runtime.resolution = Resolution.CAPTURED;
+		runtime.resolutionReason = reason;
+		PursuitSessionService.presentResolution(player, PursuitPresentationPayload.CAPTURE_FREEZE);
 	}
 
-	private static void succeed(ServerPlayer player, Runtime runtime) {
-		ACTIVE.remove(player.getUUID());
-		runtime.waveform.removeAllPlayers();
+	private static void succeed(ServerPlayer player, Runtime runtime, SuccessKind kind) {
+		DEFEATED.remove(new DefeatKey(runtime.playerId, runtime.sessionId));
 		if (player.level() instanceof ServerLevel level) {
 			Entity entity = level.getEntity(runtime.entityId);
 			if (entity != null) entity.discard();
+			runtime.resolutionEndsAt = level.getGameTime() + RESOLUTION_TICKS;
 		}
 		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
 		long now = player.level().getGameTime();
 		long cooldown = PursuitProgressPolicy.MIN_CHASE_GAP_TICKS
 				+ Math.floorMod(player.getRandom().nextLong(),
 						PursuitProgressPolicy.MAX_CHASE_GAP_TICKS - PursuitProgressPolicy.MIN_CHASE_GAP_TICKS + 1);
-		data.updateTerminalRecord(player.getUUID(), record -> {
-			int resolved = PursuitProgressPolicy.resolvedAfterSuccess(
-					record.getIntOr(TerminalData.PURSUIT_RESOLVED_CHASES, 0));
-			record.putInt(TerminalData.PURSUIT_RESOLVED_CHASES, resolved);
-			record.putBoolean(TerminalData.PURSUIT_PENDING,
-					PursuitProgressPolicy.pendingAfterSuccess(resolved,
-							record.getIntOr(TerminalData.PURSUIT_ALLOWED_FORM, 0)));
-			record.putLong(TerminalData.PURSUIT_NEXT_ELIGIBLE_TICK, now + cooldown);
-			record.putInt(TerminalData.PURSUIT_TUTORIAL_ARCHIVE_MASK, PursuitTutorialPolicy.mark(
-					record.getIntOr(TerminalData.PURSUIT_TUTORIAL_ARCHIVE_MASK, 0), runtime.form));
-			record.putLong(TerminalData.NEXT_AMBIENT_ANOMALY_TICK,
-					now + AnomalyIntensity.DIMENSION_GRACE_TICKS + 5L * 60L * 20L);
-		});
-		player.displayClientMessage(Component.translatable(
-				"message.thefourthfrequency.pursuit.success." + runtime.form), true);
-		PursuitSessionService.returnToSource(player, "success");
+		if (!runtime.debugSession) {
+			data.updateTerminalRecord(player.getUUID(), record -> {
+				int resolved = PursuitProgressPolicy.resolvedAfterSuccess(
+						record.getIntOr(TerminalData.PURSUIT_RESOLVED_CHASES, 0));
+				record.putInt(TerminalData.PURSUIT_RESOLVED_CHASES, resolved);
+				record.putBoolean(TerminalData.PURSUIT_PENDING,
+						PursuitProgressPolicy.pendingAfterSuccess(resolved,
+								record.getIntOr(TerminalData.PURSUIT_ALLOWED_FORM, 0)));
+				record.putLong(TerminalData.PURSUIT_NEXT_ELIGIBLE_TICK, now + cooldown);
+				record.putInt(TerminalData.PURSUIT_TUTORIAL_ARCHIVE_MASK, PursuitTutorialPolicy.mark(
+						record.getIntOr(TerminalData.PURSUIT_TUTORIAL_ARCHIVE_MASK, 0), runtime.form));
+				record.putLong(TerminalData.NEXT_AMBIENT_ANOMALY_TICK,
+						now + AnomalyIntensity.DIMENSION_GRACE_TICKS + 5L * 60L * 20L);
+			});
+		}
+		runtime.resolution = Resolution.ESCAPED;
+		runtime.resolutionReason = runtime.debugSession ? "debug_complete" : "success";
+		PursuitSessionService.presentResolution(player, PursuitPresentationPayload.ESCAPE_RESOLUTION);
+	}
+
+	private static void tickResolution(ServerPlayer player, Runtime runtime, long now) {
+		if (now < runtime.resolutionEndsAt) return;
+		double delta = runtime.resolution == Resolution.CAPTURED
+				? -HEART_HEALTH_POINTS : HEART_HEALTH_POINTS;
+		adjustMaximumHealth(player, delta);
+		String reason = runtime.resolutionReason;
+		PursuitSessionService.returnToSource(player, reason);
 		TerminalRuntimeService.synchronizeProjection(player);
 		TerminalRuntimeService.refresh(player);
+	}
+
+	private static void adjustMaximumHealth(ServerPlayer player, double delta) {
+		var maximumHealth = player.getAttribute(Attributes.MAX_HEALTH);
+		if (maximumHealth == null) return;
+		double adjusted = Math.clamp(maximumHealth.getBaseValue() + delta,
+				MIN_PLAYER_MAX_HEALTH, MAX_PLAYER_MAX_HEALTH);
+		maximumHealth.setBaseValue(adjusted);
+		if (player.getHealth() > adjusted) player.setHealth((float) adjusted);
 	}
 
 	private static final class Runtime {
@@ -294,25 +353,41 @@ public final class PursuitFormController {
 		private final String sessionId;
 		private final int form;
 		private UUID entityId;
-		private final long startTick;
 		private long deadline;
 		private Vec3 lastPlayerPosition;
 		private Vec3 lastSafePosition;
-		private final ServerBossEvent waveform;
+		private PursuitEscapePolicy.Counters escapeCounters = PursuitEscapePolicy.Counters.empty();
 		private int captureGrace = 40;
-		private long nextStreamNoticeTick;
+		private final boolean debugSession;
+		private Resolution resolution = Resolution.NONE;
+		private long resolutionEndsAt;
+		private String resolutionReason = "";
 
 		private Runtime(UUID playerId, String sessionId, int form, UUID entityId,
-				long startTick, long deadline, Vec3 lastPlayerPosition, ServerBossEvent waveform) {
+				long deadline, Vec3 lastPlayerPosition, boolean debugSession) {
 			this.playerId = playerId;
 			this.sessionId = sessionId;
 			this.form = form;
 			this.entityId = entityId;
-			this.startTick = startTick;
 			this.deadline = deadline;
 			this.lastPlayerPosition = lastPlayerPosition;
 			this.lastSafePosition = lastPlayerPosition;
-			this.waveform = waveform;
+			this.debugSession = debugSession;
 		}
+	}
+
+	private record DefeatKey(UUID playerId, String sessionId) {
+	}
+
+	private enum SuccessKind {
+		SURVIVED,
+		ESCAPE,
+		COUNTERATTACK
+	}
+
+	private enum Resolution {
+		NONE,
+		CAPTURED,
+		ESCAPED
 	}
 }

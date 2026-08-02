@@ -3,6 +3,7 @@ package com.xm.thefourthfrequency.test;
 import com.xm.thefourthfrequency.content.ModItems;
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.networking.TerminalControlPayload;
+import com.xm.thefourthfrequency.networking.TerminalNavigationPayload;
 import com.xm.thefourthfrequency.state.NavigationState;
 import com.xm.thefourthfrequency.terminal.TerminalControlPolicy;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
@@ -147,9 +148,6 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 			record.putInt(TerminalData.SELECTED_RESOURCE, TerminalResource.IRON.wireId());
 			record.putLong(TerminalData.MINERAL_SCAN_READY_GAME_TIME, player.level().getGameTime());
 			record.putString(TerminalData.TARGET_KIND, "iron");
-			// Keep this navigation/binding contract independent from the separately tested signature scene,
-			// whose intentional correction window temporarily disables every convenience tool.
-			record.putInt(TerminalData.SIGNATURE_SCENE_MASK, 0b111);
 		});
 		ResourceGuidanceService.requestRescan(player);
 		ResourceGuidanceService.updatePlayer(player);
@@ -181,6 +179,13 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		helper.assertTrue(navigation.located() && navigation.navigable(),
 				"Located same-dimension resource must activate navigation");
 		helper.assertValueEqual(navigation.targetY(), orePosition.getY(), "Navigation target Y");
+		helper.assertTrue(player.teleportTo(helper.getLevel(), orePosition.getX() + 0.5,
+				orePosition.getY() + 2.0, orePosition.getZ() + 0.5, Set.of(), 0.0F, 0.0F, true),
+				"Two-block mineral arrival boundary fixture");
+		ResourceGuidanceService.updatePlayer(player);
+		helper.assertValueEqual(data.terminalRecord(player.getUUID()).orElseThrow()
+						.getIntOr(TerminalData.ACTIVE_GUIDANCE_TOOL, -1),
+				TerminalTool.MINERALS.slot(), "Two blocks away must keep mineral navigation active");
 
 		var netherBeforeBinding = helper.getLevel().getServer().getLevel(Level.NETHER);
 		helper.assertTrue(netherBeforeBinding != null, "Nether level for navigation gating");
@@ -189,7 +194,7 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		var crossDimensionNavigation = TerminalRuntimeService.navigationSnapshot(player);
 		helper.assertTrue(crossDimensionNavigation.located(), "Cross-dimension target remains located");
 		helper.assertFalse(crossDimensionNavigation.navigable(), "Cross-dimension target needle must be disabled");
-		helper.assertTrue(player.teleportTo(helper.getLevel(), orePosition.getX() + 0.5, orePosition.getY() + 2.0,
+		helper.assertTrue(player.teleportTo(helper.getLevel(), orePosition.getX() + 0.5, orePosition.getY() + 1.0,
 				orePosition.getZ() + 0.5, Set.of(), 0.0F, 0.0F, true), "Return to resource dimension");
 
 		player.getInventory().add(new ItemStack(Items.RAW_IRON));
@@ -201,6 +206,15 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 				"Following optional advice leaves narrative reveal state unchanged");
 		helper.assertTrue(accepted.getStringOr(TerminalData.ACCEPTED_ADVICE, "").contains("iron"),
 				"Accurate advice still becomes part of the terminal's long-term player model");
+		helper.assertValueEqual(accepted.getIntOr(TerminalData.ACTIVE_GUIDANCE_TOOL, -1),
+				TerminalToolService.NO_TOOL, "Reaching the mineral within one block must stop navigation");
+		helper.assertValueEqual(accepted.getIntOr(TerminalData.SELECTED_RESOURCE, -1),
+				TerminalResource.NONE.wireId(), "Mineral arrival must clear the current resource target");
+		helper.assertFalse(NavigationState.read(accepted).located(),
+				"Mineral arrival must clear the concrete target position");
+		helper.assertTrue(accepted.getBooleanOr(TerminalData.MINERAL_SURVEY_PROXIMITY, false)
+						&& !accepted.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false),
+				"The reached ore must stay silently suppressed until the player leaves its survey episode");
 
 		SurvivalProgressService.updatePlayer(player, data);
 		StoryProgressService.update(player, data);
@@ -214,9 +228,10 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		helper.assertTrue(TerminalData.isBound(findTerminal(player)),
 				"Authoritative binding must be synchronized to the carried item");
 		var completedNavigation = TerminalRuntimeService.navigationSnapshot(player);
-		helper.assertTrue(completedNavigation.navigable(),
-				"Binding must no longer disable an explicitly selected convenience target");
-		helper.assertValueEqual(completedNavigation.targetKind(), 1, "Selected iron target remains active");
+		helper.assertFalse(completedNavigation.navigable(),
+				"Binding must not restore a mineral navigation that already completed");
+		helper.assertValueEqual(completedNavigation.targetKind(), TerminalNavigationPayload.NONE,
+				"Completed mineral navigation must no longer expose a compass target");
 		helper.assertTrue(player.drop(findTerminal(player).copy(), false) == null,
 				"Bound terminal drop must be rejected before an ItemEntity is created");
 		ChestMenu chest = ChestMenu.oneRow(91, player.getInventory());
@@ -276,10 +291,94 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 				- miner.level().getGameTime(), 60L, "Refresh must create an exact three-second probe window");
 		helper.assertFalse(refreshed.getBooleanOr(TerminalData.TARGET_LOCATED, false),
 				"The previous concrete ore target must be hidden during the probe window");
+		data.updateTerminalRecord(miner.getUUID(), record -> record.putLong(
+				TerminalData.MINERAL_SCAN_READY_GAME_TIME, Math.max(1L, miner.level().getGameTime())));
+		helper.assertValueEqual(TerminalToolService.snapshot(miner, TerminalTool.MINERALS.slot())
+						.mineralScanTicks(), 1,
+				"The UI must remain in its scanning state at the reveal boundary until the scan result commits");
 		helper.assertFalse(TerminalToolService.requestRescan(miner),
-				"The server rejects another refresh during the three-second cooldown");
+				"The server rejects another refresh until the pending scan result commits");
 		helper.assertFalse(TerminalToolService.startGuidance(miner, TerminalTool.MINERALS.slot()),
 				"Mineral guidance must stay unavailable until a concrete ore block is located");
+		helper.succeed();
+	}
+
+	@GameTest
+	public void automaticMineralSurveyWaitsForAClosedTerminalAndClearsAfterLeaving(GameTestHelper helper) {
+		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
+		ServerPlayer player = helper.makeMockServerPlayerInLevel();
+		BlockPos ore = player.blockPosition().below(2);
+		BlockPos fartherOre = player.blockPosition().offset(-8, 0, 0);
+		helper.getLevel().setBlockAndUpdate(ore, Blocks.IRON_ORE.defaultBlockState());
+		helper.getLevel().setBlockAndUpdate(fartherOre, Blocks.DIAMOND_ORE.defaultBlockState());
+		data.updateTerminalRecord(player.getUUID(), record -> record.putInt(
+				TerminalData.SURVIVAL_MILESTONE_MASK, SurvivalMilestone.MINED_LOGS.mask()));
+		player.setItemInHand(InteractionHand.MAIN_HAND, findTerminal(player));
+
+		TerminalRuntimeService.open(player, 0);
+		helper.assertTrue(TerminalRuntimeService.isOpen(player), "Fixture terminal must be open");
+		ResourceGuidanceService.updatePlayerForTesting(player, 0);
+		var whileOpen = data.terminalRecord(player.getUUID()).orElseThrow();
+		helper.assertFalse(whileOpen.getBooleanOr(TerminalData.MINERAL_SURVEY_PROXIMITY, false),
+				"An open terminal must pause automatic mineral scanning");
+		helper.assertFalse(whileOpen.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false),
+				"An open terminal must never roll or publish a nearby mineral prompt");
+
+		TerminalRuntimeService.control(player, TerminalControlPayload.CLOSE, 0);
+		ResourceGuidanceService.updatePlayerForTesting(player, 30);
+		var missed = data.terminalRecord(player.getUUID()).orElseThrow();
+		helper.assertTrue(missed.getBooleanOr(TerminalData.MINERAL_SURVEY_PROXIMITY, false),
+				"A real ore inside five blocks must create one proximity episode");
+		helper.assertFalse(missed.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false),
+				"A failed thirty-percent roll must stay silent");
+		ResourceGuidanceService.updatePlayerForTesting(player, 0);
+		helper.assertFalse(data.terminalRecord(player.getUUID()).orElseThrow()
+						.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false),
+				"Standing beside the same ore must not repeatedly reroll until success");
+
+		helper.assertTrue(player.teleportTo(helper.getLevel(), ore.getX() + 6.5, ore.getY() + 2.0,
+				ore.getZ() + 0.5, Set.of(), 0.0F, 0.0F, true), "Leave the failed proximity episode");
+		ResourceGuidanceService.updatePlayerForTesting(player, 0);
+		helper.assertFalse(data.terminalRecord(player.getUUID()).orElseThrow()
+						.getBooleanOr(TerminalData.MINERAL_SURVEY_PROXIMITY, false),
+				"Leaving the survey range must allow a future independent episode");
+		helper.assertTrue(player.teleportTo(helper.getLevel(), ore.getX() + 0.5, ore.getY() + 2.0,
+				ore.getZ() + 0.5, Set.of(), 0.0F, 0.0F, true), "Return for a new proximity episode");
+		ResourceGuidanceService.updatePlayerForTesting(player, 0);
+		var surveyed = data.terminalRecord(player.getUUID()).orElseThrow();
+		helper.assertTrue(surveyed.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false),
+				"A deterministic successful thirty-percent roll must publish the prompt");
+		var snapshot = TerminalToolService.snapshot(player, TerminalToolService.NO_TOOL);
+		helper.assertValueEqual(snapshot.protocolVersion(), 5, "Nearby mineral tool snapshot protocol");
+		helper.assertTrue(snapshot.mineralSurveyNearby(), "Tool snapshot must expose the nearby mineral state");
+		helper.assertValueEqual(snapshot.recommendedPrimaryTool(), TerminalTool.MINERALS.slot(),
+				"The nearby mineral state must promote the mineral shortcut");
+		TerminalRuntimeService.open(player, 0);
+		TerminalRuntimeService.control(player, TerminalControlPayload.SELECT_TOOL, TerminalTool.MINERALS.slot());
+		var preview = TerminalRuntimeService.navigationSnapshot(player);
+		helper.assertValueEqual(preview.targetKind(), TerminalNavigationPayload.IRON,
+				"Automatic surveying must describe the nearest mineral, not a farther ore");
+		helper.assertTrue(preview.located() && preview.navigable(),
+				"The mineral detail preview must expose a concrete navigable target");
+		helper.assertTrue(TerminalToolService.startGuidance(player, TerminalTool.MINERALS.slot()),
+				"The detail-page navigation button must accept an automatic survey target");
+		var promoted = NavigationState.read(data.terminalRecord(player.getUUID()).orElseThrow());
+		helper.assertValueEqual(promoted.kind(), TerminalResource.IRON.id(),
+				"Starting navigation must preserve the automatically surveyed mineral kind");
+		helper.assertValueEqual(promoted.position(), ore.asLong(),
+				"Starting navigation must promote the nearest concrete ore block");
+		TerminalRuntimeService.control(player, TerminalControlPayload.CLOSE, 0);
+
+		helper.assertTrue(player.teleportTo(helper.getLevel(), ore.getX() + 6.5, ore.getY() + 2.0,
+				ore.getZ() + 0.5, Set.of(), 0.0F, 0.0F, true), "Move outside the five-block survey range");
+		ResourceGuidanceService.updatePlayerForTesting(player, 0);
+		var cleared = data.terminalRecord(player.getUUID()).orElseThrow();
+		helper.assertFalse(cleared.getBooleanOr(TerminalData.MINERAL_SURVEY_PROXIMITY, false),
+				"Leaving the survey range must reset the proximity episode");
+		helper.assertFalse(cleared.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false),
+				"Leaving the survey range must clear the visible prompt");
+		helper.assertFalse(TerminalToolService.snapshot(player, TerminalToolService.NO_TOOL).mineralSurveyNearby(),
+				"The cleared prompt must disappear from tools and shortcuts");
 		helper.succeed();
 	}
 
@@ -352,12 +451,14 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 			record.putString(TerminalData.HOME_DIMENSION, dimension);
 			record.putLong(TerminalData.LAST_PORTAL_POSITION, portal.asLong());
 			record.putString(TerminalData.LAST_PORTAL_DIMENSION, dimension);
+			record.putInt(TerminalData.CRAFTED_EYE_COUNT,
+					SurvivalProgressService.REQUIRED_STRONGHOLD_UNLOCK_EYES);
 			record.putInt(TerminalData.EYE_SAMPLE_COUNT, SurvivalProgressService.REQUIRED_EYE_SAMPLES);
 			record.putLong(TerminalData.STRONGHOLD_POSITION, stronghold.asLong());
 			record.putString(TerminalData.STRONGHOLD_DIMENSION, dimension);
 		});
 		var snapshot = TerminalToolService.snapshot(player, TerminalTool.HOME.slot());
-		helper.assertValueEqual(snapshot.protocolVersion(), 4, "Independent tool snapshot protocol");
+		helper.assertValueEqual(snapshot.protocolVersion(), 5, "Independent tool snapshot protocol");
 		helper.assertFalse(snapshot.homeKnown(),
 				"Legacy manual home coordinates must not replace the player's real respawn point");
 		helper.assertTrue(snapshot.portalKnown() && snapshot.portalSameDimension(), "Portal arrival must be real and local");

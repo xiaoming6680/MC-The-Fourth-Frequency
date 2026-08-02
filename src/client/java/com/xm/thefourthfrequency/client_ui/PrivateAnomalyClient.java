@@ -8,8 +8,6 @@ import net.minecraft.client.Minecraft;
 public final class PrivateAnomalyClient {
 	private static String anomalyId = "none";
 	private static int variant;
-	private static int bodyProgress;
-	private static int capabilityMask;
 	private static int remainingTicks;
 
 	private PrivateAnomalyClient() {
@@ -19,8 +17,6 @@ public final class PrivateAnomalyClient {
 		ClientPlayNetworking.registerGlobalReceiver(PrivateAnomalyPayload.TYPE, (payload, context) -> {
 			anomalyId = payload.anomalyId();
 			variant = Math.floorMod(payload.variant(), 4);
-			bodyProgress = Math.clamp(payload.bodyProgress(), 0, 1000);
-			capabilityMask = payload.capabilityMask() & 31;
 			remainingTicks = 100;
 		});
 		ClientTickEvents.END_CLIENT_TICK.register(PrivateAnomalyClient::tick);

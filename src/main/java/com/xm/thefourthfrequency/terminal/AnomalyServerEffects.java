@@ -17,6 +17,7 @@ import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.DoorBlock;
+import net.minecraft.world.level.block.LightBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
@@ -35,6 +36,7 @@ import java.util.Set;
 /** Bounded server-side implementations for reality-changing anomalies. */
 public final class AnomalyServerEffects {
 	private static final Map<ServerPlayer, AlignmentTask> ALIGNMENTS = new HashMap<>();
+	private static final Map<ServerPlayer, LightDropoutTask> LIGHT_DROPOUTS = new HashMap<>();
 	private static final Map<ServerPlayer, DoorCascadeTask> DOORS = new HashMap<>();
 	private static final Map<ServerPlayer, MovementTask> MOVEMENTS = new HashMap<>();
 	private static boolean initialized;
@@ -52,6 +54,7 @@ public final class AnomalyServerEffects {
 		return switch (definition.id()) {
 			case "watcher_alignment" -> alignment(player, durationTicks);
 			case "dark_watcher" -> watcher(player, durationTicks);
+			case "light_dropout" -> lightDropout(player);
 			case "door_cascade" -> doors(player, seed);
 			case "experience_gap" -> movement(player, durationTicks);
 			default -> new EffectLease(() -> { });
@@ -67,6 +70,16 @@ public final class AnomalyServerEffects {
 	private static EffectLease watcher(ServerPlayer player, int durationTicks) {
 		WatcherEntity watcher = WatcherService.spawnAnomaly(player, durationTicks);
 		return watcher == null ? null : new EffectLease(() -> { if (watcher.isAlive()) watcher.discard(); });
+	}
+
+	private static EffectLease lightDropout(ServerPlayer player) {
+		LightDropoutTask task = LightDropoutTask.create(player);
+		if (task == null) return null;
+		LIGHT_DROPOUTS.put(player, task);
+		return new EffectLease(() -> {
+			LightDropoutTask removed = LIGHT_DROPOUTS.remove(player);
+			if (removed != null) removed.restore();
+		});
 	}
 
 	private static EffectLease doors(ServerPlayer player, long seed) {
@@ -109,6 +122,91 @@ public final class AnomalyServerEffects {
 				mob.setYHeadRot(yaw);
 			}
 		}
+	}
+
+	private static final class LightDropoutTask {
+		private static final int HORIZONTAL_RADIUS = 16;
+		private static final int VERTICAL_RADIUS = 8;
+		private final ServerLevel level;
+		private final Map<BlockPos, LightSnapshot> changed;
+
+		private LightDropoutTask(ServerLevel level, Map<BlockPos, LightSnapshot> changed) {
+			this.level = level;
+			this.changed = changed;
+		}
+
+		private static LightDropoutTask create(ServerPlayer player) {
+			if (!(player.level() instanceof ServerLevel level)) return null;
+			Map<BlockPos, LightSnapshot> changed = new HashMap<>();
+			forEachNearbyLight(level, player.blockPosition(), (pos, original, extinguished) -> {
+				if (level.setBlock(pos, extinguished, Block.UPDATE_CLIENTS)) {
+					changed.put(pos.immutable(), new LightSnapshot(original, extinguished));
+				}
+			});
+			return changed.isEmpty() ? null : new LightDropoutTask(level, Map.copyOf(changed));
+		}
+
+		private void restore() {
+			for (Map.Entry<BlockPos, LightSnapshot> entry : changed.entrySet()) {
+				BlockPos pos = entry.getKey();
+				LightSnapshot snapshot = entry.getValue();
+				if (level.hasChunkAt(pos) && level.getBlockState(pos).equals(snapshot.extinguished())) {
+					level.setBlock(pos, snapshot.original(), Block.UPDATE_CLIENTS);
+				}
+			}
+		}
+	}
+
+	private record LightSnapshot(BlockState original, BlockState extinguished) {
+	}
+
+	@FunctionalInterface
+	private interface LightConsumer {
+		void accept(BlockPos pos, BlockState original, BlockState extinguished);
+	}
+
+	static boolean hasExtinguishableLight(ServerLevel level, BlockPos origin) {
+		boolean[] found = {false};
+		forEachNearbyLight(level, origin, (pos, original, extinguished) -> found[0] = true, found);
+		return found[0];
+	}
+
+	private static void forEachNearbyLight(ServerLevel level, BlockPos origin, LightConsumer consumer) {
+		forEachNearbyLight(level, origin, consumer, null);
+	}
+
+	private static void forEachNearbyLight(ServerLevel level, BlockPos origin, LightConsumer consumer,
+			boolean[] stop) {
+		FrequencyWorldData data = FrequencyWorldData.get(level.getServer());
+		for (BlockPos cursor : BlockPos.betweenClosed(
+				origin.offset(-LightDropoutTask.HORIZONTAL_RADIUS, -LightDropoutTask.VERTICAL_RADIUS,
+						-LightDropoutTask.HORIZONTAL_RADIUS),
+				origin.offset(LightDropoutTask.HORIZONTAL_RADIUS, LightDropoutTask.VERTICAL_RADIUS,
+						LightDropoutTask.HORIZONTAL_RADIUS))) {
+			if (stop != null && stop[0]) return;
+			int dx = cursor.getX() - origin.getX();
+			int dz = cursor.getZ() - origin.getZ();
+			if (dx * dx + dz * dz > LightDropoutTask.HORIZONTAL_RADIUS * LightDropoutTask.HORIZONTAL_RADIUS
+					|| !level.hasChunkAt(cursor) || protectedPosition(level, data, cursor)) continue;
+			BlockState original = level.getBlockState(cursor);
+			if (original.getLightEmission() <= 0) continue;
+			BlockState extinguished = extinguishedState(level, cursor, original);
+			if (extinguished != null && !extinguished.equals(original)) {
+				consumer.accept(cursor.immutable(), original, extinguished);
+			}
+		}
+	}
+
+	private static BlockState extinguishedState(ServerLevel level, BlockPos pos, BlockState state) {
+		if (state.hasProperty(BlockStateProperties.LIT) && state.getValue(BlockStateProperties.LIT)) {
+			return state.setValue(BlockStateProperties.LIT, false);
+		}
+		if (state.is(Blocks.LIGHT) && state.hasProperty(LightBlock.LEVEL)) {
+			return state.setValue(LightBlock.LEVEL, 0);
+		}
+		// Never erase inventories, portal controllers, or fluids merely because they emit light.
+		if (level.getBlockEntity(pos) != null || !state.getFluidState().isEmpty()) return null;
+		return Blocks.AIR.defaultBlockState();
 	}
 
 	private static final class DoorCascadeTask {
@@ -266,16 +364,11 @@ public final class AnomalyServerEffects {
 		if (namespace.equals("thefourthfrequency")) return true;
 		BlockPos station = data.stationPosition().orElse(null);
 		if (station != null && within(pos, station, 6, 7, 5)) return true;
-		var narrative = data.narrativeState();
-		if (narrative.contains("rift_core")) {
-			BlockPos core = BlockPos.of(narrative.getLongOr("rift_core", 0L));
-			if (within(pos, core, 4, 12, 12)) return true;
-		}
 		return false;
 	}
 
 	static int activeLeaseCountForGameTest() {
-		return ALIGNMENTS.size() + DOORS.size() + MOVEMENTS.size();
+		return ALIGNMENTS.size() + LIGHT_DROPOUTS.size() + DOORS.size() + MOVEMENTS.size();
 	}
 
 	private static boolean within(BlockPos pos, BlockPos center, int x, int y, int z) {

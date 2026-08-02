@@ -14,7 +14,7 @@ import net.minecraft.world.item.Items;
 
 import java.util.List;
 
-/** Server-authoritative task order, completion checks, rewards, and claim transaction. */
+/** Server-authoritative task order, completion checks, and reward delivery. */
 public final class TerminalTaskService {
 	public static final int PAGE_COUNT = 4;
 	public static final int ALL_PAGES_MASK = (1 << PAGE_COUNT) - 1;
@@ -67,11 +67,29 @@ public final class TerminalTaskService {
 	public static boolean notifyIfCompleted(ServerPlayer player) {
 		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
 		if (data.terminalRecord(player.getUUID()).isEmpty()) return false;
-		int[] completed = {-1};
-		data.updateTerminalRecord(player.getUUID(), tag -> completed[0] = consumeCompletionAlert(tag));
-		if (completed[0] < 0) return false;
-		TerminalRuntimeService.synchronizeAttentionProjection(player, data);
-		TerminalNoticeService.taskComplete(player);
+		boolean delivered = false;
+		while (true) {
+			CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
+			if (record == null) break;
+			TaskSnapshot task = current(record);
+			if (!task.claimable() || task.rewardCount() <= 0 || task.index() >= TASKS.size()) break;
+			ItemStack reward = rewardStack(task.index());
+			Component rewardName = reward.getHoverName();
+			int rewardCount = reward.getCount();
+			deliverReward(player, reward);
+			int[] completed = {-1};
+			data.updateTerminalRecord(player.getUUID(), tag -> {
+				int taskBit = 1 << task.index();
+				completed[0] = consumeCompletionAlert(tag);
+				tag.putInt(TerminalData.TASK_REWARD_CLAIMED_MASK,
+						tag.getIntOr(TerminalData.TASK_REWARD_CLAIMED_MASK, 0) | taskBit);
+			});
+			if (completed[0] >= 0) TerminalNoticeService.taskComplete(player);
+			TerminalNoticeService.rewardClaimed(player, rewardName, rewardCount);
+			delivered = true;
+		}
+		if (!delivered) return false;
+		TerminalRuntimeService.synchronizeProjection(player, data);
 		TerminalRuntimeService.refresh(player);
 		return true;
 	}
@@ -105,15 +123,18 @@ public final class TerminalTaskService {
 			return ClaimResult.NOT_READY;
 		}
 		ItemStack reward = rewardStack(task.index());
-		if (!canFit(player, reward)) return ClaimResult.INVENTORY_FULL;
 		Component rewardName = reward.getHoverName();
 		int rewardCount = reward.getCount();
-		if (!player.getInventory().add(reward) || !reward.isEmpty()) return ClaimResult.INVENTORY_FULL;
-		data.updateTerminalRecord(player.getUUID(), tag -> tag.putInt(TerminalData.TASK_REWARD_CLAIMED_MASK,
-				tag.getIntOr(TerminalData.TASK_REWARD_CLAIMED_MASK, 0) | 1 << task.index()));
+		deliverReward(player, reward);
+		int[] completed = {-1};
+		data.updateTerminalRecord(player.getUUID(), tag -> {
+			completed[0] = consumeCompletionAlert(tag);
+			tag.putInt(TerminalData.TASK_REWARD_CLAIMED_MASK,
+					tag.getIntOr(TerminalData.TASK_REWARD_CLAIMED_MASK, 0) | 1 << task.index());
+		});
 		TerminalRuntimeService.synchronizeProjection(player, data);
-		TerminalNoticeService.send(player, Component.translatable(
-				"message.thefourthfrequency.task.reward_claimed", rewardName, rewardCount));
+		if (completed[0] >= 0) TerminalNoticeService.taskComplete(player);
+		TerminalNoticeService.rewardClaimed(player, rewardName, rewardCount);
 		notifyIfCompleted(player);
 		return ClaimResult.CLAIMED;
 	}
@@ -151,15 +172,9 @@ public final class TerminalTaskService {
 		return milestone.present(milestones) ? 1 : 0;
 	}
 
-	private static boolean canFit(ServerPlayer player, ItemStack reward) {
-		int capacity = player.getInventory().getFreeSlot() >= 0 ? reward.getMaxStackSize() : 0;
-		for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
-			ItemStack current = player.getInventory().getItem(slot);
-			if (ItemStack.isSameItemSameComponents(current, reward)) {
-				capacity += Math.max(0, current.getMaxStackSize() - current.getCount());
-			}
-		}
-		return capacity >= reward.getCount();
+	private static void deliverReward(ServerPlayer player, ItemStack reward) {
+		player.getInventory().add(reward);
+		if (!reward.isEmpty()) player.drop(reward, false);
 	}
 
 	private record TaskDefinition(String id, int target, Item reward, int rewardCount) {

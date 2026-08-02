@@ -4,11 +4,11 @@ import com.mojang.authlib.GameProfile;
 import com.xm.thefourthfrequency.audio.ModSounds;
 import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.content.ModBlocks;
+import com.xm.thefourthfrequency.correction.ViewpointOrientationPolicy;
 import com.xm.thefourthfrequency.meta_api.MetaController;
 import com.xm.thefourthfrequency.networking.AnomalyCompleteC2S;
 import com.xm.thefourthfrequency.networking.AnomalyPhaseS2C;
 import com.xm.thefourthfrequency.networking.AnomalyStartS2C;
-import com.xm.thefourthfrequency.networking.TerminalAnomalyLoggedS2C;
 import com.xm.thefourthfrequency.terminal.AnomalyCompletionStatus;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -25,6 +25,7 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
@@ -38,6 +39,7 @@ import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.entity.player.PlayerSkin;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
@@ -58,9 +60,9 @@ public final class AnomalyPresentationController {
 			"textures/gui/anomaly/peripheral_hand.png");
 	private static final int HAND_TEXTURE_WIDTH = 512;
 	private static final int HAND_TEXTURE_HEIGHT = 256;
-	private static final int LIGHT_DROPOUT_SCAN_RADIUS = 16;
-	private static final int LIGHT_DROPOUT_DARK_RADIUS = LIGHT_DROPOUT_SCAN_RADIUS + 15;
 	private static final float PERIPHERAL_HAND_ENTER_FRACTION = 0.42F;
+	private static final int LOCAL_RULE_FRAGMENT_LIMIT = 24;
+	private static final double LOCAL_RULE_MIN_SPACING_SQR = 9.0D;
 	private static final int HISTORY_TICKS = 60;
 	private static final int ACTION_ECHO_ENTITY_ID = -0x4543484F;
 	private static final int SECOND_PERSON_CAMERA_ID = -0x53454350;
@@ -73,8 +75,12 @@ public final class AnomalyPresentationController {
 			EquipmentSlot.LEGS, EquipmentSlot.CHEST, EquipmentSlot.HEAD);
 	private static final Deque<PlayerFrame> HISTORY = new ArrayDeque<>();
 	private static final Set<Integer> MISREAD_SLOTS = new HashSet<>();
-	private static final Set<BlockPos> HIDDEN_LIGHTS = ConcurrentHashMap.newKeySet();
-	private static final Set<TracePosition> PURPLE_TRACES = new HashSet<>();
+	// visualReplacement() below is reached from RenderSectionRegionAnomalyMixin, which runs on
+	// chunk-build worker threads, while addPurpleTraces()/restore() mutate this set from the main
+	// client thread. A plain HashSet under that access pattern can corrupt its internal table
+	// mid-resize and hang the worker thread; it must stay a concurrent set.
+	private static final Set<TracePosition> PURPLE_TRACES = ConcurrentHashMap.newKeySet();
+	private static final Set<BlockPos> CURRENT_RULE_FRAGMENTS = new HashSet<>();
 	private static final Set<BlockPos> RENDERED_TRACE_POSITIONS = ConcurrentHashMap.newKeySet();
 	private static final Set<Integer> WATCHERS_HEARD = ConcurrentHashMap.newKeySet();
 
@@ -87,7 +93,6 @@ public final class AnomalyPresentationController {
 	private static boolean phaseBlackout;
 	private static boolean nearBlindness;
 	private static BlockPos fracturePos;
-	private static volatile BlockPos lightDropoutCenter;
 	private static ClientLevel activeLevel;
 	private static ArmorStand cameraAnchor;
 	private static RemotePlayer secondPersonBody;
@@ -131,17 +136,21 @@ public final class AnomalyPresentationController {
 				context.client().execute(() -> start(context.client(), payload)));
 		ClientPlayNetworking.registerGlobalReceiver(AnomalyPhaseS2C.TYPE, (payload, context) ->
 				context.client().execute(() -> phase(payload)));
-		ClientPlayNetworking.registerGlobalReceiver(TerminalAnomalyLoggedS2C.TYPE, (payload, context) ->
-				context.client().execute(TerminalClientAudio::anomaly));
 		ClientTickEvents.END_CLIENT_TICK.register(AnomalyPresentationController::tick);
 		HudRenderCallback.EVENT.register((graphics, delta) -> renderOverlay(graphics));
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			restore(client, false, AnomalyCompletionStatus.INTERRUPTED);
 			WATCHERS_HEARD.clear();
+			// These previously survived a disconnect: rejoining a different server (or the same
+			// one) kept stale trace coordinates around, both leaking memory across sessions and
+			// letting missing-texture proxies from the old session bleed into the new one.
+			PURPLE_TRACES.clear();
+			RENDERED_TRACE_POSITIONS.clear();
 		});
 		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
 			restore(client, false, AnomalyCompletionStatus.INTERRUPTED);
 			PURPLE_TRACES.clear();
+			RENDERED_TRACE_POSITIONS.clear();
 			HISTORY.clear();
 			WATCHERS_HEARD.clear();
 		});
@@ -181,7 +190,6 @@ public final class AnomalyPresentationController {
 						SoundSource.BLOCKS, 0.95F, 0.70F, false);
 				ambientSoundCount++;
 			}
-			case "light_dropout" -> { scanLights(client); client.levelRenderer.allChanged(); }
 			case "organ_misread" -> selectMisreadItems(client, seed);
 			case "peripheral_residue" -> { }
 			case "viewpoint_separation" -> beginFixedCamera(client);
@@ -221,9 +229,6 @@ public final class AnomalyPresentationController {
 			case "peripheral_residue" -> {
 				int impactAt = Math.max(2, Math.round(totalTicks * 0.72F));
 				if (!glitchTriggered && elapsed >= impactAt) triggerGlitchImpact(client);
-			}
-			case "light_dropout" -> {
-				if ((elapsed % 10) == 0 && scanLights(client)) client.levelRenderer.allChanged();
 			}
 			case "action_echo" -> {
 				try { tickActionEcho(client, elapsed); }
@@ -381,8 +386,12 @@ public final class AnomalyPresentationController {
 		fixedCameraX = triggeringView.x;
 		fixedCameraY = triggeringView.y;
 		fixedCameraZ = triggeringView.z;
-		lockedPlayerYaw = triggeringCamera.yRot();
-		lockedPlayerPitch = triggeringCamera.xRot();
+		// The separated view follows the player's forward heading at the instant of
+		// separation. Looking up or down must not leave the fixed camera aimed away
+		// from the path the still-controllable body takes.
+		var forward = ViewpointOrientationPolicy.facePlayerForward(client.player.getYRot());
+		lockedPlayerYaw = forward.yaw();
+		lockedPlayerPitch = forward.pitch();
 		GameProfile bodyProfile = new GameProfile(UUID.randomUUID(), "\u200B");
 		secondPersonBody = new ActionEchoPlayer(client.level, bodyProfile, client.player.getSkin());
 		secondPersonBody.setId(SECOND_PERSON_BODY_ID);
@@ -458,24 +467,10 @@ public final class AnomalyPresentationController {
 		}
 	}
 
-	private static boolean scanLights(Minecraft client) {
-		BlockPos origin = client.player.blockPosition().immutable();
-		boolean changed = !origin.equals(lightDropoutCenter);
-		lightDropoutCenter = origin;
-		for (BlockPos pos : BlockPos.betweenClosed(
-				origin.offset(-LIGHT_DROPOUT_SCAN_RADIUS, -LIGHT_DROPOUT_SCAN_RADIUS,
-						-LIGHT_DROPOUT_SCAN_RADIUS),
-				origin.offset(LIGHT_DROPOUT_SCAN_RADIUS, LIGHT_DROPOUT_SCAN_RADIUS,
-						LIGHT_DROPOUT_SCAN_RADIUS))) {
-			if (client.level.hasChunkAt(pos) && client.level.getBlockState(pos).getLightEmission() > 0)
-				changed |= HIDDEN_LIGHTS.add(pos.immutable());
-		}
-		return changed;
-	}
-
 	private static void addPurpleTraces(Minecraft client, long stableSeed) {
 		RENDERED_TRACE_POSITIONS.clear();
-		String dimension = client.level.dimension().identifier().toString();
+		CURRENT_RULE_FRAGMENTS.clear();
+		ResourceKey<Level> dimension = client.level.dimension();
 		BlockPos origin = client.player.blockPosition();
 		net.minecraft.world.phys.Vec3 eye = client.player.getEyePosition();
 		net.minecraft.world.phys.Vec3 view = client.player.getViewVector(1.0F);
@@ -494,13 +489,25 @@ public final class AnomalyPresentationController {
 		}
 		exposed.sort(java.util.Comparator
 				.comparing((BlockPos pos) -> !isInViewCone(pos, eye, view))
-				.thenComparingDouble(pos -> pos.distSqr(origin))
-				.thenComparingLong(pos -> mixTraceOrder(pos.asLong(), stableSeed)));
+				.thenComparingLong(pos -> mixTraceOrder(pos.asLong(), stableSeed))
+				.thenComparingDouble(pos -> pos.distSqr(origin)));
 		int added = 0;
 		for (BlockPos pos : exposed) {
-			if (added >= 48 || PURPLE_TRACES.size() >= 512) break;
-			if (PURPLE_TRACES.add(new TracePosition(dimension, pos.immutable()))) added++;
+			if (added >= LOCAL_RULE_FRAGMENT_LIMIT || PURPLE_TRACES.size() >= 512) break;
+			if (!separatedFromExistingTraces(dimension, pos)) continue;
+			if (PURPLE_TRACES.add(new TracePosition(dimension, pos.immutable()))) {
+				CURRENT_RULE_FRAGMENTS.add(pos.immutable());
+				added++;
+			}
 		}
+	}
+
+	private static boolean separatedFromExistingTraces(ResourceKey<Level> dimension, BlockPos candidate) {
+		for (TracePosition trace : PURPLE_TRACES) {
+			if (trace.dimension().equals(dimension)
+					&& trace.position().distSqr(candidate) < LOCAL_RULE_MIN_SPACING_SQR) return false;
+		}
+		return true;
 	}
 
 	private static boolean isInViewCone(BlockPos pos, net.minecraft.world.phys.Vec3 eye,
@@ -530,14 +537,13 @@ public final class AnomalyPresentationController {
 			graphics.fill(0, top, left, top + clearH, 0xF8000000);
 			graphics.fill(left + clearW, top, width, top + clearH, 0xF8000000);
 		}
-		if (anomalyId.equals("light_dropout")) graphics.fill(0, 0, width, height, 0x24000000);
-		if (anomalyId.equals("peripheral_residue")) {
+		if (anomalyId.equals("peripheral_residue") && !glitchTriggered) {
 			int elapsed = totalTicks - remainingTicks;
 			float slide = peripheralHandSlide(elapsed, totalTicks);
 			int drawWidth = Math.min(Math.max(280, Math.round(width * 0.58F)),
 					Math.max(280, Math.round(height * 1.06F)));
 			int drawHeight = drawWidth / 2;
-			int visibleWidth = Math.min(Math.round(drawWidth * 0.70F), Math.round(width * 0.36F));
+			int visibleWidth = Math.min(Math.round(drawWidth * 0.78F), Math.round(width * 0.42F));
 			int leftFinalX = visibleWidth - drawWidth;
 			int rightFinalX = width - visibleWidth;
 			int leftX = Math.round(Mth.lerp(slide, -drawWidth - 4, leftFinalX));
@@ -561,8 +567,10 @@ public final class AnomalyPresentationController {
 			int left = width / 7, right = width - left, top = height / 8, bottom = height - top;
 			graphics.fill(left, top, right, bottom, 0xFFF1F1ED);
 			graphics.fill(left, top, right, top + 14, 0xFFD5D5D0);
+			Component fallbackLine = Component.translatable(
+					"message.thefourthfrequency.anomaly.desktop_presence.fallback_text");
 			for (int row = 0; row < 10; row++)
-				graphics.drawString(client.font, Component.literal("我无处不在... 我无处不在... 我无处不在... 我无处不在..."),
+				graphics.drawString(client.font, fallbackLine,
 						left + 8, top + 22 + row * 11, 0xFF141414, false);
 		}
 	}
@@ -646,18 +654,16 @@ public final class AnomalyPresentationController {
 			if (client.screen instanceof ChannelOverrideScreen) client.setScreen(null);
 			if (anomalyId.equals("window_pulse") || anomalyId.equals("desktop_presence"))
 				MetaController.finishAnomaly(status != AnomalyCompletionStatus.COMPLETED);
-			boolean rebuild = lightDropoutCenter != null || !HIDDEN_LIGHTS.isEmpty();
 			fracturePos = null; echoCrack = null; actionEcho = null; cameraAnchor = null; secondPersonBody = null;
 			previousCameraEntity = null;
 			previousCameraType = null;
-			echoFrames = List.of(); MISREAD_SLOTS.clear(); lightDropoutCenter = null; HIDDEN_LIGHTS.clear();
+			echoFrames = List.of(); MISREAD_SLOTS.clear(); CURRENT_RULE_FRAGMENTS.clear();
 			instanceId = null; anomalyId = "none"; seed = 0L; totalTicks = 0; remainingTicks = 0;
 			lastPhaseSequence = 0; currentPhase = "idle"; phaseBlackout = false; nearBlindness = false;
 			dedicatedSoundCount = 0; ambientSoundCount = 0; fractureStage = -1;
 			glitchImpactTicks = 0; glitchTriggered = false; attackWasDown = false;
 			phantomBurstRemaining = 0; phantomSoundMaterial = null;
 			simulatedWindow = false; simulatedNotepad = false; activeLevel = null;
-			if (rebuild && client.levelRenderer != null) client.levelRenderer.allChanged();
 			if (report && completed != null && ClientPlayNetworking.canSend(AnomalyCompleteC2S.TYPE))
 				ClientPlayNetworking.send(new AnomalyCompleteC2S(completed, status));
 		} finally { restoring = false; }
@@ -699,19 +705,6 @@ public final class AnomalyPresentationController {
 		int blue = mix(original & 255, 22, strength);
 		return alpha << 24 | red << 16 | green << 8 | blue;
 	}
-	public static boolean isLightSourceHidden(BlockPos pos) { return HIDDEN_LIGHTS.contains(pos); }
-	public static boolean isBlockLightSuppressedAt(BlockPos pos) {
-		BlockPos center = lightDropoutCenter;
-		if (center == null) return false;
-		int dx = center.getX() - pos.getX();
-		int dy = center.getY() - pos.getY();
-		int dz = center.getZ() - pos.getZ();
-		return Math.abs(dx) <= LIGHT_DROPOUT_DARK_RADIUS
-				&& Math.abs(dy) <= LIGHT_DROPOUT_DARK_RADIUS
-				&& Math.abs(dz) <= LIGHT_DROPOUT_DARK_RADIUS
-				&& dx * dx + dy * dy + dz * dz
-				<= LIGHT_DROPOUT_DARK_RADIUS * LIGHT_DROPOUT_DARK_RADIUS;
-	}
 	public static boolean isMisread(ItemStack stack) {
 		Minecraft client = Minecraft.getInstance();
 		if (client.player == null) return false;
@@ -724,13 +717,22 @@ public final class AnomalyPresentationController {
 	public static BlockState visualReplacement(BlockPos pos, BlockState original) {
 		BlockState endingReplacement = WorldInterfacePresentationController.failureBlockReplacement(pos, original);
 		if (endingReplacement != original) return endingReplacement;
-		Minecraft client = Minecraft.getInstance();
-		if (client.level == null) return original;
-		TracePosition trace = new TracePosition(client.level.dimension().identifier().toString(), pos);
-		if (!PURPLE_TRACES.contains(trace)) return original;
-		return ModBlocks.MISSING_TEXTURE_PROXY.defaultBlockState();
+		// This runs on chunk-build worker threads for every queried block (10^5-10^6 calls per
+		// section rebuild), but PURPLE_TRACES is only ever non-empty while local_rule_collapse is
+		// actually active. Short-circuiting here skips the per-call TracePosition allocation and
+		// set lookup for the overwhelming majority of calls instead of paying for both every time.
+		if (PURPLE_TRACES.isEmpty()) return original;
+		var level = Minecraft.getInstance().level;
+		if (level == null) return original;
+		TracePosition trace = new TracePosition(level.dimension(), pos);
+		return PURPLE_TRACES.contains(trace) ? ModBlocks.MISSING_TEXTURE_PROXY.defaultBlockState() : original;
 	}
 	public static int purpleTraceCount() { return PURPLE_TRACES.size(); }
+	public static Set<BlockPos> currentRuleFragmentsForTesting() {
+		return Set.copyOf(CURRENT_RULE_FRAGMENTS);
+	}
+	public static float fixedCameraYawForTesting() { return lockedPlayerYaw; }
+	public static float fixedCameraPitchForTesting() { return lockedPlayerPitch; }
 	public static void onWatcherVisible(int entityId, double x, double y, double z) {
 		if (WATCHERS_HEARD.size() > 192) WATCHERS_HEARD.clear();
 		if (!WATCHERS_HEARD.add(entityId)) return;
@@ -775,15 +777,15 @@ public final class AnomalyPresentationController {
 			overlays.add("red_horizon");
 			overlays.add("red_world_fog");
 		}
-		if (instanceId != null && anomalyId.equals("light_dropout")) overlays.add("light_dropout");
-		if (instanceId != null && anomalyId.equals("peripheral_residue")) overlays.add("peripheral_hand_instances");
+		if (instanceId != null && anomalyId.equals("peripheral_residue") && !glitchTriggered)
+			overlays.add("peripheral_hand_instances");
 		if (glitchImpactTicks > 0) overlays.add("glitch_impact");
 		if (fractureStage >= 0) overlays.add("surface_fracture");
 		if (simulatedWindow) overlays.add("window_fallback");
 		if (simulatedNotepad) overlays.add("notepad_fallback");
 		if (instanceId != null && anomalyId.equals("channel_override")) overlays.add("channel_override");
 		return new AnomalyTestSnapshot(instanceId, anomalyId, currentPhase, remainingTicks, overlays,
-				dedicatedSoundCount, ambientSoundCount, HIDDEN_LIGHTS.size(), MISREAD_SLOTS.size(), fractureStage,
+				dedicatedSoundCount, ambientSoundCount, 0, MISREAD_SLOTS.size(), fractureStage,
 				cameraRegistered,
 				isInputLocked(), isAudioMuted(), (actionEcho == null ? 0 : 1)
 						+ (cameraRegistered ? 1 : 0) + (secondPersonBodyRegistered ? 1 : 0),
@@ -802,7 +804,7 @@ public final class AnomalyPresentationController {
 			float walkSpeed, boolean swinging, int swingTime, float previousAttackAnim, float attackAnim,
 			InteractionHand swingingArm, boolean sprinting, boolean shiftKeyDown, boolean swimming,
 			InteractionHand usingHand, List<ItemStack> equipment, BlockPos digging) { }
-	private record TracePosition(String dimension, BlockPos position) { }
+	private record TracePosition(ResourceKey<Level> dimension, BlockPos position) { }
 
 	private static final class ActionEchoPlayer extends RemotePlayer {
 		private final PlayerSkin skin;

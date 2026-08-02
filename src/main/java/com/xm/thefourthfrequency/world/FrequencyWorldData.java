@@ -54,6 +54,13 @@ public final class FrequencyWorldData extends SavedData {
 	private final Set<UUID> issuedPlayers;
 	private final Map<UUID, CompoundTag> terminalRecords;
 	private final CompoundTag narrativeState;
+	// Lets callers (WorldInterfaceState) cheaply detect "has narrativeState changed since I last
+	// looked" without paying for a deep copy + decode on every read. Every path that can mutate
+	// narrativeState goes through updateNarrativeState(), including direct/bypassing writers such
+	// as GameTest fixtures that reset state via root.remove(...) instead of going through
+	// WorldInterfaceState's own write() - so incrementing it there, and only there, keeps any
+	// revision-keyed cache correct regardless of who performs the mutation.
+	private long narrativeStateRevision;
 
 	public FrequencyWorldData() {
 		this(RuntimeServices.PERSISTENCE_SCHEMA_VERSION, UUID.randomUUID().toString(),
@@ -240,8 +247,14 @@ public final class FrequencyWorldData extends SavedData {
 		return narrativeState.copy();
 	}
 
+	/** Monotonic counter bumped by every {@link #updateNarrativeState} call; see the field doc. */
+	public long narrativeStateRevision() {
+		return narrativeStateRevision;
+	}
+
 	public void updateNarrativeState(Consumer<CompoundTag> update) {
 		update.accept(narrativeState);
+		narrativeStateRevision++;
 		setDirty();
 	}
 

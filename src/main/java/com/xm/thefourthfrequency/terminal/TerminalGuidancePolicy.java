@@ -1,13 +1,14 @@
 package com.xm.thefourthfrequency.terminal;
 
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
+import com.xm.thefourthfrequency.world.SurvivalProgressService;
 
 /** Pure unlock and recommendation policy shared by the authoritative tool service and tests. */
 public final class TerminalGuidancePolicy {
 	private TerminalGuidancePolicy() {
 	}
 
-	public static int availableToolsMask(int milestones, boolean portalKnown, int eyeSamples) {
+	public static int availableToolsMask(int milestones, boolean portalKnown, int obtainedEyeCount) {
 		int mask = bit(TerminalTool.HOME) | bit(TerminalTool.WEATHER);
 		if (SurvivalMilestone.MINED_LOGS.present(milestones)) {
 			mask |= bit(TerminalTool.MINERALS) | bit(TerminalTool.NAVIGATION);
@@ -15,9 +16,7 @@ public final class TerminalGuidancePolicy {
 		if (portalKnown || SurvivalMilestone.ENTERED_NETHER.present(milestones)) {
 			mask |= bit(TerminalTool.PORTAL);
 		}
-		if (eyeSamples > 0 || SurvivalMilestone.CRAFTED_EYE.present(milestones)
-				|| SurvivalMilestone.FOUND_STRONGHOLD.present(milestones)
-				|| SurvivalMilestone.ENTERED_END.present(milestones)) {
+		if (obtainedEyeCount >= SurvivalProgressService.REQUIRED_STRONGHOLD_UNLOCK_EYES) {
 			mask |= bit(TerminalTool.STRONGHOLD);
 		}
 		return mask;

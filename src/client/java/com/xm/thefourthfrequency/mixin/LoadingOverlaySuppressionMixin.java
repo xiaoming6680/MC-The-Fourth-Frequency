@@ -4,10 +4,12 @@ import com.mojang.blaze3d.systems.CommandEncoder;
 import com.mojang.blaze3d.textures.GpuTexture;
 import com.xm.thefourthfrequency.client_ui.AlphaLoadSessionController;
 import com.xm.thefourthfrequency.client_ui.PersistentAlphaLoadingStyle;
+import com.xm.thefourthfrequency.client_ui.PursuitPresentationClient;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.LoadingOverlay;
+import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ReloadInstance;
@@ -61,8 +63,25 @@ public abstract class LoadingOverlaySuppressionMixin {
 		}
 		if (!thefourthfrequency$hiddenResourceReload) return;
 		Screen screen = thefourthfrequency$client.screen;
-		if (screen != null) screen.render(graphics, mouseX, mouseY, partialTick);
+		// Keep the last complete loading frame until Minecraft's normal render loop owns the title
+		// screen. Launchers can maximize the GLFW window before its framebuffer resize reaches
+		// Minecraft; drawing here would expose one menu frame at the old top-left size.
+		if (!(screen instanceof TitleScreen)) {
+			if (screen != null) {
+				screen.render(graphics, mouseX, mouseY, partialTick);
+			} else {
+				PersistentAlphaLoadingStyle.drawWorldLoadingBackground(graphics);
+			}
+		}
 		graphics.enableScissor(0, 0, 0, 0);
+	}
+
+	@Redirect(method = "render", at = @At(value = "INVOKE",
+			target = "Lnet/minecraft/client/gui/screens/Screen;renderWithTooltipAndSubtitles(Lnet/minecraft/client/gui/GuiGraphics;IIF)V"))
+	private void thefourthfrequency$deferTitleScreenUntilViewportSettles(Screen screen,
+			GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+		if (screen instanceof TitleScreen) return;
+		screen.renderWithTooltipAndSubtitles(graphics, mouseX, mouseY, partialTick);
 	}
 
 	@Redirect(method = "render", at = @At(value = "INVOKE",
@@ -100,5 +119,8 @@ public abstract class LoadingOverlaySuppressionMixin {
 	private void thefourthfrequency$restoreSessionReloadDrawing(GuiGraphics graphics, int mouseX,
 			int mouseY, float partialTick, CallbackInfo callback) {
 		if (thefourthfrequency$hiddenResourceReload) graphics.disableScissor();
+		if (PursuitPresentationClient.shouldCoverLoadingScreen()) {
+			graphics.fill(0, 0, graphics.guiWidth(), graphics.guiHeight(), 0xFF000000);
+		}
 	}
 }

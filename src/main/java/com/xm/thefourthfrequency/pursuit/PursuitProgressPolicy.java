@@ -6,6 +6,8 @@ import com.xm.thefourthfrequency.world.SurvivalMilestone;
 public final class PursuitProgressPolicy {
 	public static final int FORM_COUNT = 5;
 	public static final int REQUIRED_EYE_SAMPLES = 3;
+	public static final int MIN_RESOLVED_CHASES_FOR_FINAL_EYE = 1;
+	public static final long WARNING_LEAD_TICKS = 10L * 20L;
 	public static final long FORM_ONE_ACTIVITY_FALLBACK_TICKS = 20L * 60L * 20L;
 	public static final long MIN_CHASE_GAP_TICKS = 20L * 60L * 20L;
 	public static final long MAX_CHASE_GAP_TICKS = 30L * 60L * 20L;
@@ -35,6 +37,10 @@ public final class PursuitProgressPolicy {
 
 	public static boolean complete(int resolvedChases) {
 		return resolvedChases >= FORM_COUNT;
+	}
+
+	public static boolean finalEyeReady(int resolvedChases) {
+		return resolvedChases >= MIN_RESOLVED_CHASES_FOR_FINAL_EYE;
 	}
 
 	/**

@@ -32,18 +32,13 @@ public final class DebugNames {
 
 	public static String file(String id) {
 		return switch (id) {
-			case "maintenance_handoff" -> "维修日记";
-			case "recovered_fragment" -> "维修日记补记";
+			case "maintenance_handoff" -> "终端备忘";
 			case "surface_shelter_record" -> "避难所日记";
 			case "field_observation_record" -> "观测点日记";
 			case "underground_mine_record" -> "矿站日记";
 			case "abandoned_warehouse_record" -> "仓库日记";
 			case "encrypted_witness_file" -> "前任留下的日记";
-			case "correction_response_record" -> "修复装置日记";
-			case "overworld_fracture_record" -> "主世界裂缝日记";
-			case "continuity_report" -> "下界往返日记";
-			case "body_mapping_warning" -> "入口线索日记";
-			case "world_interface_entry_record" -> "世界接口入口记录";
+			case "body_mapping_warning" -> "进入祭坛前";
 			default -> "未知文件";
 		};
 	}

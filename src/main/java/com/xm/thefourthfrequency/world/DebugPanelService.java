@@ -5,6 +5,7 @@ import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
 import com.xm.thefourthfrequency.networking.DebugActionPayload;
 import com.xm.thefourthfrequency.networking.DebugStatusPayload;
+import com.xm.thefourthfrequency.pursuit.PursuitDirector;
 import com.xm.thefourthfrequency.terminal.AmbientAnomalyService;
 import com.xm.thefourthfrequency.terminal.AnomalyCatalog;
 import com.xm.thefourthfrequency.terminal.DebugNames;
@@ -39,6 +40,10 @@ public final class DebugPanelService {
 	public static void handle(ServerPlayer player, DebugActionPayload payload) {
 		if (!enabled(player)) {
 			ServerPlayNetworking.send(player, denied("调试权限已关闭"));
+			return;
+		}
+		if (payload.action().equals("poll")) {
+			sendStatus(player, "");
 			return;
 		}
 		String message;
@@ -101,15 +106,30 @@ public final class DebugPanelService {
 				if (!WatcherService.debugSpawn(player)) throw new IllegalArgumentException("附近没有合适的生成位置");
 				yield "暗处人影已在玩家视野外生成";
 			}
+			case "pursuit_test" -> {
+				PursuitDirector.DebugStartResult result = PursuitDirector.debugStart(player, value);
+				if (result != PursuitDirector.DebugStartResult.STARTED) {
+					throw new IllegalArgumentException(pursuitFailure(result));
+				}
+				yield "追逐测试已启动：第 " + value + " 形态；本次结算不会改动正式追逐进度";
+			}
 			case "file_unlock" -> {
 				NarrativeFileCatalog.require(target);
 				long now = player.level().getGameTime();
 				data.updateTerminalRecord(player.getUUID(), tag -> TerminalFileState.setUnlocked(tag, target, true, now, player.level().getDayTime()));
 				yield "已解锁文件：" + DebugNames.file(target);
 			}
+			case "file_lock" -> {
+				NarrativeFileCatalog.require(target);
+				long now = player.level().getGameTime();
+				data.updateTerminalRecord(player.getUUID(), tag -> TerminalFileState.setUnlocked(
+						tag, target, false, now, player.level().getDayTime()));
+				yield "已重新锁定文件：" + DebugNames.file(target);
+			}
 			case "files_lock" -> {
 				data.updateTerminalRecord(player.getUUID(), tag -> {
 					tag.put(TerminalData.FILE_STATES, new ListTag());
+					tag.putInt(TerminalData.UNREAD_FILE_COUNT, 0);
 				});
 				yield "文件进度已重置，等待对应阶段或建筑触发";
 			}
@@ -130,11 +150,10 @@ public final class DebugPanelService {
 		data.updateTerminalRecord(player.getUUID(), tag -> {
 			tag.putBoolean(TerminalData.BOUND, false); tag.putInt(TerminalData.BAND_STAGE, 0); tag.putInt(TerminalData.PLOT_STAGE, 1);
 			tag.putBoolean(TerminalData.SECOND_CACHE_UNLOCKED, false);
-			tag.putBoolean(TerminalData.LOCAL_FILE_UNLOCKED, false); tag.putBoolean(TerminalData.RIFT_OBSERVED, false);
-			tag.putBoolean(TerminalData.CONTINUITY_LEARNED, false); tag.putBoolean(TerminalData.NETHER_RIFT_OBSERVED, false);
-			tag.putInt(TerminalData.BODY_PROGRESS, 0); tag.putInt(TerminalData.BODY_STAGE, 0);
+			tag.putBoolean(TerminalData.LOCAL_FILE_UNLOCKED, false);
+			tag.putBoolean(TerminalData.CONTINUITY_LEARNED, false);
 			tag.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, 0); tag.putInt(TerminalData.BREACH_MASK, 0);
-			tag.putInt(TerminalData.SIGNATURE_SCENE_MASK, 0); tag.putLong(TerminalData.TOOLS_DISABLED_UNTIL, 0L);
+			tag.putLong(TerminalData.TOOLS_DISABLED_UNTIL, 0L);
 			tag.putBoolean(TerminalData.TRUTH_READ, false); tag.putBoolean(TerminalData.PORTAL_ROOM_FOUND, false);
 			tag.putLong(TerminalData.PORTAL_ROOM_POSITION, 0L); tag.putString(TerminalData.PORTAL_ROOM_DIMENSION, "");
 			tag.putBoolean(TerminalData.NIGHT_ENTERED, false);
@@ -143,7 +162,7 @@ public final class DebugPanelService {
 			tag.putInt(TerminalData.ANOMALY_TIER, 0); tag.putInt(TerminalData.ANOMALY_STORY_CEILING, 0);
 			tag.putLong(TerminalData.ANOMALY_TIER_ONLINE_TICKS, 0L); tag.putInt(TerminalData.ANOMALY_HEAT, 0);
 			tag.putLong(TerminalData.NEXT_AMBIENT_ANOMALY_TICK, 0L); tag.putBoolean(TerminalData.ANOMALIES_SUSPENDED, false);
-			tag.put(TerminalData.FILE_STATES, new ListTag());
+			tag.put(TerminalData.FILE_STATES, new ListTag()); tag.putInt(TerminalData.UNREAD_FILE_COUNT, 0);
 		});
 	}
 
@@ -157,7 +176,7 @@ public final class DebugPanelService {
 			}
 			case PRECONDITION_UNMET -> switch (id) {
 				case "phantom_echo" -> "附近不是足够封闭、低天光的洞穴环境";
-				case "light_dropout" -> "玩家周围 16 格内没有已加载的发光方块";
+				case "light_dropout" -> "玩家周围 16 格内没有可安全熄灭的普通方块光源";
 				case "surface_fracture" -> "玩家前方或侧前方没有可作用的实体方块";
 				case "action_echo" -> "进入世界尚未满 3 秒，无法取得动作历史";
 				default -> "当前玩家状态或环境不满足该异象的启动条件";
@@ -172,6 +191,20 @@ public final class DebugPanelService {
 			case NONE -> "未知启动失败";
 		};
 	}
+
+	private static String pursuitFailure(PursuitDirector.DebugStartResult result) {
+		return switch (result) {
+			case INVALID_FORM -> "追逐形态必须在 1–5 之间";
+			case NO_TERMINAL_RECORD -> "没有可用的个人终端记录";
+			case ALREADY_ACTIVE -> "玩家已经处于追逐或镜像世界中";
+			case UNSUPPORTED_DIMENSION -> "测试追逐只能从主世界或下界开始";
+			case UNSAFE -> "当前状态不安全：关闭终端、停止异象、恢复生命并离开敌对生物后重试";
+			case NO_SLOT -> "两个私人追逐槽位都已占用";
+			case TRANSFER_REJECTED -> "镜像世界未能接受追逐会话";
+			case STARTED -> "";
+		};
+	}
+
 	private static boolean enabled(ServerPlayer player) {
 		return FrequencyWorldData.get(player.level().getServer()).terminalRecord(player.getUUID())
 				.map(tag -> tag.getBooleanOr(TerminalData.DEBUG_ENABLED, false)).orElse(false);
@@ -181,12 +214,15 @@ public final class DebugPanelService {
 		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
 		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(new CompoundTag());
 		var files = TerminalFileState.states(record);
+		int discoveredFileMask = fileMask(files, FileStateKind.DISCOVERED);
+		int unlockedFileMask = fileMask(files, FileStateKind.UNLOCKED);
+		int readFileMask = fileMask(files, FileStateKind.READ);
 		long now = player.level().getGameTime();
 		ServerPlayNetworking.send(player, new DebugStatusPayload(DebugStatusPayload.CURRENT_PROTOCOL_VERSION, true,
 				player.getGameProfile().name(), record.getIntOr(TerminalData.PLOT_STAGE, 1),
 				record.getIntOr(TerminalData.BAND_STAGE, 0), record.getBooleanOr(TerminalData.BOUND, false),
 				files.size(), (int) files.stream().filter(TerminalFileState.State::unlocked).count(),
-				record.getIntOr(TerminalData.BODY_PROGRESS, 0), record.getIntOr(TerminalData.BODY_STAGE, 0),
+				discoveredFileMask, unlockedFileMask, readFileMask, TerminalFileState.unreadCount(record),
 				WorldDecayService.stage(data, record),
 				!data.narrativeState().contains("decay_stage_override"),
 				record.getIntOr(TerminalData.ANOMALY_TIER, 0), record.getIntOr(TerminalData.ANOMALY_STORY_CEILING, 0),
@@ -200,9 +236,35 @@ public final class DebugPanelService {
 
 	private static DebugStatusPayload denied(String message) {
 		return new DebugStatusPayload(DebugStatusPayload.CURRENT_PROTOCOL_VERSION, false, "", 0, 0, false,
-				0, 0, 0, 0, 0, true,
+				0, 0, 0, 0,
+				0, 0, 0, true,
 				0, 0, 0, "none", 0, 0, 0, 0, false, message);
 	}
 
+	private static int fileMask(java.util.List<TerminalFileState.State> states, FileStateKind kind) {
+		int mask = 0;
+		var definitions = NarrativeFileCatalog.definitions();
+		for (int index = 0; index < definitions.size(); index++) {
+			String id = definitions.get(index).id();
+			for (TerminalFileState.State state : states) {
+				if (!state.id().equals(id) || !kind.matches(state)) continue;
+				mask |= 1 << index;
+				break;
+			}
+		}
+		return mask;
+	}
+
 	private static int seconds(long ticks) { return (int) Math.clamp((ticks + 19L) / 20L, 0L, Integer.MAX_VALUE); }
+
+	private enum FileStateKind {
+		DISCOVERED, UNLOCKED, READ;
+		private boolean matches(TerminalFileState.State state) {
+			return switch (this) {
+				case DISCOVERED -> true;
+				case UNLOCKED -> state.unlocked();
+				case READ -> state.read();
+			};
+		}
+	}
 }

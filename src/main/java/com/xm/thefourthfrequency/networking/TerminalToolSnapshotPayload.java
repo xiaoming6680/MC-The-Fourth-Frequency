@@ -21,6 +21,7 @@ public record TerminalToolSnapshotPayload(
 		int toolsDisabledTicks,
 		int selectedResource,
 		int mineralScanTicks,
+		boolean mineralSurveyNearby,
 		boolean navigationCompletionAvailable,
 		int navigationCompletionDirection,
 		int weather,
@@ -56,7 +57,7 @@ public record TerminalToolSnapshotPayload(
 		int strongholdMinDistance,
 		int strongholdMaxDistance
 ) implements CustomPacketPayload {
-	public static final int CURRENT_PROTOCOL_VERSION = 4;
+	public static final int CURRENT_PROTOCOL_VERSION = 5;
 	public static final Type<TerminalToolSnapshotPayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(
 			TheFourthFrequency.MOD_ID, "terminal_tool_snapshot"));
 	public static final StreamCodec<RegistryFriendlyByteBuf, TerminalToolSnapshotPayload> CODEC = StreamCodec.of(
@@ -77,6 +78,7 @@ public record TerminalToolSnapshotPayload(
 		buf.writeVarInt(value.toolsDisabledTicks);
 		buf.writeVarInt(value.selectedResource);
 		buf.writeVarInt(value.mineralScanTicks);
+		buf.writeBoolean(value.mineralSurveyNearby);
 		buf.writeBoolean(value.navigationCompletionAvailable);
 		buf.writeVarInt(value.navigationCompletionDirection);
 		buf.writeVarInt(value.weather);
@@ -119,7 +121,7 @@ public record TerminalToolSnapshotPayload(
 				buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
 				buf.readVarInt(), buf.readBoolean(),
 				buf.readBoolean(), buf.readVarInt(), buf.readVarInt(),
-				buf.readVarInt(), buf.readBoolean(), buf.readVarInt(),
+				buf.readVarInt(), buf.readBoolean(), buf.readBoolean(), buf.readVarInt(),
 				buf.readVarInt(), buf.readVarLong(), buf.readVarInt(), buf.readVarInt(),
 				buf.readBoolean(), buf.readBoolean(), buf.readBoolean(),
 				buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readUtf(128),

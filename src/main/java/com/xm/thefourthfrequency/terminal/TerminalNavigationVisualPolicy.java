@@ -45,4 +45,9 @@ public final class TerminalNavigationVisualPolicy {
 	public static boolean navigationNeedleFlashActive(double elapsedTicks) {
 		return elapsedTicks >= 0.0D && elapsedTicks < 20.0D;
 	}
+
+	public static boolean targetNeedleVisible(boolean guidanceActive, boolean navigable, double elapsedTicks) {
+		return guidanceActive && (navigable || navigationNeedleFlashActive(elapsedTicks))
+				&& navigationNeedleFlashVisible(elapsedTicks);
+	}
 }

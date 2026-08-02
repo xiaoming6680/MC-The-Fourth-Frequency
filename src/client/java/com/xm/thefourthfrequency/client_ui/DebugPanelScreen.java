@@ -2,6 +2,7 @@ package com.xm.thefourthfrequency.client_ui;
 
 import com.xm.thefourthfrequency.networking.DebugActionPayload;
 import com.xm.thefourthfrequency.networking.DebugStatusPayload;
+import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
 import com.xm.thefourthfrequency.terminal.AnomalyCatalog;
 import com.xm.thefourthfrequency.terminal.DebugNames;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -29,6 +30,9 @@ public final class DebugPanelScreen extends Screen {
 	private static final int BUTTON_GAP = 6;
 	private static final int ANOMALY_INFO_HEIGHT = 58;
 	private static final int ANOMALY_ROW_HEIGHT = 26;
+	private static final int FILE_INFO_HEIGHT = 58;
+	private static final int FILE_ROW_HEIGHT = 26;
+	private static final int LIVE_REFRESH_TICKS = 10;
 
 	private static final int OVERLAY = 0xCC05090B;
 	private static final int PANEL = 0xFF10181B;
@@ -46,23 +50,38 @@ public final class DebugPanelScreen extends Screen {
 
 	private static final List<String> ANOMALIES = AnomalyCatalog.definitions().stream()
 			.map(value -> value.id()).toList();
+	private static final List<String> FILES = NarrativeFileCatalog.definitions().stream()
+			.map(value -> value.id()).toList();
 
-	private static PageMemory pageMemory = new PageMemory(0, 0);
+	private static PageMemory pageMemory = new PageMemory(0, 0, 0);
 	private DebugStatusPayload status;
+	private String statusMessage;
 	private Section section;
 	private int anomalyScrollRow;
 	private int anomalyMaxScrollRow;
+	private int fileScrollRow;
+	private int fileMaxScrollRow;
+	private int pollTicks;
+	private int ticksSinceStatus;
 	private Pending pending;
 
 	public DebugPanelScreen(DebugStatusPayload status) {
 		super(Component.literal("第四频段 · 测试工作台"));
 		this.status = status;
+		this.statusMessage = status.message();
 		this.section = Section.values()[Math.clamp(pageMemory.sectionIndex, 0, Section.values().length - 1)];
 		this.anomalyScrollRow = Math.max(0, pageMemory.anomalyScrollRow);
+		this.fileScrollRow = Math.max(0, pageMemory.fileScrollRow);
 	}
 
 	public void update(DebugStatusPayload payload) {
+		boolean fileStateChanged = status.discoveredFileMask() != payload.discoveredFileMask()
+				|| status.unlockedFileMask() != payload.unlockedFileMask()
+				|| status.readFileMask() != payload.readFileMask();
 		this.status = payload;
+		if (!payload.message().isEmpty()) this.statusMessage = payload.message();
+		this.ticksSinceStatus = 0;
+		if (section == Section.FILES && fileStateChanged && pending == null) rebuildWidgets();
 	}
 
 	@Override
@@ -78,6 +97,7 @@ public final class DebugPanelScreen extends Screen {
 			case OVERVIEW -> { }
 			case PROGRESS -> buildProgressActions(layout);
 			case ANOMALIES -> buildAnomalyActions(layout);
+			case FILES -> buildFileActions(layout);
 		}
 		buildFooterActions(layout);
 	}
@@ -88,6 +108,10 @@ public final class DebugPanelScreen extends Screen {
 		anomalyMaxScrollRow = Math.max(0, ANOMALIES.size() - visibleRows);
 		anomalyScrollRow = Math.clamp(anomalyScrollRow, 0, anomalyMaxScrollRow);
 
+		int fileListHeight = Math.max(FILE_ROW_HEIGHT, layout.contentBottom - fileListTop(layout));
+		int visibleFileRows = Math.max(1, fileListHeight / FILE_ROW_HEIGHT);
+		fileMaxScrollRow = Math.max(0, FILES.size() - visibleFileRows);
+		fileScrollRow = Math.clamp(fileScrollRow, 0, fileMaxScrollRow);
 	}
 
 	private void buildNavigation(Layout layout) {
@@ -121,6 +145,8 @@ public final class DebugPanelScreen extends Screen {
 			actionButton(layout.contentLeft + width + BUTTON_GAP, y, width,
 					new ActionSpec("主线前进一步", "progress_next", "", 0, false));
 			actionButton(layout.contentLeft, y + BUTTON_HEIGHT + BUTTON_GAP, layout.contentWidth(),
+					new ActionSpec("测试第 5 形态追逐", "pursuit_test", "", 5, true));
+			actionButton(layout.contentLeft, y + (BUTTON_HEIGHT + BUTTON_GAP) * 2, layout.contentWidth(),
 					new ActionSpec("重置个人主线", "progress_reset", "", 0, true));
 		} else {
 			actionButton(layout.contentLeft, y, layout.contentWidth(),
@@ -128,6 +154,8 @@ public final class DebugPanelScreen extends Screen {
 			actionButton(layout.contentLeft, y + BUTTON_HEIGHT + BUTTON_GAP, layout.contentWidth(),
 					new ActionSpec("主线前进一步", "progress_next", "", 0, false));
 			actionButton(layout.contentLeft, y + (BUTTON_HEIGHT + BUTTON_GAP) * 2, layout.contentWidth(),
+					new ActionSpec("测试第 5 形态追逐", "pursuit_test", "", 5, true));
+			actionButton(layout.contentLeft, y + (BUTTON_HEIGHT + BUTTON_GAP) * 3, layout.contentWidth(),
 					new ActionSpec("重置个人主线", "progress_reset", "", 0, true));
 		}
 	}
@@ -155,6 +183,27 @@ public final class DebugPanelScreen extends Screen {
 					new ActionSpec("触发", "anomaly", id, 0, destructive));
 			actionButton(strongestX, y, buttonWidth,
 					new ActionSpec("最强", "anomaly", id, 1, true));
+		}
+	}
+
+	private void buildFileActions(Layout layout) {
+		actionButton(layout.contentRight - Math.min(118, layout.contentWidth()), layout.contentTop + 31,
+				Math.min(118, layout.contentWidth()),
+				new ActionSpec("重置文件进度", "files_lock", "", 0, true));
+
+		int listTop = fileListTop(layout);
+		int visibleRows = Math.max(1, (layout.contentBottom - listTop) / FILE_ROW_HEIGHT);
+		int buttonWidth = Math.clamp(layout.contentWidth() / 6, 44, 58);
+		for (int row = 0; row < visibleRows; row++) {
+			int index = fileScrollRow + row;
+			if (index >= FILES.size()) break;
+			String id = FILES.get(index);
+			boolean unlocked = fileFlag(status.unlockedFileMask(), index);
+			int y = listTop + row * FILE_ROW_HEIGHT + 3;
+			String action = unlocked ? "file_lock" : "file_unlock";
+			String label = unlocked ? "锁定" : "解锁";
+			actionButton(layout.contentRight - 8 - buttonWidth, y, buttonWidth,
+					new ActionSpec(label, action, id, 0, false));
 		}
 	}
 
@@ -189,7 +238,19 @@ public final class DebugPanelScreen extends Screen {
 	private void send(String action, String target, int value) {
 		if (ClientPlayNetworking.canSend(DebugActionPayload.TYPE)) {
 			if (action.equals("anomaly")) DebugPanelClient.expectAnomalyResponse(target);
+			if (action.equals("pursuit_test")) DebugPanelClient.expectPursuitResponse();
 			ClientPlayNetworking.send(new DebugActionPayload(action, target, value));
+			pollTicks = 0;
+		}
+	}
+
+	@Override
+	public void tick() {
+		super.tick();
+		ticksSinceStatus++;
+		if (++pollTicks >= LIVE_REFRESH_TICKS) {
+			pollTicks = 0;
+			send("poll", "", 0);
 		}
 	}
 
@@ -212,6 +273,7 @@ public final class DebugPanelScreen extends Screen {
 			case OVERVIEW -> renderOverview(graphics, layout);
 			case PROGRESS -> renderProgress(graphics, layout);
 			case ANOMALIES -> renderAnomalies(graphics, layout);
+			case FILES -> renderFiles(graphics, layout);
 		}
 		renderFooter(graphics, layout);
 
@@ -221,7 +283,9 @@ public final class DebugPanelScreen extends Screen {
 
 	private void renderHeader(GuiGraphics graphics, Layout layout) {
 		graphics.drawString(font, title, layout.left + 12, layout.top + 9, ACCENT_BRIGHT, false);
-		graphics.drawString(font, Component.literal("仅供开发测试"), layout.left + 12, layout.top + 23, MUTED, false);
+		boolean live = ticksSinceStatus <= LIVE_REFRESH_TICKS * 4;
+		graphics.drawString(font, Component.literal("仅供开发测试 · " + (live ? "实时同步" : "同步等待")),
+				layout.left + 12, layout.top + 23, live ? MUTED : WARNING, false);
 		String context = "玩家：" + status.playerName() + "  ·  " + section.label;
 		int maxWidth = Math.max(40, layout.panelWidth - font.width(title) - 42);
 		context = fit(context, maxWidth);
@@ -257,9 +321,8 @@ public final class DebugPanelScreen extends Screen {
 						"等级 " + status.anomalyTier() + " / " + status.anomalyCeiling() + "  ·  热度 " + status.anomalyHeat() + "%",
 						"自动触发：" + (status.anomaliesSuspended() ? "停止" : "运行") + "  ·  下次 " + status.nextSeconds() + " 秒"));
 		y += cardHeight + gap;
-		drawCard(graphics, layout.contentLeft, y, layout.contentWidth(), cardHeight, "构建与文件",
+		drawCard(graphics, layout.contentLeft, y, layout.contentWidth(), cardHeight, "世界与文件",
 				List.of("文件：" + status.unlockedFiles() + " / " + status.discoveredFiles(),
-						"身体构建：" + status.bodyProgress() + "  ·  阶段 " + status.bodyStage(),
 						"崩坏等级：" + status.decayStage() + (status.decayAuto() ? "（自动）" : "（手动）")));
 	}
 
@@ -310,6 +373,42 @@ public final class DebugPanelScreen extends Screen {
 				visibleRows, ANOMALIES.size(), anomalyScrollRow, anomalyMaxScrollRow);
 	}
 
+	private void renderFiles(GuiGraphics graphics, Layout layout) {
+		graphics.drawString(font, Component.literal("文件状态：" + status.discoveredFiles() + " / " + FILES.size()),
+				layout.contentLeft, layout.contentTop + 2, ACCENT_BRIGHT, false);
+		graphics.drawString(font, Component.literal(
+				"已解锁 " + status.unlockedFiles() + "  ·  未读 " + status.unreadFiles()),
+				layout.contentLeft, layout.contentTop + 16, TEXT, false);
+
+		int listTop = fileListTop(layout);
+		int listHeight = Math.max(0, layout.contentBottom - listTop);
+		graphics.fill(layout.contentLeft, listTop, layout.contentRight, layout.contentBottom, SIDEBAR);
+		graphics.renderOutline(layout.contentLeft, listTop, layout.contentWidth(), listHeight, BORDER);
+		int visibleRows = Math.max(1, listHeight / FILE_ROW_HEIGHT);
+		int buttonWidth = Math.clamp(layout.contentWidth() / 6, 44, 58);
+		int stateWidth = Math.clamp(layout.contentWidth() / 5, 48, 72);
+		int nameWidth = Math.max(20, layout.contentWidth() - buttonWidth - stateWidth - 30);
+		for (int row = 0; row < visibleRows; row++) {
+			int index = fileScrollRow + row;
+			if (index >= FILES.size()) break;
+			String id = FILES.get(index);
+			int y = listTop + row * FILE_ROW_HEIGHT;
+			if ((index & 1) == 0) graphics.fill(layout.contentLeft + 1, y + 1,
+					layout.contentRight - 7, y + FILE_ROW_HEIGHT - 1, CARD);
+			String state = fileState(index);
+			int stateColor = fileStateColor(index);
+			graphics.fill(layout.contentLeft + 5, y + 9, layout.contentLeft + 8,
+					y + 16, stateColor);
+			graphics.drawString(font, Component.literal(fit(DebugNames.file(id), nameWidth)),
+					layout.contentLeft + 12, y + 9, TEXT, false);
+			int stateX = layout.contentRight - 14 - buttonWidth - stateWidth;
+			graphics.drawString(font, Component.literal(fit(state, stateWidth)), stateX, y + 9,
+					stateColor, false);
+		}
+		renderScrollbar(graphics, layout.contentRight - 5, listTop + 2, Math.max(0, listHeight - 4),
+				visibleRows, FILES.size(), fileScrollRow, fileMaxScrollRow);
+	}
+
 	private void drawCard(GuiGraphics graphics, int x, int y, int width, int height,
 			String heading, List<String> lines) {
 		graphics.fill(x, y, x + width, y + height, CARD);
@@ -325,9 +424,9 @@ public final class DebugPanelScreen extends Screen {
 
 	private void renderFooter(GuiGraphics graphics, Layout layout) {
 		int available = Math.max(20, layout.panelWidth - 168);
-		String message = fit(status.message(), available);
+		String message = fit(statusMessage, available);
 		graphics.drawString(font, Component.literal(message), layout.left + 12, layout.footerTop + 13,
-				statusColor(status.message()), false);
+				statusColor(statusMessage), false);
 	}
 
 	private void renderConfirmation(GuiGraphics graphics, Layout layout) {
@@ -363,6 +462,13 @@ public final class DebugPanelScreen extends Screen {
 		if (section == Section.ANOMALIES && inside(mouseX, mouseY, layout.contentLeft,
 				anomalyListTop(layout), layout.contentRight, layout.contentBottom) && anomalyMaxScrollRow > 0) {
 			anomalyScrollRow = Math.clamp(anomalyScrollRow + delta, 0, anomalyMaxScrollRow);
+			rememberPage();
+			rebuildWidgets();
+			return true;
+		}
+		if (section == Section.FILES && inside(mouseX, mouseY, layout.contentLeft,
+				fileListTop(layout), layout.contentRight, layout.contentBottom) && fileMaxScrollRow > 0) {
+			fileScrollRow = Math.clamp(fileScrollRow + delta, 0, fileMaxScrollRow);
 			rememberPage();
 			rebuildWidgets();
 			return true;
@@ -405,6 +511,26 @@ public final class DebugPanelScreen extends Screen {
 		return layout.contentTop + ANOMALY_INFO_HEIGHT;
 	}
 
+	private int fileListTop(Layout layout) {
+		return layout.contentTop + FILE_INFO_HEIGHT;
+	}
+
+	private String fileState(int index) {
+		if (!fileFlag(status.discoveredFileMask(), index)) return "未发现";
+		if (!fileFlag(status.unlockedFileMask(), index)) return "待解锁";
+		return fileFlag(status.readFileMask(), index) ? "已读" : "未读";
+	}
+
+	private int fileStateColor(int index) {
+		if (!fileFlag(status.discoveredFileMask(), index)) return MUTED;
+		if (!fileFlag(status.unlockedFileMask(), index)) return WARNING;
+		return fileFlag(status.readFileMask(), index) ? TEXT : ACCENT_BRIGHT;
+	}
+
+	private static boolean fileFlag(int mask, int index) {
+		return (mask & 1 << index) != 0;
+	}
+
 	private String fit(String value, int maxWidth) {
 		if (maxWidth <= 0) return "";
 		if (font.width(value) <= maxWidth) return value;
@@ -439,25 +565,27 @@ public final class DebugPanelScreen extends Screen {
 	}
 
 	private void rememberPage() {
-		pageMemory = new PageMemory(section.ordinal(), anomalyScrollRow);
+		pageMemory = new PageMemory(section.ordinal(), anomalyScrollRow, fileScrollRow);
 	}
 
 	public int sectionCountForTesting() { return Section.values().length; }
 	public int anomalyCountForTesting() { return ANOMALIES.size(); }
+	public int fileCountForTesting() { return FILES.size(); }
+	public int liveRefreshTicksForTesting() { return LIVE_REFRESH_TICKS; }
 	public int rememberedSectionForTesting() { return pageMemory.sectionIndex; }
 	public int rememberedAnomalyScrollForTesting() { return pageMemory.anomalyScrollRow; }
 	public void triggerAnomalyForTesting(String id) { send("anomaly", id, 0); }
-	public String statusMessageForTesting() { return status.message(); }
+	public String statusMessageForTesting() { return statusMessage; }
 
 	private enum Section {
-		OVERVIEW("总览"), PROGRESS("主线"), ANOMALIES("异象");
+		OVERVIEW("总览"), PROGRESS("主线"), ANOMALIES("异象"), FILES("文件");
 		private final String label;
 		Section(String label) { this.label = label; }
 	}
 
 	private record ActionSpec(String label, String action, String target, int value, boolean confirm) { }
 	private record Pending(String label, String action, String target, int value) { }
-	private record PageMemory(int sectionIndex, int anomalyScrollRow) { }
+	private record PageMemory(int sectionIndex, int anomalyScrollRow, int fileScrollRow) { }
 	private record Modal(int left, int top, int width, int height) {
 		private int right() { return left + width; }
 		private int bottom() { return top + height; }

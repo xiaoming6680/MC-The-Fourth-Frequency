@@ -85,6 +85,16 @@
       "thefourthfrequency:device/terminal/anomaly/01"
     ]
   },
+  "alpha_corruption_warning": {
+    "sounds": [
+      "thefourthfrequency:client/alpha_corruption/warning"
+    ]
+  },
+  "alpha_corruption_collapse": {
+    "sounds": [
+      "thefourthfrequency:client/alpha_corruption/collapse"
+    ]
+  },
   "world_interface_altar": {
     "subtitle": "subtitles.thefourthfrequency.world_interface.altar",
     "sounds": [

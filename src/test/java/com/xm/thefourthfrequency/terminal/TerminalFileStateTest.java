@@ -14,11 +14,32 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class TerminalFileStateTest {
 	@Test
-	void catalogHasTheTwelveFixedFilesInStoryOrder() {
-		assertEquals(12, NarrativeFileCatalog.definitions().size());
+	void catalogHasSevenConsolidatedFilesInStoryOrder() {
+		assertEquals(7, NarrativeFileCatalog.definitions().size());
 		assertEquals("maintenance_handoff", NarrativeFileCatalog.definitions().getFirst().id());
-		assertEquals("encrypted_witness_file", NarrativeFileCatalog.definitions().get(6).id());
-		assertEquals("world_interface_entry_record", NarrativeFileCatalog.definitions().getLast().id());
+		assertEquals("encrypted_witness_file", NarrativeFileCatalog.definitions().get(5).id());
+		assertEquals("body_mapping_warning", NarrativeFileCatalog.definitions().getLast().id());
+		assertFalse(NarrativeFileCatalog.definitions().stream().anyMatch(definition ->
+				definition.id().equals("recovered_fragment")
+						|| definition.id().equals("correction_response_record")
+						|| definition.id().equals("world_interface_entry_record")));
+	}
+
+	@Test
+	void fileAttentionClearsWithoutReadingOrUnlockingStoryFiles() {
+		CompoundTag record = emptyRecord();
+		String hidden = HiddenFilePolicy.fileId(0);
+		assertTrue(TerminalFileState.discover(record, hidden, 10L, 20L, true));
+		assertEquals(1, TerminalFileState.unreadCount(record));
+		assertTrue(TerminalFileState.markAllSeen(record));
+		assertEquals(0, TerminalFileState.unreadCount(record));
+		assertFalse(TerminalFileState.read(record, hidden));
+		assertFalse(HiddenFilePolicy.allRead(record));
+
+		assertTrue(TerminalFileState.discover(record, HiddenFilePolicy.COMPLETE_FILE_ID, 30L, 40L, false));
+		assertEquals(0, TerminalFileState.unreadCount(record));
+		assertTrue(TerminalFileState.discover(record, HiddenFilePolicy.COMPLETE_FILE_ID, 50L, 60L, true));
+		assertEquals(1, TerminalFileState.unreadCount(record));
 	}
 
 	@Test

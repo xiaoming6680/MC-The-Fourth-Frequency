@@ -1,6 +1,7 @@
 package com.xm.thefourthfrequency.world;
 
 import com.xm.thefourthfrequency.content.TerminalData;
+import com.xm.thefourthfrequency.narrative.TerminalFileState;
 import com.xm.thefourthfrequency.state.NavigationState;
 import com.xm.thefourthfrequency.terminal.TerminalStructureTarget;
 import com.xm.thefourthfrequency.terminal.TerminalNavigationMath;
@@ -79,10 +80,6 @@ public final class StructureNavigationService {
 					found == null ? 0L : found.asLong(), found == null ? "" : dimension, now);
 			state.writeTo(record);
 		});
-		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player, Component.translatable(found == null
-				? "message.thefourthfrequency.navigation.not_found"
-				: "message.thefourthfrequency.navigation.ready",
-				Component.translatable("terminal.thefourthfrequency.navigation.target." + target.id())));
 		return true;
 	}
 
@@ -124,7 +121,8 @@ public final class StructureNavigationService {
 		data.updateTerminalRecord(player.getUUID(), record -> {
 			record.putBoolean(TerminalData.NAVIGATION_COMPLETION_UNREAD, false);
 			record.putBoolean(TerminalData.UNREAD_ALERT_ACTIVE,
-					com.xm.thefourthfrequency.terminal.TerminalSignalLog.unreadCount(record) > 0);
+					com.xm.thefourthfrequency.terminal.TerminalSignalLog.unreadCount(record) > 0
+							|| TerminalFileState.unreadCount(record) > 0);
 		});
 		return true;
 	}
@@ -152,6 +150,12 @@ public final class StructureNavigationService {
 	}
 
 	private static void onServerTick(MinecraftServer server) {
+		// Every other passive per-player polling service in this package (StoryProgressService,
+		// SurvivalProgressService, WorldDecayService, ...) throttles its own END_SERVER_TICK
+		// handler; this one previously ran a full terminalRecord() deep copy and structure search
+		// setup for every online player on every single tick regardless of whether navigation was
+		// even open.
+		if (server.getTickCount() % 20 != 0) return;
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) updatePlayer(player);
 	}
 
@@ -180,6 +184,9 @@ public final class StructureNavigationService {
 			record.putInt(TerminalData.NAVIGATION_COMPLETION_DIRECTION, direction);
 			new NavigationState("unresolved", "", false, "", 0L, "", player.level().getGameTime()).writeTo(record);
 		});
+		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+				Component.translatable("message.thefourthfrequency.navigation.structure_nearby",
+						Component.translatable("terminal.thefourthfrequency.navigation.target." + target.id())));
 		TerminalRuntimeService.synchronizeProjection(player);
 		TerminalRuntimeService.refresh(player);
 	}

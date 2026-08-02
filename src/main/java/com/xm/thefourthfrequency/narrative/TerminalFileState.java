@@ -23,6 +23,7 @@ public final class TerminalFileState {
 				state.putLong("unlocked_day_time", Math.max(0L, dayTime));
 				states.set(index, state);
 				record.put(TerminalData.FILE_STATES, states);
+				notifyUnread(record);
 				return true;
 			}
 			return false;
@@ -39,6 +40,21 @@ public final class TerminalFileState {
 		state.putLong("read_day_time", 0L);
 		states.add(state);
 		record.put(TerminalData.FILE_STATES, states);
+		if (unlocked) notifyUnread(record);
+		return true;
+	}
+
+	public static int unreadCount(CompoundTag record) {
+		return Math.max(0, record.getIntOr(TerminalData.UNREAD_FILE_COUNT, 0));
+	}
+
+	public static void notifyUnread(CompoundTag record) {
+		record.putInt(TerminalData.UNREAD_FILE_COUNT, Math.min(128, unreadCount(record) + 1));
+	}
+
+	public static boolean markAllSeen(CompoundTag record) {
+		if (unreadCount(record) == 0) return false;
+		record.putInt(TerminalData.UNREAD_FILE_COUNT, 0);
 		return true;
 	}
 
@@ -125,11 +141,13 @@ public final class TerminalFileState {
 		for (int index = 0; index < states.size(); index++) {
 			CompoundTag state = states.getCompoundOrEmpty(index);
 			if (!id.equals(state.getStringOr("id", ""))) continue;
+			boolean wasUnlocked = state.getBooleanOr("unlocked", false);
 			state.putBoolean("unlocked", unlocked);
 			state.putLong("unlocked_game_time", unlocked ? Math.max(0L, gameTime) : 0L);
 			state.putLong("unlocked_day_time", unlocked ? Math.max(0L, dayTime) : 0L);
 			states.set(index, state);
 			record.put(TerminalData.FILE_STATES, states);
+			if (unlocked && !wasUnlocked) notifyUnread(record);
 			return true;
 		}
 		return false;

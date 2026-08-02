@@ -396,7 +396,7 @@ public final class FragmentInvestigationService {
 			});
 		}
 		ServerPlayNetworking.send(discoverer, new PrivateAnomalyPayload(
-				"fragment_" + (candidate.fragment() + 1), candidate.group().code, 0, 0));
+				"fragment_" + (candidate.fragment() + 1), candidate.group().code));
 		AudioService.play(discoverer.level(), discoverer.blockPosition(), AudioService.Cue.FOURTH_BAND);
 		for (ServerPlayer online : discoverer.level().getServer().getPlayerList().getPlayers()) {
 			if (data.terminalRecord(online.getUUID()).isEmpty()) continue;
