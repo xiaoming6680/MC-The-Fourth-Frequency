@@ -67,10 +67,25 @@ final class PursuitProgressPolicyTest {
 	}
 
 	@Test
-	void finalEyeRequiresOnlyOneResolvedPursuit() {
+	void finalEyeRequiresOnlyOneEncounteredPursuit() {
 		assertFalse(PursuitProgressPolicy.finalEyeReady(-1));
 		assertFalse(PursuitProgressPolicy.finalEyeReady(0));
 		assertTrue(PursuitProgressPolicy.finalEyeReady(1));
+	}
+
+	@Test
+	void encounteredChasesCountCapturesSoTheFinaleIsNeverSkillLocked() {
+		// A player caught on their first chase gains no resolved chase, so form progression stays
+		// put - but the encounter still counts and the final Eye must accept it.
+		int afterFirstCapture = PursuitProgressPolicy.encounteredAfterResolution(0);
+		assertEquals(1, afterFirstCapture);
+		assertTrue(PursuitProgressPolicy.finalEyeReady(afterFirstCapture));
+		assertEquals(1, PursuitProgressPolicy.actualForm(0));
+
+		assertEquals(1, PursuitProgressPolicy.encounteredAfterResolution(-3));
+		assertEquals(PursuitProgressPolicy.MAX_TRACKED_ENCOUNTERS,
+				PursuitProgressPolicy.encounteredAfterResolution(
+						PursuitProgressPolicy.MAX_TRACKED_ENCOUNTERS));
 	}
 
 	@Test
@@ -80,5 +95,15 @@ final class PursuitProgressPolicyTest {
 		assertEquals(1, PursuitProgressPolicy.terminalVisualStage(3, 3, 5));
 		assertEquals(1, PursuitProgressPolicy.terminalVisualStage(3, 4, 3));
 		assertEquals(2, PursuitProgressPolicy.terminalVisualStage(3, 4, 4));
+	}
+	@Test
+	void captureMaxHealthPenaltyStopsAtTheSixHeartFloor() {
+		assertEquals(-2.0D, PursuitProgressPolicy.resolutionMaxHealthDelta(true, 20.0D));
+		assertEquals(-2.0D, PursuitProgressPolicy.resolutionMaxHealthDelta(true, 14.0D));
+		assertEquals(0.0D, PursuitProgressPolicy.resolutionMaxHealthDelta(true,
+				PursuitProgressPolicy.CAPTURE_PENALTY_FLOOR_HEALTH));
+		assertEquals(0.0D, PursuitProgressPolicy.resolutionMaxHealthDelta(true, 4.0D));
+		assertEquals(2.0D, PursuitProgressPolicy.resolutionMaxHealthDelta(false, 4.0D));
+		assertEquals(2.0D, PursuitProgressPolicy.resolutionMaxHealthDelta(false, 40.0D));
 	}
 }

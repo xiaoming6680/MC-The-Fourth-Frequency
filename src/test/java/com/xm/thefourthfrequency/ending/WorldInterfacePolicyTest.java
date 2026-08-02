@@ -51,24 +51,56 @@ class WorldInterfacePolicyTest {
 	}
 
 	@Test
-	void failureErosionUsesOnlyTheFailureResolutionClock() {
-		assertEquals(0.0F, WorldInterfacePolicy.failurePresentationProgress(
-				WorldInterfaceStage.PHASE_3, 1_000L, 1_120L, 120), EPSILON);
-		assertEquals(0.0F, WorldInterfacePolicy.failurePresentationProgress(
-				WorldInterfaceStage.SUCCESS_RESOLUTION, 1_000L, 1_120L, 120), EPSILON);
-		assertEquals(0.0F, WorldInterfacePolicy.failurePresentationProgress(
-				WorldInterfaceStage.PORTAL_OPEN, 1_000L, 1_120L, 120), EPSILON);
-		assertEquals(0.0F, WorldInterfacePolicy.failurePresentationProgress(
-				WorldInterfaceStage.FAILURE_RESOLUTION, -1L, 1_120L, 120), EPSILON);
+	void combatErosionStaysCleanEarlyThenAcceleratesWithTheCollapseTimer() {
+		// Nothing outside the fight erodes, and the opening minutes stay clean so the island only
+		// starts failing once the deadline is genuinely close.
+		assertEquals(0.0F, WorldInterfacePolicy.presentationErosionProgress(
+				WorldInterfaceStage.SUMMONING, 11_000L, 0, -1L, 0L, 120), EPSILON);
+		assertEquals(0.0F, WorldInterfacePolicy.presentationErosionProgress(
+				WorldInterfaceStage.PHASE_1, 0L, 0, -1L, 0L, 120), EPSILON);
+		assertEquals(0.0F, WorldInterfacePolicy.presentationErosionProgress(
+				WorldInterfaceStage.PHASE_1, 4_800L, 0, -1L, 0L, 120), EPSILON);
 
-		assertEquals(0.0F, WorldInterfacePolicy.failurePresentationProgress(
-				WorldInterfaceStage.FAILURE_RESOLUTION, 1_000L, 1_000L, 120), EPSILON);
-		assertEquals(0.5F, WorldInterfacePolicy.failurePresentationProgress(
-				WorldInterfaceStage.FAILURE_RESOLUTION, 1_000L, 1_060L, 120), EPSILON);
-		assertEquals(1.0F, WorldInterfacePolicy.failurePresentationProgress(
-				WorldInterfaceStage.FAILURE_RESOLUTION, 1_000L, 1_120L, 120), EPSILON);
-		assertEquals(1.0F, WorldInterfacePolicy.failurePresentationProgress(
-				WorldInterfaceStage.FAILURE_RESOLUTION, 1_000L, 2_000L, 120), EPSILON);
+		// Past the start point it climbs, and is still climbing right up to the deadline.
+		float quarter = WorldInterfacePolicy.presentationErosionProgress(
+				WorldInterfaceStage.PHASE_2, 7_200L, 0, -1L, 0L, 120);
+		float late = WorldInterfacePolicy.presentationErosionProgress(
+				WorldInterfaceStage.PHASE_3, 10_800L, 0, -1L, 0L, 120);
+		assertTrue(quarter > 0.0F);
+		assertTrue(late > quarter);
+		assertEquals(WorldInterfacePolicy.COMBAT_EROSION_CEILING,
+				WorldInterfacePolicy.presentationErosionProgress(
+						WorldInterfaceStage.PHASE_3, 12_000L, 0, -1L, 0L, 120), EPSILON);
+
+		// Destroyed anchors push the collapse clock forward, so they also visibly age the world.
+		assertTrue(WorldInterfacePolicy.presentationErosionProgress(
+						WorldInterfaceStage.PHASE_3, 7_200L, 4, -1L, 0L, 120)
+				> WorldInterfacePolicy.presentationErosionProgress(
+						WorldInterfaceStage.PHASE_3, 7_200L, 0, -1L, 0L, 120));
+	}
+
+	@Test
+	void losingContinuesFromTheCombatCeilingWhileWinningRestoresTheWorld() {
+		// Failure picks up where combat left off rather than snapping back to zero first.
+		assertEquals(WorldInterfacePolicy.COMBAT_EROSION_CEILING,
+				WorldInterfacePolicy.presentationErosionProgress(
+						WorldInterfaceStage.FAILURE_RESOLUTION, 12_000L, 0, 1_000L, 1_000L, 120), EPSILON);
+		assertEquals(WorldInterfacePolicy.COMBAT_EROSION_CEILING,
+				WorldInterfacePolicy.presentationErosionProgress(
+						WorldInterfaceStage.FAILURE_RESOLUTION, 12_000L, 0, -1L, 1_120L, 120), EPSILON);
+		float half = WorldInterfacePolicy.presentationErosionProgress(
+				WorldInterfaceStage.FAILURE_RESOLUTION, 12_000L, 0, 1_000L, 1_060L, 120);
+		assertTrue(half > WorldInterfacePolicy.COMBAT_EROSION_CEILING && half < 1.0F);
+		assertEquals(1.0F, WorldInterfacePolicy.presentationErosionProgress(
+				WorldInterfaceStage.FAILURE_RESOLUTION, 12_000L, 0, 1_000L, 1_120L, 120), EPSILON);
+		assertEquals(1.0F, WorldInterfacePolicy.presentationErosionProgress(
+				WorldInterfaceStage.FAILURE_RESOLUTION, 12_000L, 0, 1_000L, 2_000L, 120), EPSILON);
+
+		// Winning cuts the interface, and the materials come back immediately.
+		assertEquals(0.0F, WorldInterfacePolicy.presentationErosionProgress(
+				WorldInterfaceStage.SUCCESS_RESOLUTION, 12_000L, 10, 1_000L, 1_120L, 120), EPSILON);
+		assertEquals(0.0F, WorldInterfacePolicy.presentationErosionProgress(
+				WorldInterfaceStage.PORTAL_OPEN, 12_000L, 10, 1_000L, 1_120L, 120), EPSILON);
 	}
 
 	@Test

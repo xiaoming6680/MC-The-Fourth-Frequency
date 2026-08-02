@@ -2,10 +2,13 @@ package com.xm.thefourthfrequency.client_ui;
 
 import com.xm.thefourthfrequency.networking.TerminalNoticePayload;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudStatusBarHeightRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.util.Util;
 
 import java.util.ArrayList;
@@ -13,38 +16,67 @@ import java.util.List;
 
 /**
  * Throttled priority notice stack. Incoming feedback waits in a bounded queue, then enters from the
- * bottom at a readable cadence. Important notices retain priority without bypassing that cadence.
+ * bottom at a readable cadence, and the oldest line at the top always leaves first. Important
+ * notices retain priority without bypassing that cadence.
+ *
+ * <p>Every deadline is suspended while the stack cannot be read - hidden HUD, an open screen, a
+ * paused single player session, or a pursuit holding the queue - so a notice is never spent behind
+ * something else and the stack never snaps into place when play resumes.
  */
 public final class TerminalNoticeHud {
 	static final int MAX_VISIBLE = 3;
 	static final int MAX_PENDING = 12;
 	static final long HOLD_MILLIS = 2_800L;
+	static final long HOLD_CEILING_MILLIS = 6_000L;
+	static final long HOLD_FLOOR_MILLIS = 1_600L;
+	static final long ENTER_MILLIS = 180L;
 	static final long EXIT_MILLIS = 260L;
 	static final long MIN_APPEAR_INTERVAL_MILLIS = 900L;
+	static final long MIN_APPEAR_FLOOR_MILLIS = 360L;
 	static final long DUPLICATE_WINDOW_MILLIS = 5_000L;
-	private static final int SLOT_HEIGHT = 16;
+	/** A notice that waited this long has outlived the moment it described, so it is dropped. */
+	static final long PENDING_TTL_MILLIS = 20_000L;
+	static final long ATTENTION_INTERVAL_MILLIS = 1_100L;
 	private static final int MAX_RECENT = 64;
+	private static final int MAX_LINES = 3;
+	private static final int MAX_LINE_WIDTH = 220;
+	private static final int PADDING_X = 7;
+	private static final int PADDING_Y = 3;
+	private static final int ENTRY_GAP = 2;
+	private static final int SLIDE_IN_PIXELS = 11;
+	private static final int EXIT_LIFT_PIXELS = 6;
+	/**
+	 * Clearance between the tallest vanilla status bar and the bottom of the stack. It keeps the
+	 * panel above both the held item name and the vanilla action bar line, which share that strip.
+	 */
+	private static final int BASE_CLEARANCE = 21;
+	private static final int FALLBACK_STATUS_HEIGHT = 49;
 	private static final int DEFAULT_BACKGROUND = 0x101A14;
 	private static final int DEFAULT_BORDER = 0x6FA77A;
+	private static final int DEFAULT_TEXT = 0xD8F4DD;
 	private static final int TASK_BACKGROUND = 0x185C32;
 	private static final int TASK_BORDER = 0x72E595;
 	private static final int PURSUIT_BACKGROUND = 0x59151B;
 	private static final int PURSUIT_BORDER = 0xF05B65;
 	private static final int PURSUIT_TEXT = 0xFFE2E4;
+	private static final int DENIED_BACKGROUND = 0x3A2412;
+	private static final int DENIED_BORDER = 0xC98A3C;
+	private static final int DENIED_TEXT = 0xF5DDBA;
 	private static final NoticeEntry PURSUIT_STATUS = new NoticeEntry(
 			Component.translatable("message.thefourthfrequency.pursuit.try_escape"),
-			TerminalNoticePayload.TONE_PURSUIT_WARNING, 0.0D, 0);
+			TerminalNoticePayload.TONE_PURSUIT_WARNING);
 	private static final NoticeEntry ESCAPE_STATUS = new NoticeEntry(
 			Component.translatable("message.thefourthfrequency.pursuit.escaped_temporary"),
-			TerminalNoticePayload.TONE_TASK_COMPLETE, 0.0D, 0);
+			TerminalNoticePayload.TONE_TASK_COMPLETE);
 	private static final List<NoticeEntry> ENTRIES = new ArrayList<>();
 	private static final List<NoticeEntry> PENDING = new ArrayList<>();
 	private static final List<RecentNotice> RECENT = new ArrayList<>();
-	private static long bottomActivatedAt;
 	private static long lastActivatedAt;
-	private static long lastRenderAt;
+	private static long lastAttentionAt;
+	private static long lastFrameAt;
 	private static NoticeEntry exiting;
 	private static boolean initialized;
+	private static boolean statusHeightUnavailable;
 
 	private TerminalNoticeHud() {
 	}
@@ -52,6 +84,8 @@ public final class TerminalNoticeHud {
 	public static void initialize() {
 		if (initialized) return;
 		initialized = true;
+		// Kept on the tail callback rather than a hud element: the pursuit and anomaly overlays draw
+		// from the same callback, and the stack has to stay readable on top of them.
 		HudRenderCallback.EVENT.register((graphics, tickCounter) -> render(graphics));
 	}
 
@@ -61,9 +95,12 @@ public final class TerminalNoticeHud {
 
 	public static void enqueue(Component message, int tone) {
 		long now = Util.getMillis();
-		if (duplicateRecently(message, tone, now)) return;
-		remember(message, tone, now);
-		NoticeEntry entry = new NoticeEntry(message, tone, -0.65D, 0);
+		String key = noticeKey(message, tone);
+		if (mergeDuplicate(key, now)) return;
+		if (duplicateRecently(key, now)) return;
+		remember(key, now);
+		NoticeEntry entry = new NoticeEntry(message, tone);
+		entry.queuedAt = now;
 		int priority = priority(tone);
 		int insertion = PENDING.size();
 		for (int index = 0; index < PENDING.size(); index++) {
@@ -76,16 +113,49 @@ public final class TerminalNoticeHud {
 		trimPending();
 	}
 
+	/** Advances the queue by one frame; only reached while the stack is actually readable. */
+	private static void advance(long now) {
+		if (exiting != null && now - exiting.exitStartedAt >= EXIT_MILLIS) finishExit();
+		PENDING.removeIf(entry -> now - entry.queuedAt >= PENDING_TTL_MILLIS);
+		promotePending(now);
+		if (exiting != null || ENTRIES.isEmpty()) return;
+		if (now < ENTRIES.getFirst().expiresAt) return;
+		// The oldest line at the top leaves first, so the entries below it never move underneath it.
+		exiting = ENTRIES.getFirst();
+		exiting.exitStartedAt = now;
+	}
+
 	private static void promotePending(long now) {
-		if (PENDING.isEmpty() || exiting != null || ENTRIES.size() >= MAX_VISIBLE) return;
-		if (!ENTRIES.isEmpty() && now - lastActivatedAt < MIN_APPEAR_INTERVAL_MILLIS) return;
+		if (PENDING.isEmpty() || visibleCount() >= MAX_VISIBLE) return;
+		if (!ENTRIES.isEmpty() && now - lastActivatedAt < appearInterval()) return;
 		NoticeEntry pending = PENDING.removeFirst();
-		for (NoticeEntry entry : ENTRIES) entry.targetSlot++;
-		ENTRIES.add(new NoticeEntry(pending.message, pending.tone, -0.65D, 0));
-		bottomActivatedAt = now;
+		pending.promotedAt = now;
+		pending.expiresAt = now + holdMillis(pending);
+		pending.currentOffset = -SLIDE_IN_PIXELS;
+		ENTRIES.add(pending);
 		lastActivatedAt = now;
-		lastRenderAt = now;
-		if (pending.tone != TerminalNoticePayload.TONE_NONE) TerminalClientAudio.attention(pending.tone);
+		if (pending.tone != TerminalNoticePayload.TONE_NONE
+				&& now - lastAttentionAt >= ATTENTION_INTERVAL_MILLIS) {
+			lastAttentionAt = now;
+			TerminalClientAudio.attention(pending.tone);
+		}
+	}
+
+	/** A backlog tightens the cadence so late notices still land near the event that caused them. */
+	private static long appearInterval() {
+		return Math.max(MIN_APPEAR_FLOOR_MILLIS, MIN_APPEAR_INTERVAL_MILLIS - PENDING.size() * 60L);
+	}
+
+	/** Longer lines hold longer, and a deep backlog shortens every hold within the same bounds. */
+	private static long holdMillis(NoticeEntry entry) {
+		int width = Minecraft.getInstance().font.width(entry.display());
+		long readable = HOLD_MILLIS + width * 6L;
+		long pressure = Math.min(1_200L, PENDING.size() * 120L);
+		return Math.clamp(readable - pressure, HOLD_FLOOR_MILLIS, HOLD_CEILING_MILLIS);
+	}
+
+	private static int visibleCount() {
+		return exiting == null ? ENTRIES.size() : ENTRIES.size() - 1;
 	}
 
 	private static void trimPending() {
@@ -99,16 +169,32 @@ public final class TerminalNoticeHud {
 		}
 	}
 
-	private static boolean duplicateRecently(Component message, int tone, long now) {
-		String key = noticeKey(message, tone);
+	/** A repeat of something still on screen or still queued becomes a counter instead of a drop. */
+	private static boolean mergeDuplicate(String key, long now) {
+		for (NoticeEntry entry : PENDING) {
+			if (!entry.key.equals(key)) continue;
+			entry.repeat++;
+			entry.queuedAt = now;
+			return true;
+		}
+		for (NoticeEntry entry : ENTRIES) {
+			if (entry == exiting || !entry.key.equals(key)) continue;
+			entry.repeat++;
+			entry.expiresAt = Math.max(entry.expiresAt, now + HOLD_MILLIS);
+			return true;
+		}
+		return false;
+	}
+
+	private static boolean duplicateRecently(String key, long now) {
 		RECENT.removeIf(entry -> now - entry.createdAt >= DUPLICATE_WINDOW_MILLIS);
 		for (RecentNotice entry : RECENT) if (entry.key.equals(key)) return true;
 		return false;
 	}
 
-	private static void remember(Component message, int tone, long now) {
+	private static void remember(String key, long now) {
 		if (RECENT.size() >= MAX_RECENT) RECENT.removeFirst();
-		RECENT.add(new RecentNotice(noticeKey(message, tone), now));
+		RECENT.add(new RecentNotice(key, now));
 	}
 
 	private static String noticeKey(Component message, int tone) {
@@ -118,6 +204,8 @@ public final class TerminalNoticeHud {
 	private static int priority(int tone) {
 		return switch (tone) {
 			case TerminalNoticePayload.TONE_PURSUIT_WARNING -> 3;
+			// A refused action is direct feedback on what the player just did, so it outranks narration.
+			case TerminalNoticePayload.TONE_DENIED -> 2;
 			case TerminalNoticePayload.TONE_TASK_COMPLETE -> 2;
 			case TerminalNoticePayload.TONE_UNREAD -> 1;
 			default -> 0;
@@ -130,70 +218,147 @@ public final class TerminalNoticeHud {
 			clear();
 			return;
 		}
-		if (client.options.hideGui) return;
 		long now = Util.getMillis();
-		int baseY = graphics.guiHeight() - 62;
+		long delta = lastFrameAt == 0L ? 0L : Math.max(0L, now - lastFrameAt);
+		lastFrameAt = now;
+		if (client.options.hideGui) {
+			suspend(delta);
+			return;
+		}
+		Font font = client.font;
+		int anchor = anchorY(graphics);
 		if (PursuitPresentationClient.pursuitHudActive()) {
-			renderEntry(graphics, client.font, PURSUIT_STATUS, baseY, now);
+			suspend(delta);
+			drawEntry(graphics, font, PURSUIT_STATUS, anchor, 0.0D, 230);
 			return;
 		}
 		if (PursuitPresentationClient.escapeHudActive()) {
-			renderEntry(graphics, client.font, ESCAPE_STATUS, baseY, now);
+			suspend(delta);
+			drawEntry(graphics, font, ESCAPE_STATUS, anchor, 0.0D, 230);
 			return;
 		}
-		if (PursuitPresentationClient.holdsNoticeQueue()) return;
-		if (exiting != null && now - exiting.exitStartedAt >= EXIT_MILLIS) finishExit(now);
-		promotePending(now);
+		if (PursuitPresentationClient.holdsNoticeQueue()) {
+			suspend(delta);
+			return;
+		}
+		boolean frozen = client.isPaused() || client.screen != null;
+		if (frozen) suspend(delta);
+		else advance(now);
 		if (ENTRIES.isEmpty()) return;
-		if (exiting == null && now - bottomActivatedAt >= HOLD_MILLIS) {
-			exiting = ENTRIES.getLast();
-			exiting.exitStartedAt = now;
-		}
-		double elapsed = Math.clamp(now - lastRenderAt, 0L, 100L);
-		double movement = 1.0D - Math.exp(-elapsed / 70.0D);
+		int wrapWidth = wrapWidth(graphics);
+		layout(font, wrapWidth, frozen ? 0L : delta);
 		for (NoticeEntry entry : ENTRIES) {
-			entry.currentSlot += (entry.targetSlot - entry.currentSlot) * movement;
+			double exitProgress = entry == exiting
+					? Math.clamp((now - entry.exitStartedAt) / (double) EXIT_MILLIS, 0.0D, 1.0D) : 0.0D;
+			double enterProgress = Math.clamp(
+					(now - entry.promotedAt) / (double) ENTER_MILLIS, 0.0D, 1.0D);
+			int alpha = (int) Math.round(230.0D * enterProgress * (1.0D - exitProgress));
+			if (alpha <= 0) continue;
+			drawEntry(graphics, font, entry, anchor,
+					entry.currentOffset + exitProgress * EXIT_LIFT_PIXELS, alpha);
 		}
-		lastRenderAt = now;
-
-		for (NoticeEntry entry : ENTRIES) renderEntry(graphics, client.font, entry, baseY, now);
 	}
 
-	private static void renderEntry(GuiGraphics graphics, Font font, NoticeEntry entry, int baseY, long now) {
-		double exitProgress = entry == exiting
-				? Math.clamp((now - entry.exitStartedAt) / (double) EXIT_MILLIS, 0.0D, 1.0D) : 0.0D;
-		int alpha = (int) Math.round(230.0D * (1.0D - exitProgress));
-		if (alpha <= 0) return;
-		int textWidth = Math.max(1, font.width(entry.message));
-		float scale = Math.min(1.0F, Math.max(0.62F,
-				(graphics.guiWidth() - 36.0F) / (textWidth + 16.0F)));
-		int panelWidth = Math.round((textWidth + 14) * scale);
-		int x = graphics.guiWidth() / 2;
-		int y = baseY - (int) Math.round(entry.currentSlot * SLOT_HEIGHT) + (int) Math.round(exitProgress * 8.0D);
-		int left = x - panelWidth / 2;
-		boolean pursuitWarning = entry.tone == TerminalNoticePayload.TONE_PURSUIT_WARNING;
-		boolean taskComplete = entry.tone == TerminalNoticePayload.TONE_TASK_COMPLETE;
-		int backgroundColor = pursuitWarning ? PURSUIT_BACKGROUND
-				: taskComplete ? TASK_BACKGROUND : DEFAULT_BACKGROUND;
-		int borderColor = pursuitWarning ? PURSUIT_BORDER : taskComplete ? TASK_BORDER : DEFAULT_BORDER;
-		int textColor = pursuitWarning ? PURSUIT_TEXT : 0xD8F4DD;
-		int background = alpha << 24 | backgroundColor;
-		int border = Math.min(255, alpha + 20) << 24 | borderColor;
-		graphics.fill(left, y - 3, left + panelWidth, y + Math.round(12 * scale), background);
-		graphics.renderOutline(left, y - 3, panelWidth, Math.max(8, Math.round(12 * scale) + 3), border);
-		graphics.pose().pushMatrix();
-		graphics.pose().translate(x, y);
-		graphics.pose().scale(scale, scale);
-		graphics.drawString(font, entry.message, -textWidth / 2, 0, alpha << 24 | textColor, true);
-		graphics.pose().popMatrix();
+	/**
+	 * Shifts every deadline by the frames the stack was not readable for, so a hold costs no display
+	 * time and nothing is already expired when the stack comes back.
+	 */
+	private static void suspend(long delta) {
+		if (delta <= 0L) return;
+		for (NoticeEntry entry : ENTRIES) {
+			entry.promotedAt += delta;
+			entry.expiresAt += delta;
+			entry.exitStartedAt += delta;
+		}
+		for (NoticeEntry entry : PENDING) entry.queuedAt += delta;
+		lastActivatedAt += delta;
+		lastAttentionAt += delta;
 	}
 
-	private static void finishExit(long now) {
+	private static void layout(Font font, int wrapWidth, long delta) {
+		double offset = 0.0D;
+		for (int index = ENTRIES.size() - 1; index >= 0; index--) {
+			NoticeEntry entry = ENTRIES.get(index);
+			entry.targetOffset = offset;
+			offset += entry.height(font, wrapWidth) + ENTRY_GAP;
+		}
+		if (delta <= 0L) return;
+		double movement = 1.0D - Math.exp(-Math.clamp(delta, 0L, 100L) / 70.0D);
+		for (NoticeEntry entry : ENTRIES) {
+			entry.currentOffset += (entry.targetOffset - entry.currentOffset) * movement;
+		}
+	}
+
+	private static void drawEntry(GuiGraphics graphics, Font font, NoticeEntry entry, int anchor,
+			double lift, int alpha) {
+		int wrapWidth = wrapWidth(graphics);
+		List<FormattedCharSequence> lines = entry.lines(font, wrapWidth);
+		if (lines.isEmpty()) return;
+		int textWidth = 0;
+		for (FormattedCharSequence line : lines) textWidth = Math.max(textWidth, font.width(line));
+		int panelWidth = textWidth + PADDING_X * 2;
+		int panelHeight = lines.size() * font.lineHeight + PADDING_Y * 2;
+		int centerX = graphics.guiWidth() / 2;
+		int left = centerX - panelWidth / 2;
+		int bottom = anchor - (int) Math.round(lift);
+		int top = bottom - panelHeight;
+		int backgroundColor = switch (entry.tone) {
+			case TerminalNoticePayload.TONE_PURSUIT_WARNING -> PURSUIT_BACKGROUND;
+			case TerminalNoticePayload.TONE_DENIED -> DENIED_BACKGROUND;
+			case TerminalNoticePayload.TONE_TASK_COMPLETE -> TASK_BACKGROUND;
+			default -> DEFAULT_BACKGROUND;
+		};
+		int borderColor = switch (entry.tone) {
+			case TerminalNoticePayload.TONE_PURSUIT_WARNING -> PURSUIT_BORDER;
+			case TerminalNoticePayload.TONE_DENIED -> DENIED_BORDER;
+			case TerminalNoticePayload.TONE_TASK_COMPLETE -> TASK_BORDER;
+			default -> DEFAULT_BORDER;
+		};
+		int textColor = switch (entry.tone) {
+			case TerminalNoticePayload.TONE_PURSUIT_WARNING -> PURSUIT_TEXT;
+			case TerminalNoticePayload.TONE_DENIED -> DENIED_TEXT;
+			default -> DEFAULT_TEXT;
+		};
+		graphics.fill(left, top, left + panelWidth, bottom, alpha << 24 | backgroundColor);
+		graphics.renderOutline(left, top, panelWidth, panelHeight,
+				Math.min(255, alpha + 20) << 24 | borderColor);
+		int lineY = top + PADDING_Y;
+		for (FormattedCharSequence line : lines) {
+			graphics.drawString(font, line, centerX - font.width(line) / 2, lineY,
+					alpha << 24 | textColor, true);
+			lineY += font.lineHeight;
+		}
+	}
+
+	private static int wrapWidth(GuiGraphics graphics) {
+		return Math.max(60, Math.min(MAX_LINE_WIDTH, graphics.guiWidth() - 40));
+	}
+
+	/**
+	 * Follows the status bars instead of a fixed inset, so a mount health bar or another mod's bar
+	 * pushes the stack up exactly as it pushes the vanilla lines up.
+	 */
+	private static int anchorY(GuiGraphics graphics) {
+		return graphics.guiHeight() - (statusBarHeight() + BASE_CLEARANCE);
+	}
+
+	private static int statusBarHeight() {
+		if (statusHeightUnavailable) return FALLBACK_STATUS_HEIGHT;
+		try {
+			return Math.max(HudStatusBarHeightRegistry.getHeight(VanillaHudElements.ARMOR_BAR),
+					HudStatusBarHeightRegistry.getHeight(VanillaHudElements.AIR_BAR));
+		} catch (RuntimeException unavailable) {
+			// A removed or replaced vanilla bar leaves the registry unable to answer; vanilla spacing
+			// is the right fallback and retrying every frame would only repeat the failure.
+			statusHeightUnavailable = true;
+			return FALLBACK_STATUS_HEIGHT;
+		}
+	}
+
+	private static void finishExit() {
 		if (exiting == null) return;
 		ENTRIES.remove(exiting);
 		exiting = null;
-		for (NoticeEntry entry : ENTRIES) entry.targetSlot = Math.max(0, entry.targetSlot - 1);
-		bottomActivatedAt = now;
 	}
 
 	private static void clear() {
@@ -201,9 +366,9 @@ public final class TerminalNoticeHud {
 		PENDING.clear();
 		RECENT.clear();
 		exiting = null;
-		bottomActivatedAt = 0L;
 		lastActivatedAt = 0L;
-		lastRenderAt = 0L;
+		lastAttentionAt = 0L;
+		lastFrameAt = 0L;
 	}
 
 	static int queuedForTesting() {
@@ -216,16 +381,48 @@ public final class TerminalNoticeHud {
 
 	private static final class NoticeEntry {
 		private final Component message;
+		private final String key;
 		private final int tone;
-		private double currentSlot;
-		private int targetSlot;
+		private int repeat = 1;
+		private long queuedAt;
+		private long promotedAt;
+		private long expiresAt;
 		private long exitStartedAt;
+		private double currentOffset;
+		private double targetOffset;
+		private Component cachedDisplay;
+		private int cachedDisplayRepeat;
+		private List<FormattedCharSequence> cachedLines = List.of();
+		private int cachedLineRepeat;
+		private int cachedWrapWidth = -1;
 
-		private NoticeEntry(Component message, int tone, double currentSlot, int targetSlot) {
+		private NoticeEntry(Component message, int tone) {
 			this.message = message;
+			this.key = noticeKey(message, tone);
 			this.tone = tone;
-			this.currentSlot = currentSlot;
-			this.targetSlot = targetSlot;
+		}
+
+		private Component display() {
+			if (repeat <= 1) return message;
+			if (cachedDisplay == null || cachedDisplayRepeat != repeat) {
+				cachedDisplayRepeat = repeat;
+				cachedDisplay = Component.empty().append(message).append(" ×" + repeat);
+			}
+			return cachedDisplay;
+		}
+
+		private List<FormattedCharSequence> lines(Font font, int wrapWidth) {
+			if (cachedWrapWidth != wrapWidth || cachedLineRepeat != repeat) {
+				cachedWrapWidth = wrapWidth;
+				cachedLineRepeat = repeat;
+				List<FormattedCharSequence> split = font.split(display(), wrapWidth);
+				cachedLines = split.size() <= MAX_LINES ? split : List.copyOf(split.subList(0, MAX_LINES));
+			}
+			return cachedLines;
+		}
+
+		private int height(Font font, int wrapWidth) {
+			return lines(font, wrapWidth).size() * font.lineHeight + PADDING_Y * 2;
 		}
 	}
 

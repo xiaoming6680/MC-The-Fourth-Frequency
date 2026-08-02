@@ -34,7 +34,7 @@ public final class PursuitDirector {
 		if (family == null || family == PursuitDimensions.Family.END) {
 			return DebugStartResult.UNSUPPORTED_DIMENSION;
 		}
-		if (!PursuitSafetyPolicy.canBegin(player, record, data)) return DebugStartResult.UNSAFE;
+		if (!PursuitSafetyPolicy.canBeginForDebug(player, record)) return DebugStartResult.UNSAFE;
 		var lease = PursuitSlotManager.acquire(player.level().getServer(), player.getUUID(), family).orElse(null);
 		if (lease == null) return DebugStartResult.NO_SLOT;
 		if (!PursuitSessionService.enterEmptyMirror(player, lease, requestedForm, true)) {

@@ -146,8 +146,8 @@ public final class TerminalRuntimeService {
 			case TerminalControlPayload.CLAIM_TASK_REWARD -> {
 				TerminalTaskService.ClaimResult result = TerminalTaskService.claim(player, value);
 				if (result == TerminalTaskService.ClaimResult.INVENTORY_FULL) {
-					TerminalNoticeService.send(player, Component.translatable(
-							"message.thefourthfrequency.task.inventory_full"));
+					TerminalNoticeService.denied(player,
+							"message.thefourthfrequency.task.inventory_full");
 				} else if (result != TerminalTaskService.ClaimResult.CLAIMED
 						&& result != TerminalTaskService.ClaimResult.STALE) {
 					return;

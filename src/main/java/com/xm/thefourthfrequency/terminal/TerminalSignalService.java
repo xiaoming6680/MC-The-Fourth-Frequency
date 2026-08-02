@@ -77,13 +77,26 @@ public final class TerminalSignalService {
 			TerminalRuntimeService.synchronizeProjection(player);
 			TerminalRuntimeService.refresh(player);
 		}
-		for (String id : fileNotifications) TerminalNoticeService.send(player,
-				Component.translatable("message.thefourthfrequency.file.discovered",
-						Component.translatable("terminal.thefourthfrequency.file." + id + ".title")));
-		for (FragmentInvestigationService.SharedReceipt receipt : sharedReceipts) TerminalNoticeService.send(player,
-				receipt.own() ? Component.translatable("message.thefourthfrequency.fragment.shared", receipt.fragment())
-						: Component.translatable("message.thefourthfrequency.fragment.received",
+		// A sync can carry several files or replay every share a late owner missed. Naming each one
+		// would push the rest of the stack out, so only a single arrival keeps its own title.
+		if (fileNotifications.size() == 1) {
+			TerminalNoticeService.send(player, Component.translatable(
+					"message.thefourthfrequency.file.discovered", Component.translatable(
+							"terminal.thefourthfrequency.file." + fileNotifications.getFirst() + ".title")));
+		} else if (!fileNotifications.isEmpty()) {
+			TerminalNoticeService.send(player, Component.translatable(
+					"message.thefourthfrequency.file.discovered_batch", fileNotifications.size()));
+		}
+		if (sharedReceipts.size() == 1) {
+			FragmentInvestigationService.SharedReceipt receipt = sharedReceipts.getFirst();
+			TerminalNoticeService.send(player, receipt.own()
+					? Component.translatable("message.thefourthfrequency.fragment.shared", receipt.fragment())
+					: Component.translatable("message.thefourthfrequency.fragment.received",
 							receipt.discovererName(), receipt.fragment()));
+		} else if (!sharedReceipts.isEmpty()) {
+			TerminalNoticeService.send(player, Component.translatable(
+					"message.thefourthfrequency.fragment.received_batch", sharedReceipts.size()));
+		}
 		TerminalTaskService.notifyIfCompleted(player);
 		updateUnreadAlert(player, data);
 	}

@@ -1,0 +1,110 @@
+{
+  "targets": {
+    "veil": {},
+    "temp": {}
+  },
+  "passes": [
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/box_blur",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "minecraft:main",
+          "bilinear": true
+        }
+      ],
+      "output": "temp",
+      "uniforms": {
+        "BlurConfig": [
+          {
+            "name": "BlurDir",
+            "type": "vec2",
+            "value": [1.0, 0.0]
+          },
+          {
+            "name": "Radius",
+            "type": "float",
+            "value": 3.0
+          }
+        ]
+      }
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/box_blur",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "temp",
+          "bilinear": true
+        }
+      ],
+      "output": "veil",
+      "uniforms": {
+        "BlurConfig": [
+          {
+            "name": "BlurDir",
+            "type": "vec2",
+            "value": [0.0, 1.0]
+          },
+          {
+            "name": "Radius",
+            "type": "float",
+            "value": 3.0
+          }
+        ]
+      }
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/color_convolve",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "veil"
+        }
+      ],
+      "output": "temp",
+      "uniforms": {
+        "ColorConfig": [
+          {
+            "name": "RedMatrix",
+            "type": "vec3",
+            "value": [0.46, 0.26, 0.30]
+          },
+          {
+            "name": "GreenMatrix",
+            "type": "vec3",
+            "value": [0.12, 0.26, 0.12]
+          },
+          {
+            "name": "BlueMatrix",
+            "type": "vec3",
+            "value": [0.34, 0.30, 0.68]
+          }
+        ]
+      }
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/blit",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "temp"
+        }
+      ],
+      "output": "minecraft:main",
+      "uniforms": {
+        "BlitConfig": [
+          {
+            "name": "ColorModulate",
+            "type": "vec4",
+            "value": [0.92, 0.78, 1.0, 1.0]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -10,19 +10,28 @@ import static com.xm.thefourthfrequency.terminal.AnomalyDefinition.Scope.PRIVATE
 import static com.xm.thefourthfrequency.terminal.AnomalyDefinition.Scope.SHARED;
 
 public final class AnomalyCatalog {
+	/**
+	 * Ordered by tier. Entries marked "sustained" hold for minutes at an intensity low enough to
+	 * be doubted, rather than firing for a few seconds and letting the world snap back: the
+	 * short events alone left the mod quiet for roughly 98% of a session, so unease had nowhere
+	 * to live between them.
+	 */
 	private static final List<AnomalyDefinition> DEFINITIONS = List.of(
 			new AnomalyDefinition("phantom_echo", 1, PRIVATE, false, false),
 			new AnomalyDefinition("light_dropout", 1, SHARED, false, false),
 			new AnomalyDefinition("surface_fracture", 1, PRIVATE, false, false),
+			new AnomalyDefinition("silent_world", 1, PRIVATE, false, false),
 			new AnomalyDefinition("peripheral_residue", 2, PRIVATE, false, false),
 			new AnomalyDefinition("watcher_alignment", 2, SHARED, false, false),
 			new AnomalyDefinition("dark_watcher", 2, SHARED, false, false),
 			new AnomalyDefinition("action_echo", 2, PRIVATE, false, false),
 			new AnomalyDefinition("organ_misread", 2, PRIVATE, false, false),
+			new AnomalyDefinition("temporal_drift", 2, PRIVATE, false, false),
 			new AnomalyDefinition("viewpoint_separation", 3, PRIVATE, false, false),
 			new AnomalyDefinition("door_cascade", 3, SHARED, false, true),
 			new AnomalyDefinition("experience_gap", 3, SHARED, false, false),
 			new AnomalyDefinition("local_rule_collapse", 3, PRIVATE, false, false),
+			new AnomalyDefinition("metric_drift", 3, PRIVATE, false, false),
 			new AnomalyDefinition("red_horizon", 4, PRIVATE, false, false),
 			new AnomalyDefinition("window_pulse", 4, PRIVATE, true, false),
 			new AnomalyDefinition("channel_override", 5, PRIVATE, true, false),
@@ -70,11 +79,6 @@ public final class AnomalyCatalog {
 		}
 		return -1;
 	}
-	public static int pageCount(int pageSize) {
-		if (pageSize < 1) throw new IllegalArgumentException("pageSize must be positive");
-		return Math.max(1, (DEFINITIONS.size() + pageSize - 1) / pageSize);
-	}
-
 	private static boolean inPool(AnomalyDefinition definition, int stage) {
 		return switch (stage) {
 			case 1 -> definition.tier() == 1;

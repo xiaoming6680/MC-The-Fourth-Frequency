@@ -6,6 +6,7 @@ import com.xm.thefourthfrequency.audio.ModSounds;
 import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEnergyOrbEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEntity;
+import com.xm.thefourthfrequency.networking.WorldInterfaceProtocol;
 import com.xm.thefourthfrequency.terminal.TerminalNoticeService;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -49,11 +50,11 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /** Server-authoritative transient executor for the nine world-interface actions. */
 public final class WorldInterfaceAttackService {
-	private static final int LASER_WARNING_TICKS = 45;
+	private static final int LASER_WARNING_TICKS = WorldInterfaceProtocol.LASER_WARNING_TICKS;
 	private static final int ORB_TRACKING_TICKS = 100;
 	private static final int GRAB_WARNING_TICKS = 30;
 	private static final int GRAB_HOLD_TICKS = 40;
-	private static final int MENTAL_WARNING_TICKS = 40;
+	private static final int MENTAL_WARNING_TICKS = WorldInterfaceProtocol.MENTAL_WARNING_TICKS;
 	private static final int MENTAL_EFFECT_TICKS = 80;
 	private static final int WEAPON_WARNING_TICKS = 35;
 	private static final int WEAPON_CUSTODY_TICKS = 160;
@@ -782,8 +783,8 @@ public final class WorldInterfaceAttackService {
 					"Discarding unrecoverable world_interface recovery entry {} for {} ({}): {}",
 					entry.id(), entry.ownerId(), entry.kind(), exception.toString());
 			if (removeRecovery(server, encounterId, entry.id())) {
-				TerminalNoticeService.send(owner, Component.translatable(
-						"message.thefourthfrequency.world_interface.recovery_lost"));
+				TerminalNoticeService.denied(owner,
+						"message.thefourthfrequency.world_interface.recovery_lost");
 			}
 			return true;
 		}
@@ -1138,9 +1139,21 @@ public final class WorldInterfaceAttackService {
 		return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8));
 	}
 
+	/**
+	 * Each action owns three samples played at one fixed pitch, which over a three-phase fight is
+	 * few enough that the rotation becomes audible - the boss starts sounding like a soundboard.
+	 * A few percent of pitch scatter per cast hides the repetition.
+	 *
+	 * <p>The scatter is derived rather than drawn from a random source: the encounter is
+	 * deterministic by design, and this keeps a replayed fight sounding identical to the one that
+	 * was recorded.</p>
+	 */
 	private static void playActionCue(ServerLevel level, BlockPos position,
 			WorldInterfaceAction action, float volume, float pitch) {
-		AudioService.playBounded(level, position, sound(action), SoundSource.HOSTILE, volume, pitch);
+		long scatter = mix(position.asLong() ^ (long) action.ordinal() * 0x9E3779B97F4A7C15L
+				^ level.getGameTime() * 0xC2B2AE3D27D4EB4FL);
+		float jittered = pitch * (1.0F + ((scatter >>> 40) / (float) 0xFFFFFF * 2.0F - 1.0F) * 0.045F);
+		AudioService.playBounded(level, position, sound(action), SoundSource.HOSTILE, volume, jittered);
 	}
 
 	private static SoundEvent sound(WorldInterfaceAction action) {

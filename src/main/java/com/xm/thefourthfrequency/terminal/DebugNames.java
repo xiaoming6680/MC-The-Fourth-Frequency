@@ -17,13 +17,12 @@ public final class DebugNames {
 			case "viewpoint_separation" -> "视角离开身体";
 			case "door_cascade" -> "门由远到近破碎";
 			case "organ_misread" -> "物品显示成眼睛";
-			case "rework_probe" -> "施工怪物靠近";
 			case "experience_gap" -> "记忆空白";
-			case "disconnected_base" -> "暂时认不出基地";
 			case "local_rule_collapse" -> "附近材质丢失";
-			case "hostile_echo" -> "听见敌对生物靠近";
 			case "red_horizon" -> "红色视界";
-			case "watcher_orbit" -> "围绕者环";
+			case "silent_world" -> "环境音全部消失";
+			case "temporal_drift" -> "天体位置与时钟不符";
+			case "metric_drift" -> "终端读数持续偏差";
 			case "channel_override" -> "频道接管";
 			case "desktop_presence" -> "桌面在场";
 			default -> "未知异象";

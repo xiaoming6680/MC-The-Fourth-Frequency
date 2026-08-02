@@ -20,6 +20,7 @@ import com.xm.thefourthfrequency.terminal.TerminalSignalService;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.SurvivalProgressService;
+import com.xm.thefourthfrequency.world.TerminalLifecycleService;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
@@ -82,6 +83,9 @@ public final class EndBossEncounterService {
 	private static final Map<MinecraftServer, Set<UUID>> ALTAR_VIEWERS =
 			Collections.synchronizedMap(new WeakHashMap<>());
 	private static final Map<MinecraftServer, Map<UUID, Long>> PROJECTILE_HITS =
+			Collections.synchronizedMap(new WeakHashMap<>());
+	/** Encounters whose one-time anchor-cost warning has already absorbed a first strike. */
+	private static final Map<MinecraftServer, Set<UUID>> ANCHOR_WARNINGS =
 			Collections.synchronizedMap(new WeakHashMap<>());
 	private static final Map<MinecraftServer, Map<UUID, Long>> MELEE_HITS =
 			Collections.synchronizedMap(new WeakHashMap<>());
@@ -148,6 +152,78 @@ public final class EndBossEncounterService {
 		recordAltarOpening(activator, sourceLevel, portalCenter);
 		AudioService.playBounded(sourceLevel, portalCenter, ModSounds.WORLD_INTERFACE_ALTAR,
 				SoundSource.AMBIENT, 0.82F, 1.0F);
+	}
+
+	/**
+	 * Debug-only jump straight into the encounter, skipping the twelve eyes and the walk to the
+	 * altar. Everything after the arrival is the real path: the arena is built the way the portal
+	 * builds it, and the terminal is really sacrificed, because the committed sacrifice is what the
+	 * stage invariants are written against and faking it would test a state the game cannot reach.
+	 */
+	public static DebugBossResult debugStartEncounter(ServerPlayer player) {
+		MinecraftServer server = player.level().getServer();
+		ServerLevel end = server.getLevel(Level.END);
+		if (end == null) return DebugBossResult.END_MISSING;
+
+		WorldInterfaceState.Snapshot snapshot = WorldInterfaceState.snapshot(server);
+		if (!snapshot.valid()) {
+			WorldInterfaceState.clearInvalid(server);
+			snapshot = WorldInterfaceState.snapshot(server);
+		}
+		if (snapshot.present() && snapshot.stage().wireId() >= WorldInterfaceStage.SUMMONING.wireId()) {
+			return DebugBossResult.ALREADY_RUNNING;
+		}
+		if (!snapshot.present()) {
+			EndBossArenaService.PreparedArena prepared = EndBossArenaService.prepare(end);
+			WorldInterfaceState.ArenaLayout layout = new WorldInterfaceState.ArenaLayout(1,
+					Level.END.identifier().toString(), prepared.center(), prepared.altar(), prepared.safeSpawn(),
+					indexedGates(prepared), indexedAnchors(prepared));
+			UUID encounterId = UUID.randomUUID();
+			long seed = end.getSeed() ^ encounterId.getMostSignificantBits()
+					^ encounterId.getLeastSignificantBits() ^ end.getGameTime();
+			WorldInterfaceState.MutationResult initialized =
+					WorldInterfaceState.initialize(server, encounterId, layout, seed);
+			if (!initialized.applied()) return DebugBossResult.ARENA_FAILED;
+			snapshot = initialized.snapshot();
+		}
+		if (snapshot.stage() == WorldInterfaceStage.ARENA_READY) {
+			WorldInterfaceState.MutationResult opened = WorldInterfaceState.transition(server,
+					snapshot.encounterId().orElseThrow(), snapshot.revision(),
+					WorldInterfaceStage.ARENA_READY, WorldInterfaceStage.WAITING_TERMINALS);
+			if (!opened.applied()) return DebugBossResult.ARENA_FAILED;
+			snapshot = opened.snapshot();
+		}
+		bindCore(end, snapshot);
+
+		// The sacrifice needs a real bound terminal in hand; a tester who jumped the mainline will
+		// not have one, and issuing it here is the same recovery the mod already performs on join.
+		TerminalLifecycleService.ensureCarried(player, true);
+		if (!rememberAndOverrideRespawn(player, snapshot)) return DebugBossResult.ARENA_FAILED;
+		snapshot = WorldInterfaceState.snapshot(server);
+		BlockPos altar = snapshot.altarCenter();
+		if (!player.teleportTo(end, altar.getX() + 0.5D, altar.getY() + 1.0D, altar.getZ() + 2.5D,
+				Set.of(), 180.0F, 0.0F, true)) return DebugBossResult.ARENA_FAILED;
+		SurvivalProgressService.mark(player, SurvivalMilestone.ENTERED_END);
+
+		WorldInterfaceRitualService.RitualResult deposited = WorldInterfaceRitualService.deposit(player,
+				snapshot.encounterId().orElseThrow(), snapshot.revision());
+		sendAltarSnapshots(server, deposited.snapshot(), altarStatus(deposited.reason()));
+		if (deposited.snapshot().stage() == WorldInterfaceStage.SUMMONING) {
+			sendEncounterSnapshots(server, true);
+			return DebugBossResult.STARTED;
+		}
+		// The roster is every non-spectator online, so on a shared server the remaining players
+		// still have to deposit; the arena and the altar are ready and waiting for them.
+		return deposited.applied() ? DebugBossResult.WAITING_FOR_OTHERS : DebugBossResult.DEPOSIT_REJECTED;
+	}
+
+	public enum DebugBossResult {
+		STARTED,
+		WAITING_FOR_OTHERS,
+		ALREADY_RUNNING,
+		END_MISSING,
+		ARENA_FAILED,
+		DEPOSIT_REJECTED
 	}
 
 	/** Overrides only End-portal travel while a prepared world-interface encounter exists. */
@@ -263,6 +339,7 @@ public final class EndBossEncounterService {
 				return false;
 			}
 			WorldInterfaceState.Snapshot after = result.snapshot();
+			emitImpactBurst(level, boss, attacker, adjusted);
 			if (lethal) beginResolution(level, after, true);
 			else if (after.stage() != before.stage()) phaseChanged(level, before, after);
 			return true;
@@ -283,6 +360,17 @@ public final class EndBossEncounterService {
 		if (anchor.destroyed()) {
 			crystal.discard();
 			return Optional.of(true);
+		}
+		// Vanilla trained everyone to "break the towers first"; the trade-off here is intentional
+		// and must be argued about, not discovered post mortem. The very first anchor strike of an
+		// encounter is therefore absorbed and answered with the cost, and only repeated strikes commit.
+		UUID encounterId = before.encounterId().orElse(null);
+		if (encounterId != null && ANCHOR_WARNINGS.computeIfAbsent(level.getServer(),
+				ignored -> Collections.synchronizedSet(new HashSet<>())).add(encounterId)) {
+			AudioService.playBounded(level, anchor.position(), ModSounds.WORLD_INTERFACE_ANCHOR,
+					SoundSource.HOSTILE, 0.55F, 1.25F);
+			broadcast(level.getServer(), "message.thefourthfrequency.world_interface.anchor_warning");
+			return Optional.of(false);
 		}
 
 		for (int attempt = 0; attempt < MAX_MUTATION_RETRIES; attempt++) {
@@ -417,6 +505,7 @@ public final class EndBossEncounterService {
 			snapshot = WorldInterfaceState.snapshot(server);
 		}
 		EndBossArenaService.suppressVanillaFight(level);
+		WorldInterfaceShockwaveService.tick(level);
 		if (snapshot.friendlyDragonUuid().isPresent()) {
 			UUID dragonId = snapshot.friendlyDragonUuid().orElseThrow();
 			if (!FriendlyDragonService.tick(level, dragonId, snapshot.arenaCenter())
@@ -455,6 +544,9 @@ public final class EndBossEncounterService {
 					List.of(), snapshot.deterministicSeed());
 			AudioService.playBounded(level, snapshot.arenaCenter(), ModSounds.WORLD_INTERFACE_SUMMON,
 					SoundSource.HOSTILE, 0.95F, 0.8F);
+			WorldInterfaceShockwaveService.emit(level, snapshot.arenaCenter().getCenter().add(0.0D, 18.0D, 0.0D),
+					WorldInterfaceShockwaveService.MORPH_DURATION_TICKS,
+					WorldInterfaceShockwaveService.MORPH_MAX_RADIUS);
 		}
 		if (boss != null) {
 			boss.setForm(WorldInterfaceEntity.FORM_LISTENING);
@@ -799,6 +891,25 @@ public final class EndBossEncounterService {
 				List.of(), snapshot.deterministicSeed() ^ snapshot.actionSequence(), 0));
 	}
 
+	/**
+	 * Server-authored contact spray. The virtual-health model means a landed hit produces no vanilla
+	 * knockback or hurt animation, so without this the only feedback was a five-tick texture swap
+	 * driven off a snapshot diff - which a low snapshot rate could drop entirely.
+	 */
+	private static void emitImpactBurst(ServerLevel level, WorldInterfaceEntity boss,
+			ServerPlayer attacker, double adjusted) {
+		Vec3 centre = boss.position().add(0.0D, boss.getBbHeight() * 0.5D, 0.0D);
+		Vec3 toward = attacker.getEyePosition().subtract(centre);
+		double length = toward.length();
+		Vec3 contact = length < 1.0E-3D ? centre
+				: centre.add(toward.scale(Math.min(1.0D, boss.getBbWidth() * 0.5D / length)));
+		int count = Math.clamp(6 + (int) Math.round(adjusted * 1.5D), 6, 28);
+		level.sendParticles(ParticleTypes.CRIT, contact.x, contact.y, contact.z,
+				count, 0.55D, 0.55D, 0.55D, 0.22D);
+		level.sendParticles(ParticleTypes.REVERSE_PORTAL, contact.x, contact.y, contact.z,
+				count / 2, 0.45D, 0.45D, 0.45D, 0.08D);
+	}
+
 	private static void phaseChanged(ServerLevel level, WorldInterfaceState.Snapshot before,
 			WorldInterfaceState.Snapshot after) {
 		WorldInterfaceAttackService.cancelAndRestore(level.getServer(), after.encounterId().orElseThrow());
@@ -813,6 +924,12 @@ public final class EndBossEncounterService {
 		showAction(level, after, action, 60, List.of(), after.deterministicSeed() ^ after.stage().wireId());
 		AudioService.playBounded(level, after.arenaCenter(), ModSounds.WORLD_INTERFACE_MORPH,
 				SoundSource.HOSTILE, 0.92F, after.stage() == WorldInterfaceStage.PHASE_2 ? 0.86F : 0.68F);
+		// A morph is the only moment the encounter changes its own rules; give it a world event
+		// rather than leaving the phase change legible only through the HUD label.
+		WorldInterfaceShockwaveService.emit(level, boss == null ? after.arenaCenter().getCenter()
+						: boss.position().add(0.0D, boss.getBbHeight() * 0.5D, 0.0D),
+				WorldInterfaceShockwaveService.MORPH_DURATION_TICKS,
+				WorldInterfaceShockwaveService.MORPH_MAX_RADIUS);
 		broadcast(level.getServer(), "message.thefourthfrequency.world_interface.phase." +
 				after.stage().serializedName());
 		sendEncounterSnapshots(level.getServer(), true);
@@ -913,8 +1030,9 @@ public final class EndBossEncounterService {
 		for (WorldInterfaceState.Anchor anchor : snapshot.anchors()) if (!anchor.destroyed()) anchors |= 1 << anchor.index();
 		int gatewayState = snapshot.gates().isEmpty() ? WorldInterfaceGatewayState.DORMANT.wireId()
 				: snapshot.gates().getFirst().state().wireId();
-		float progress = WorldInterfacePolicy.failurePresentationProgress(snapshot.stage(),
-				snapshot.resolutionTick(), level.getGameTime(), RESOLUTION_DURATION_TICKS);
+		float progress = WorldInterfacePolicy.presentationErosionProgress(snapshot.stage(),
+				elapsed, snapshot.destroyedAnchorCount(), snapshot.resolutionTick(),
+				level.getGameTime(), RESOLUTION_DURATION_TICKS);
 		for (ServerPlayer player : encounterRecipients(server, snapshot)) {
 			ServerPlayNetworking.send(player, new WorldInterfaceSnapshotS2C(WorldInterfaceProtocol.VERSION,
 					snapshot.encounterId().orElseThrow(), nextClientSequence(player), snapshot.stage().wireId(), form,
@@ -1006,6 +1124,7 @@ public final class EndBossEncounterService {
 		WorldInterfaceState.Snapshot before = WorldInterfaceState.snapshot(server);
 		if (level == null || !before.valid() || !before.present()) return;
 		EndBossArenaService.PreparedArena arena = EndBossArenaService.prepare(level);
+		WorldInterfaceShockwaveService.clear(level);
 		EndBossArenaService.restoreAuthoritativeAnchors(level, before, !before.stage().isCombat());
 		EndBossArenaService.restoreTerrainEditCount(level, before.terrainEditsUsed());
 		bindCore(level, before);

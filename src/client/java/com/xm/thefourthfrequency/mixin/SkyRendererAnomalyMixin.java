@@ -1,6 +1,7 @@
 package com.xm.thefourthfrequency.mixin;
 
 import com.xm.thefourthfrequency.client_ui.AnomalyPresentationController;
+import com.xm.thefourthfrequency.client_ui.WorldInterfaceAtmosphereController;
 import net.minecraft.client.Camera;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.SkyRenderer;
@@ -15,11 +16,20 @@ public abstract class SkyRendererAnomalyMixin {
 	@Inject(method = "extractRenderState", at = @At("RETURN"))
 	private void thefourthfrequency$tintRedHorizon(ClientLevel level, float partialTick, Camera camera,
 			SkyRenderState state, CallbackInfo callback) {
-		state.skyColor = AnomalyPresentationController.redSkyShaderColor(state.skyColor);
-		float strength = AnomalyPresentationController.redSkyStrength();
+		state.skyColor = WorldInterfaceAtmosphereController.tintSky(
+				AnomalyPresentationController.redSkyShaderColor(state.skyColor));
+		state.starBrightness = WorldInterfaceAtmosphereController.drainStarBrightness(state.starBrightness);
+		if (AnomalyPresentationController.isTemporalDriftActive()) {
+			state.sunAngle = AnomalyPresentationController.driftedCelestialAngle(state.sunAngle);
+			state.moonAngle = AnomalyPresentationController.driftedCelestialAngle(state.moonAngle);
+			state.starAngle = AnomalyPresentationController.driftedCelestialAngle(state.starAngle);
+			state.starBrightness =
+					AnomalyPresentationController.driftedStarBrightness(state.starBrightness);
+		}
+		float strength = AnomalyPresentationController.redHorizonStrength();
 		if (strength <= 0.0F) return;
 		if (state.sunriseAndSunsetColor != 0)
-			state.sunriseAndSunsetColor = AnomalyPresentationController.redSkyShaderColor(
+			state.sunriseAndSunsetColor = AnomalyPresentationController.redHorizonShaderColor(
 					state.sunriseAndSunsetColor);
 		state.starBrightness *= 1.0F - strength;
 	}

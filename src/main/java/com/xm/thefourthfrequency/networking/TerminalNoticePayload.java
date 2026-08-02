@@ -14,6 +14,8 @@ public record TerminalNoticePayload(Component message, int tone) implements Cust
 	public static final int TONE_UNREAD = 1;
 	public static final int TONE_TASK_COMPLETE = 2;
 	public static final int TONE_PURSUIT_WARNING = 3;
+	/** A refused action: distinct presentation so it is never read as another progress line. */
+	public static final int TONE_DENIED = 4;
 	public static final Type<TerminalNoticePayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(
 			TheFourthFrequency.MOD_ID, "terminal_notice"));
 	public static final StreamCodec<RegistryFriendlyByteBuf, TerminalNoticePayload> CODEC = StreamCodec.of(
@@ -21,12 +23,12 @@ public record TerminalNoticePayload(Component message, int tone) implements Cust
 
 	private static void write(RegistryFriendlyByteBuf buf, TerminalNoticePayload value) {
 		ComponentSerialization.STREAM_CODEC.encode(buf, value.message);
-		buf.writeVarInt(Math.clamp(value.tone, TONE_NONE, TONE_PURSUIT_WARNING));
+		buf.writeVarInt(Math.clamp(value.tone, TONE_NONE, TONE_DENIED));
 	}
 
 	private static TerminalNoticePayload read(RegistryFriendlyByteBuf buf) {
 		return new TerminalNoticePayload(ComponentSerialization.STREAM_CODEC.decode(buf),
-				Math.clamp(buf.readVarInt(), TONE_NONE, TONE_PURSUIT_WARNING));
+				Math.clamp(buf.readVarInt(), TONE_NONE, TONE_DENIED));
 	}
 
 	@Override

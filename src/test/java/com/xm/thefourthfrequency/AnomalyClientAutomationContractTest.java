@@ -20,10 +20,10 @@ final class AnomalyClientAutomationContractTest {
 		AnomalyClientScenario.assertCatalogCoverage();
 		List<String> catalog = AnomalyCatalog.definitions().stream().map(value -> value.id()).toList();
 		List<String> scenarios = AnomalyClientScenario.definitions().stream().map(value -> value.id()).toList();
-		assertEquals(16, scenarios.size());
+		assertEquals(19, scenarios.size());
 		assertEquals(catalog, scenarios);
-		assertEquals(16, scenarios.stream().distinct().count());
-		assertEquals(16, AnomalyClientScenario.definitions().stream().map(value -> value.seed()).distinct().count());
+		assertEquals(19, scenarios.stream().distinct().count());
+		assertEquals(19, AnomalyClientScenario.definitions().stream().map(value -> value.seed()).distinct().count());
 	}
 
 	@Test

@@ -1,0 +1,103 @@
+{
+  "targets": {
+    "swap": {},
+    "temp": {}
+  },
+  "passes": [
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/color_convolve",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "minecraft:main"
+        }
+      ],
+      "output": "temp",
+      "uniforms": {
+        "ColorConfig": [
+          {
+            "name": "RedMatrix",
+            "type": "vec3",
+            "value": [0.86, 0.42, 0.30]
+          },
+          {
+            "name": "GreenMatrix",
+            "type": "vec3",
+            "value": [0.05, 0.14, 0.05]
+          },
+          {
+            "name": "BlueMatrix",
+            "type": "vec3",
+            "value": [0.10, 0.08, 0.22]
+          }
+        ]
+      }
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/invert",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "temp"
+        }
+      ],
+      "output": "swap",
+      "uniforms": {
+        "InvertConfig": [
+          {
+            "name": "InverseAmount",
+            "type": "float",
+            "value": 0.24
+          }
+        ]
+      }
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/bits",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "swap"
+        }
+      ],
+      "output": "temp",
+      "uniforms": {
+        "BitsConfig": [
+          {
+            "name": "Resolution",
+            "type": "float",
+            "value": 4.0
+          },
+          {
+            "name": "MosaicSize",
+            "type": "float",
+            "value": 5.0
+          }
+        ]
+      }
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/blit",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "temp"
+        }
+      ],
+      "output": "minecraft:main",
+      "uniforms": {
+        "BlitConfig": [
+          {
+            "name": "ColorModulate",
+            "type": "vec4",
+            "value": [1.0, 0.62, 0.66, 1.0]
+          }
+        ]
+      }
+    }
+  ]
+}

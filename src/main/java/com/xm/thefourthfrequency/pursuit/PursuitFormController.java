@@ -30,7 +30,6 @@ import java.util.UUID;
 /** Server-side five-form chase mechanics and authoritative resolution. */
 public final class PursuitFormController {
 	private static final long RESOLUTION_TICKS = 60L;
-	private static final double HEART_HEALTH_POINTS = 2.0D;
 	private static final double MIN_PLAYER_MAX_HEALTH = 2.0D;
 	private static final double MAX_PLAYER_MAX_HEALTH = 40.0D;
 	private static final Map<UUID, Runtime> ACTIVE = new HashMap<>();
@@ -254,22 +253,52 @@ public final class PursuitFormController {
 		return level.addFreshEntity(body) ? body : null;
 	}
 
+	/**
+	 * How far above and below the player a probe column is searched for a floor.
+	 *
+	 * <p>The old five was only ever enough on flat ground. A player on a hillside, a shoreline or
+	 * anywhere underground has terrain behind them that sits well outside a ten-block band, so
+	 * every probe missed and the chase aborted before it started. The mirror copies 48 blocks of
+	 * vertical either side of the arrival point, so this stays inside terrain that actually got
+	 * streamed.</p>
+	 */
+	private static final int SPAWN_VERTICAL_REACH = 32;
+
 	private static BlockPos findSpawn(ServerLevel level, ServerPlayer player) {
 		BlockPos target = player.blockPosition();
+		// The look vector loses its horizontal component when the player is looking straight up or
+		// down, and a zero-length facing makes every probe fail the hemisphere test - which aborted
+		// the chase over nothing more than where the camera happened to be pointing. Body yaw is
+		// always defined, and "behind the player" is what the rule is actually about.
 		Vec3 look = player.getLookAngle();
-		for (PursuitSpawnPolicy.Offset offset : PursuitSpawnPolicy.hiddenOffsets(look.x, look.z)) {
-			if (!PursuitSpawnPolicy.outsideForwardHemisphere(look.x, look.z, offset.x(), offset.z())) continue;
+		double facingX = look.x;
+		double facingZ = look.z;
+		if (facingX * facingX + facingZ * facingZ < 1.0e-4D) {
+			double yaw = Math.toRadians(player.getYRot());
+			facingX = -Math.sin(yaw);
+			facingZ = Math.cos(yaw);
+		}
+		for (PursuitSpawnPolicy.Offset offset : PursuitSpawnPolicy.hiddenOffsets(facingX, facingZ)) {
+			if (!PursuitSpawnPolicy.outsideForwardHemisphere(facingX, facingZ, offset.x(), offset.z())) continue;
 			BlockPos origin = target.offset(offset.x(), 0, offset.z());
-			for (int dy = 5; dy >= -5; dy--) {
-				BlockPos candidate = origin.offset(0, dy, 0);
-				if (level.getBlockState(candidate).getCollisionShape(level, candidate).isEmpty()
-						&& level.getBlockState(candidate.above()).getCollisionShape(level, candidate.above()).isEmpty()
-						&& !level.getBlockState(candidate.below()).getCollisionShape(level, candidate.below()).isEmpty()) {
-					return candidate;
-				}
+			// Walked outward from the player's own elevation, below before above, so the corrector
+			// arrives on the floor nearest their level rather than on whatever the scan hit first.
+			for (int distance = 0; distance <= SPAWN_VERTICAL_REACH; distance++) {
+				BlockPos below = origin.below(distance);
+				if (standable(level, below)) return below;
+				if (distance == 0) continue;
+				BlockPos above = origin.above(distance);
+				if (standable(level, above)) return above;
 			}
 		}
 		return null;
+	}
+
+	private static boolean standable(ServerLevel level, BlockPos candidate) {
+		if (level.isOutsideBuildHeight(candidate) || level.isOutsideBuildHeight(candidate.above())) return false;
+		return level.getBlockState(candidate).getCollisionShape(level, candidate).isEmpty()
+				&& level.getBlockState(candidate.above()).getCollisionShape(level, candidate.above()).isEmpty()
+				&& !level.getBlockState(candidate.below()).getCollisionShape(level, candidate.below()).isEmpty();
 	}
 
 	private static void removeAmbientHostiles(ServerLevel level, ServerPlayer player, ReworkEntity rework) {
@@ -330,9 +359,24 @@ public final class PursuitFormController {
 
 	private static void tickResolution(ServerPlayer player, Runtime runtime, long now) {
 		if (now < runtime.resolutionEndsAt) return;
-		double delta = runtime.resolution == Resolution.CAPTURED
-				? -HEART_HEALTH_POINTS : HEART_HEALTH_POINTS;
+		var maximumHealth = player.getAttribute(Attributes.MAX_HEALTH);
+		double delta = PursuitProgressPolicy.resolutionMaxHealthDelta(
+				runtime.resolution == Resolution.CAPTURED,
+				maximumHealth == null ? MAX_PLAYER_MAX_HEALTH : maximumHealth.getBaseValue());
 		adjustMaximumHealth(player, delta);
+		// Both CAPTURED and ESCAPED land here, and only they do: a technically interrupted chase
+		// returns straight from capture() without ever setting a resolution. That makes this the
+		// one point that means "the player actually went through a chase and it concluded", which
+		// is exactly what the final Eye checks. Debug sessions stay excluded, matching succeed().
+		if (!runtime.debugSession) {
+			FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
+			if (data.terminalRecord(player.getUUID()).isPresent()) {
+				data.updateTerminalRecord(player.getUUID(), record ->
+						record.putInt(TerminalData.PURSUIT_ENCOUNTERED_CHASES,
+								PursuitProgressPolicy.encounteredAfterResolution(
+										record.getIntOr(TerminalData.PURSUIT_ENCOUNTERED_CHASES, 0))));
+			}
+		}
 		String reason = runtime.resolutionReason;
 		PursuitSessionService.returnToSource(player, reason);
 		TerminalRuntimeService.synchronizeProjection(player);

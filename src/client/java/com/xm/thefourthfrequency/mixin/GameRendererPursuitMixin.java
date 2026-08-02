@@ -13,6 +13,8 @@ public abstract class GameRendererPursuitMixin {
 	@Inject(method = "render", at = @At("HEAD"), cancellable = true)
 	private void thefourthfrequency$simulatePursuitFrameCollapse(DeltaTracker deltaTracker,
 			boolean renderLevel, CallbackInfo callback) {
-		if (PursuitPresentationClient.skipRenderFrame(System.nanoTime())) callback.cancel();
+		// The hold decision is made at the clear site in MinecraftPursuitFrameHoldMixin, which runs
+		// earlier in the same frame; this only carries it out.
+		if (PursuitPresentationClient.skipRenderFrame()) callback.cancel();
 	}
 }

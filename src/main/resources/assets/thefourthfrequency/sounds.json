@@ -2,30 +2,44 @@
   "empty_viewpoint": {
     "subtitle": "subtitles.thefourthfrequency.empty_viewpoint",
     "sounds": [
-      { "name": "minecraft:block.wooden_door.close", "type": "event", "volume": 0.65, "pitch": 0.72 },
-      { "name": "minecraft:block.stone.step", "type": "event", "volume": 0.35, "pitch": 0.55 }
+      { "name": "minecraft:block.wooden_door.close", "type": "event", "volume": 0.65, "pitch": 0.72 }
     ]
   },
   "empty_base": {
     "subtitle": "subtitles.thefourthfrequency.empty_base",
     "sounds": [
-      { "name": "minecraft:block.chest.close", "type": "event", "volume": 0.7, "pitch": 0.76 },
-      { "name": "minecraft:block.wooden_door.close", "type": "event", "volume": 0.4, "pitch": 0.62 }
+      { "name": "minecraft:block.chest.close", "type": "event", "volume": 0.7, "pitch": 0.76 }
     ]
   },
   "empty_experience": {
     "subtitle": "subtitles.thefourthfrequency.empty_experience",
     "sounds": [
-      { "name": "minecraft:block.stone.place", "type": "event", "volume": 0.55, "pitch": 0.56 },
-      { "name": "minecraft:item.armor.equip_chain", "type": "event", "volume": 0.35, "pitch": 0.48 }
+      { "name": "minecraft:block.stone.place", "type": "event", "volume": 0.55, "pitch": 0.56 }
     ]
   },
   "fourth_band": {
     "subtitle": "subtitles.thefourthfrequency.fourth_band",
     "sounds": [
-      { "name": "minecraft:block.amethyst_block.chime", "type": "event", "volume": 0.65, "pitch": 0.52 },
-      { "name": "minecraft:block.sculk_sensor.clicking", "type": "event", "volume": 0.32, "pitch": 0.64 }
+      { "name": "minecraft:block.amethyst_block.chime", "type": "event", "volume": 0.65, "pitch": 0.52 }
     ]
+  },
+  "layer_stone_step": {
+    "sounds": [{ "name": "minecraft:block.stone.step", "type": "event", "volume": 0.35, "pitch": 0.55 }]
+  },
+  "layer_wooden_door_close": {
+    "sounds": [{ "name": "minecraft:block.wooden_door.close", "type": "event", "volume": 0.4, "pitch": 0.62 }]
+  },
+  "layer_chest_close": {
+    "sounds": [{ "name": "minecraft:block.chest.close", "type": "event", "volume": 0.35, "pitch": 0.48 }]
+  },
+  "layer_beacon_deactivate": {
+    "sounds": [{ "name": "minecraft:block.beacon.deactivate", "type": "event", "volume": 0.32, "pitch": 0.64 }]
+  },
+  "layer_deepslate_break": {
+    "sounds": [{ "name": "minecraft:block.deepslate.break", "type": "event", "volume": 0.38, "pitch": 0.58 }]
+  },
+  "layer_comparator_click": {
+    "sounds": [{ "name": "minecraft:block.comparator.click", "type": "event", "volume": 0.3, "pitch": 0.7 }]
   },
   "rework_joint": {
     "subtitle": "subtitles.thefourthfrequency.rework_joint",
@@ -85,14 +99,69 @@
       "thefourthfrequency:device/terminal/anomaly/01"
     ]
   },
+  "terminal_keypress": {
+    "subtitle": "subtitles.thefourthfrequency.terminal_keypress",
+    "sounds": [
+      "thefourthfrequency:device/terminal/password/01"
+    ]
+  },
+  "terminal_detent": {
+    "subtitle": "subtitles.thefourthfrequency.terminal_detent",
+    "sounds": [
+      "thefourthfrequency:device/terminal/tune/01",
+      "thefourthfrequency:device/terminal/tune/02",
+      "thefourthfrequency:device/terminal/tune/03",
+      "thefourthfrequency:device/terminal/tune/04"
+    ]
+  },
   "alpha_corruption_warning": {
+    "subtitle": "subtitles.thefourthfrequency.alpha_corruption_warning",
     "sounds": [
       "thefourthfrequency:client/alpha_corruption/warning"
     ]
   },
   "alpha_corruption_collapse": {
+    "subtitle": "subtitles.thefourthfrequency.alpha_corruption_collapse",
     "sounds": [
       "thefourthfrequency:client/alpha_corruption/collapse"
+    ]
+  },
+  "signal_carrier": {
+    "sounds": [
+      { "name": "thefourthfrequency:signal/carrier_loop", "stream": false }
+    ]
+  },
+  "signal_static": {
+    "sounds": [
+      { "name": "thefourthfrequency:signal/static_loop", "stream": false }
+    ]
+  },
+  "signal_tape_hiss": {
+    "sounds": [
+      { "name": "thefourthfrequency:signal/tape_hiss_loop", "stream": false }
+    ]
+  },
+  "signal_dead_air": {
+    "sounds": [
+      { "name": "thefourthfrequency:signal/dead_air_loop", "stream": false }
+    ]
+  },
+  "signal_alert": {
+    "subtitle": "subtitles.thefourthfrequency.signal_alert",
+    "sounds": [
+      "thefourthfrequency:signal/alert"
+    ]
+  },
+  "signal_carrier_lost": {
+    "subtitle": "subtitles.thefourthfrequency.signal_carrier_lost",
+    "sounds": [
+      "thefourthfrequency:signal/carrier_lost"
+    ]
+  },
+  "signal_tuning_sweep": {
+    "subtitle": "subtitles.thefourthfrequency.signal_tuning_sweep",
+    "sounds": [
+      "thefourthfrequency:signal/tuning_sweep"
     ]
   },
   "world_interface_altar": {
@@ -123,15 +192,15 @@
   },
   "world_interface_gateway_purple": {
     "subtitle": "subtitles.thefourthfrequency.world_interface.gateway_purple",
-    "sounds": [{"name":"thefourthfrequency:world_interface/gateway_purple/01","stream":true,"volume":0.6}]
+    "sounds": [{"name":"thefourthfrequency:world_interface/gateway_purple/01","stream":false,"volume":0.6}]
   },
   "world_interface_gateway_gold": {
     "subtitle": "subtitles.thefourthfrequency.world_interface.gateway_gold",
-    "sounds": [{"name":"thefourthfrequency:world_interface/gateway_gold/01","stream":true,"volume":0.6}]
+    "sounds": [{"name":"thefourthfrequency:world_interface/gateway_gold/01","stream":false,"volume":0.6}]
   },
   "world_interface_gateway_red": {
     "subtitle": "subtitles.thefourthfrequency.world_interface.gateway_red",
-    "sounds": [{"name":"thefourthfrequency:world_interface/gateway_red/01","stream":true,"volume":0.6}]
+    "sounds": [{"name":"thefourthfrequency:world_interface/gateway_red/01","stream":false,"volume":0.6}]
   },
   "world_interface_summon": {
     "subtitle": "subtitles.thefourthfrequency.world_interface.summon",
@@ -143,15 +212,15 @@
   },
   "world_interface_ambient_1": {
     "subtitle": "subtitles.thefourthfrequency.world_interface.ambient_1",
-    "sounds": [{"name":"thefourthfrequency:world_interface/ambient_form_1/01","stream":true,"volume":0.42}]
+    "sounds": [{"name":"thefourthfrequency:world_interface/ambient_form_1/01","stream":false,"volume":0.42}]
   },
   "world_interface_ambient_2": {
     "subtitle": "subtitles.thefourthfrequency.world_interface.ambient_2",
-    "sounds": [{"name":"thefourthfrequency:world_interface/ambient_form_2/01","stream":true,"volume":0.46}]
+    "sounds": [{"name":"thefourthfrequency:world_interface/ambient_form_2/01","stream":false,"volume":0.46}]
   },
   "world_interface_ambient_3": {
     "subtitle": "subtitles.thefourthfrequency.world_interface.ambient_3",
-    "sounds": [{"name":"thefourthfrequency:world_interface/ambient_form_3/01","stream":true,"volume":0.5}]
+    "sounds": [{"name":"thefourthfrequency:world_interface/ambient_form_3/01","stream":false,"volume":0.5}]
   },
   "world_interface_morph": {
     "subtitle": "subtitles.thefourthfrequency.world_interface.morph",
@@ -217,6 +286,26 @@
       "thefourthfrequency:world_interface/failure/02",
       "thefourthfrequency:world_interface/failure/03",
       "thefourthfrequency:world_interface/failure/04"
+    ]
+  },
+  "music_menu": {
+    "sounds": [
+      {"name":"thefourthfrequency:music/menu/green_to_blue","stream":true},
+      {"name":"thefourthfrequency:music/menu/frutiger_aero","stream":true},
+      {"name":"thefourthfrequency:music/menu/hi_piano","stream":true},
+      {"name":"thefourthfrequency:music/menu/nop","stream":true}
+    ]
+  },
+  "music_game": {
+    "sounds": [
+      {"name":"thefourthfrequency:music/game/millennium_dream","stream":true},
+      {"name":"thefourthfrequency:music/game/are_you_lost","stream":true},
+      {"name":"thefourthfrequency:music/game/hi","stream":true}
+    ]
+  },
+  "music_ending": {
+    "sounds": [
+      {"name":"thefourthfrequency:music/ending/reverie","stream":true}
     ]
   }
 }

@@ -69,6 +69,10 @@ public final class WorldInterfaceEnergyOrbEntity extends Entity implements ItemS
 		Vec3 initial = target.getEyePosition().subtract(orb.position()).normalize().scale(0.16D);
 		orb.setDeltaMovement(initial);
 		if (!level.addFreshEntity(orb)) throw new IllegalStateException("Unable to spawn energy orb");
+		// Marks the moment of ignition at the eye. The sustained charge link is drawn client-side as
+		// a beam, so this only has to punctuate the start rather than carry the whole read.
+		level.sendParticles(ParticleTypes.REVERSE_PORTAL, owner.getX(), owner.getEyeY(), owner.getZ(),
+				40, 0.9D, 0.9D, 0.9D, 0.28D);
 		return orb;
 	}
 
@@ -137,6 +141,10 @@ public final class WorldInterfaceEnergyOrbEntity extends Entity implements ItemS
 			level.sendParticles(ParticleTypes.REVERSE_PORTAL, getX(), getY(), getZ(),
 					Math.max(2, (int) orbScale()), orbScale() * 0.10D, orbScale() * 0.10D,
 					orbScale() * 0.10D, 0.02D);
+			// A slow outward shed that scales with the orb, so a fully grown orb visibly leaks.
+			level.sendParticles(ParticleTypes.END_ROD, getX(), getY(), getZ(),
+					Math.max(1, (int) (orbScale() * 0.5F)), orbScale() * 0.28D, orbScale() * 0.28D,
+					orbScale() * 0.28D, 0.01D);
 		}
 		if (ageTicks >= MAX_TRACKING_TICKS) discard();
 	}

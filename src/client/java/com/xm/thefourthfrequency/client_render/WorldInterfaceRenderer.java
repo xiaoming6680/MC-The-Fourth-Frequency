@@ -2,8 +2,10 @@ package com.xm.thefourthfrequency.client_render;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
+import com.xm.thefourthfrequency.client_ui.WorldInterfaceClientState;
 import com.xm.thefourthfrequency.client_ui.WorldInterfacePresentationController;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEntity;
+import com.xm.thefourthfrequency.networking.WorldInterfaceSnapshotS2C;
 import net.minecraft.client.model.geom.ModelLayerLocation;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.SubmitNodeCollector;
@@ -57,6 +59,8 @@ public final class WorldInterfaceRenderer extends MobRenderer<WorldInterfaceEnti
 				now - entity.actionStartTick() + partialTick) * 50.0D);
 		state.blackened = state.actionId == 14;
 		state.hasRedOverlay |= WorldInterfacePresentationController.isDamageFlashActive(entity.getUUID(), now);
+		WorldInterfaceSnapshotS2C encounter = WorldInterfaceClientState.snapshot().encounter();
+		state.paletteBand = WorldInterfacePalette.band(encounter == null ? null : encounter.stage());
 	}
 
 	@Override
@@ -88,11 +92,16 @@ public final class WorldInterfaceRenderer extends MobRenderer<WorldInterfaceEnti
 		public void submit(PoseStack poseStack, SubmitNodeCollector collector, int packedLight,
 				WorldInterfaceRenderState state, float yRot, float xRot) {
 			if (state.isInvisible || state.blackened) return;
-			float wave = ((float) Math.sin(state.ageInTicks * 0.13F) + 1.0F) * 0.5F;
+			int band = Math.clamp(state.paletteBand, 0, WorldInterfacePalette.PHASE_BAND_COUNT - 1);
+			// Both the hue and the breath rate escalate with the band, so a player who never looks
+			// at the HUD still sees the interface turn from patient purple to agitated red.
+			float wave = ((float) Math.sin(state.ageInTicks * WorldInterfacePalette.breathSpeed(band))
+					+ 1.0F) * 0.5F;
 			int form = Math.clamp(state.form, 0, 2);
 			Identifier overlay = state.hasRedOverlay ? HIT[form] : EMISSIVE[form];
 			int color = state.hasRedOverlay ? ARGB.colorFromFloat(1.0F, 1.0F, 1.0F, 1.0F)
-					: ARGB.colorFromFloat(0.78F + wave * 0.18F, 0.64F, 0.18F, 0.96F);
+					: ARGB.colorFromFloat(0.78F + wave * 0.18F, WorldInterfacePalette.red(band),
+							WorldInterfacePalette.green(band), WorldInterfacePalette.blue(band));
 			collector.order(1).submitModel(getParentModel(), state, poseStack,
 					RenderTypes.entityTranslucentEmissive(overlay),
 					LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY, color, null,

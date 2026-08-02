@@ -11,6 +11,7 @@ public final class AnomalyIntensity {
 	public static final int REQUIRED_STAGE_SUCCESSES = 2;
 	public static final long LOGIN_GRACE_TICKS = 3L * 60L * 20L;
 	public static final long DIMENSION_GRACE_TICKS = 90L * 20L;
+	public static final long SIGNATURE_LEAD_TICKS = 30L * 20L;
 
 	private AnomalyIntensity() { }
 
@@ -35,9 +36,17 @@ public final class AnomalyIntensity {
 		if (limit == 0) return 0;
 		if (current == 0) return 1;
 		if (current >= limit) return current;
-		boolean ready = stageExposureTicks >= MIN_STAGE_EXPOSURE_TICKS
+		boolean ready = stageExposureTicks >= requiredExposureTicks(current, limit)
 				&& successfulAnomalies >= REQUIRED_STAGE_SUCCESSES;
 		return ready ? current + 1 : current;
+	}
+
+	/**
+	 * A stage lagging two or more levels behind the mainline ceiling would otherwise pace the whole
+	 * catalogue out of a normal playthrough, so the exposure requirement is halved until it catches up.
+	 */
+	public static long requiredExposureTicks(int currentStage, int ceiling) {
+		return ceiling - currentStage >= 2 ? MIN_STAGE_EXPOSURE_TICKS / 2 : MIN_STAGE_EXPOSURE_TICKS;
 	}
 
 	public static int heatPercent(long tierOnlineTicks) {

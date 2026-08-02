@@ -21,7 +21,6 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.RemotePlayer;
 import net.minecraft.client.renderer.RenderPipelines;
-import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.resources.Identifier;
@@ -61,6 +60,17 @@ public final class AnomalyPresentationController {
 	private static final int HAND_TEXTURE_WIDTH = 512;
 	private static final int HAND_TEXTURE_HEIGHT = 256;
 	private static final float PERIPHERAL_HAND_ENTER_FRACTION = 0.42F;
+	/** How much further in the palms travel after the slide, as a fraction of their own width. */
+	private static final float PERIPHERAL_HAND_CREEP_FRACTION = 0.09F;
+	// The impact palette is the mod's own tape palette, not a set of one-off neon values: an
+	// off-white that is never quite white, and the same red and cyan the loading-screen
+	// corruption bleeds. A burst assembled from colours nothing else in the mod uses reads as a
+	// different piece of software having a rendering fault.
+	private static final int GLITCH_BLEACH_COLOR = 0x00E6E2D8;
+	private static final int GLITCH_STREAK_COLOR = 0x00C8C4BC;
+	private static final int GLITCH_CHROMA_RED = 0x00FF2A2A;
+	private static final int GLITCH_CHROMA_CYAN = 0x0022E0FF;
+	private static final int GLITCH_SCANLINE_COLOR = 0x00000306;
 	private static final int LOCAL_RULE_FRAGMENT_LIMIT = 24;
 	private static final double LOCAL_RULE_MIN_SPACING_SQR = 9.0D;
 	private static final int HISTORY_TICKS = 60;
@@ -199,6 +209,13 @@ public final class AnomalyPresentationController {
 				// A full one-shot rebuild also works when the anomaly was requested while a GUI covered the world.
 				client.levelRenderer.allChanged();
 			}
+			case "red_horizon" -> {
+				// The sweep is the only part of this anomaly that arrives on a single frame, and
+				// it arrives before anything is visible: by the time the horizon is worth looking
+				// at, the player has already been given a reason to look at it.
+				playSignalCue(client, ModSounds.SIGNAL_TUNING_SWEEP, 0.48F);
+				dedicatedSoundCount++;
+			}
 			case "channel_override" -> client.setScreen(new ChannelOverrideScreen());
 			case "window_pulse" -> simulatedWindow = !MetaController.startWindowPulse();
 			case "desktop_presence" -> simulatedNotepad = !MetaController.startDesktopPresence();
@@ -245,7 +262,10 @@ public final class AnomalyPresentationController {
 			case "experience_gap", "channel_override" -> releaseAllInput(client);
 			default -> { }
 		}
-		if (glitchImpactTicks > 0) glitchImpactTicks--;
+		if (glitchImpactTicks > 0) {
+			tickGlitchAudio(client, GlitchImpactTimeline.IMPACT_TICKS - glitchImpactTicks);
+			glitchImpactTicks--;
+		}
 		if (anomalyId.equals("channel_override") && !(client.screen instanceof ChannelOverrideScreen))
 			client.setScreen(new ChannelOverrideScreen());
 		remainingTicks--;
@@ -267,10 +287,36 @@ public final class AnomalyPresentationController {
 
 	private static void triggerGlitchImpact(Minecraft client) {
 		glitchTriggered = true;
-		glitchImpactTicks = 18;
+		glitchImpactTicks = GlitchImpactTimeline.IMPACT_TICKS;
 		if (client.player != null && client.level != null) {
 			client.level.playLocalSound(client.player.getX(), client.player.getEyeY(), client.player.getZ(),
 					ModSounds.WINDOW_GLITCH, SoundSource.MASTER, 1.35F, 0.58F, false);
+			// The captioned cue redirects to a beacon deactivate, which on its own is a soft
+			// electronic sigh under a screen that is visibly being torn. The uncaptioned layer
+			// underneath it supplies the break; it stays subtitle-less for the reason every
+			// LAYER_* event exists - a captioned player must not be told the thing they just
+			// heard was ordinary stone.
+			client.level.playLocalSound(client.player.getX(), client.player.getEyeY(), client.player.getZ(),
+					ModSounds.LAYER_DEEPSLATE_BREAK, SoundSource.MASTER, 0.95F, 0.52F, false);
+			dedicatedSoundCount += 2;
+		}
+	}
+
+	/**
+	 * Keeps the sound breaking on the same frames as the picture.
+	 *
+	 * <p>A burst with four visual beats and one audio hit desynchronises immediately: the ear
+	 * hears one event finish while the eye is still watching three more happen. The second strike
+	 * and the closing are the two beats that need a voice of their own.</p>
+	 */
+	private static void tickGlitchAudio(Minecraft client, int glitchTick) {
+		if (client.player == null || client.level == null) return;
+		if (glitchTick == GlitchImpactTimeline.SECOND_HIT_TICK) {
+			client.level.playLocalSound(client.player.getX(), client.player.getEyeY(), client.player.getZ(),
+					ModSounds.LAYER_DEEPSLATE_BREAK, SoundSource.MASTER, 0.62F, 0.42F, false);
+			dedicatedSoundCount++;
+		} else if (glitchTick == GlitchImpactTimeline.GHOST_END_TICK) {
+			playSignalCue(client, ModSounds.SIGNAL_CARRIER_LOST, 0.42F);
 			dedicatedSoundCount++;
 		}
 	}
@@ -538,22 +584,12 @@ public final class AnomalyPresentationController {
 			graphics.fill(left + clearW, top, width, top + clearH, 0xF8000000);
 		}
 		if (anomalyId.equals("peripheral_residue") && !glitchTriggered) {
-			int elapsed = totalTicks - remainingTicks;
-			float slide = peripheralHandSlide(elapsed, totalTicks);
-			int drawWidth = Math.min(Math.max(280, Math.round(width * 0.58F)),
-					Math.max(280, Math.round(height * 1.06F)));
-			int drawHeight = drawWidth / 2;
-			int visibleWidth = Math.min(Math.round(drawWidth * 0.78F), Math.round(width * 0.42F));
-			int leftFinalX = visibleWidth - drawWidth;
-			int rightFinalX = width - visibleWidth;
-			int leftX = Math.round(Mth.lerp(slide, -drawWidth - 4, leftFinalX));
-			int rightX = Math.round(Mth.lerp(slide, width + 4, rightFinalX));
-			int handY = (height - drawHeight) / 2;
-			drawPeripheralHand(graphics, leftX, handY, drawWidth, drawHeight, false);
+			HandLayout hands = peripheralHandLayout(width, height, totalTicks - remainingTicks, totalTicks);
+			drawPeripheralHand(graphics, hands.leftX(), hands.leftY(), hands.width(), hands.height(), false, 255);
 			// One palm texture is reused; only X is mirrored so both palms keep facing the viewer.
-			drawPeripheralHand(graphics, rightX, handY, drawWidth, drawHeight, true);
+			drawPeripheralHand(graphics, hands.rightX(), hands.rightY(), hands.width(), hands.height(), true, 255);
 		}
-		if (glitchImpactTicks > 0) renderGlitchImpact(graphics, client, width, height);
+		if (glitchImpactTicks > 0) renderGlitchImpact(graphics, width, height);
 		if (simulatedWindow) {
 			int elapsed = totalTicks - remainingTicks;
 			int insetX = 12 + Math.floorMod(elapsed * 7, Math.max(13, width / 8));
@@ -583,40 +619,185 @@ public final class AnomalyPresentationController {
 		return phase * phase * (3.0F - 2.0F * phase);
 	}
 
-	private static void renderGlitchImpact(GuiGraphics graphics, Minecraft client, int width, int height) {
-		RandomSource random = RandomSource.create(seed ^ ((long) glitchImpactTicks << 32) ^ remainingTicks);
-		int alpha = Math.clamp(42 + glitchImpactTicks * 9, 0, 210);
-		if (glitchImpactTicks >= 15) graphics.fill(0, 0, width, height, alpha << 24 | 0x00F4F4F4);
-		for (int index = 0; index < 14; index++) {
-			int y = random.nextInt(Math.max(1, height));
-			int barHeight = 1 + random.nextInt(Math.max(2, height / 34));
-			int x = random.nextInt(Math.max(1, width / 4 + 1)) - width / 8;
-			int barWidth = width / 3 + random.nextInt(Math.max(1, width * 3 / 4));
-			int rgb = index % 3 == 0 ? 0x00F1F1F1 : index % 3 == 1 ? 0x00C000E8 : 0x0010D8D0;
-			graphics.fill(x, y, Math.min(width, x + barWidth), Math.min(height, y + barHeight),
-					Math.min(220, alpha + random.nextInt(35)) << 24 | rgb);
-		}
-		Component noise = Component.literal("XXXXXXXXXXXXXXXXXXXXXXXX")
-				.withStyle(ChatFormatting.OBFUSCATED, ChatFormatting.BOLD);
-		for (int row = 0; row < 7; row++) {
-			int x = random.nextInt(Math.max(1, width - 80));
-			int y = random.nextInt(Math.max(1, height - 10));
-			graphics.drawString(client.font, noise, x, y,
-					0xFF000000 | (random.nextBoolean() ? 0x00FFFFFF : 0x00FF3A63), false);
+	/**
+	 * How much further in the palms have reached since the slide finished, 0 to 1.
+	 *
+	 * <p>Without this the hands arrive at 42% and then hold one absolutely still frame for the
+	 * remaining seven seconds, which reads as a decal stuck over the game rather than as
+	 * something entering it. The creep is a couple of pixels per second - below the speed at
+	 * which the eye catches motion - so what the player registers is that the hands are nearer
+	 * than they were, never that they saw them move.</p>
+	 */
+	private static float peripheralHandCreep(int elapsed, int duration) {
+		float life = Math.max(0.0F, Math.min(1.0F, elapsed / (float) Math.max(1, duration)));
+		if (life <= PERIPHERAL_HAND_ENTER_FRACTION) return 0.0F;
+		return (life - PERIPHERAL_HAND_ENTER_FRACTION) / (1.0F - PERIPHERAL_HAND_ENTER_FRACTION);
+	}
+
+	/** A single pixel of unsteadiness, held for four ticks at a time so it never reads as flicker. */
+	private static int peripheralHandTremor(int elapsed) {
+		return Math.floorMod(AlphaLoadTimeline.noise(elapsed / 4), 3) - 1;
+	}
+
+	private static HandLayout peripheralHandLayout(int width, int height, int elapsed, int duration) {
+		float slide = peripheralHandSlide(elapsed, duration);
+		int drawWidth = Math.min(Math.max(280, Math.round(width * 0.58F)),
+				Math.max(280, Math.round(height * 1.06F)));
+		int drawHeight = drawWidth / 2;
+		int visibleWidth = Math.min(Math.round(drawWidth * 0.78F), Math.round(width * 0.42F));
+		int reach = Math.round(drawWidth * PERIPHERAL_HAND_CREEP_FRACTION
+				* peripheralHandCreep(elapsed, duration));
+		int tremor = peripheralHandTremor(elapsed);
+		int leftFinalX = visibleWidth - drawWidth + reach;
+		int rightFinalX = width - visibleWidth - reach;
+		int leftX = Math.round(Mth.lerp(slide, -drawWidth - 4, leftFinalX)) + tremor;
+		int rightX = Math.round(Mth.lerp(slide, width + 4, rightFinalX)) - tremor;
+		// The two palms breathe in opposite phase. Locked together they read as one image cut in
+		// half; opposed, they read as two arms belonging to something that is not one shape.
+		int drift = Math.round(Mth.sin(elapsed * 0.055F) * 2.0F);
+		int baseY = (height - drawHeight) / 2;
+		return new HandLayout(leftX, rightX, baseY + drift, baseY - drift, drawWidth, drawHeight);
+	}
+
+	/**
+	 * The burst that ends a corruption impact, drawn in the order the layers physically stack:
+	 * the flash, the dark it leaves, whatever the tear is currently eating, the tear itself, the
+	 * mistracked band on the picture that comes back, the medium showing through it, and the
+	 * frame it all closes on. {@link GlitchImpactTimeline} owns every number.
+	 */
+	private static void renderGlitchImpact(GuiGraphics graphics, int width, int height) {
+		int tick = GlitchImpactTimeline.IMPACT_TICKS - glitchImpactTicks;
+		if (!GlitchImpactTimeline.active(tick) || width <= 0 || height <= 0) return;
+		int bleach = GlitchImpactTimeline.bleachAlpha(tick);
+		if (bleach > 0) graphics.fill(0, 0, width, height, bleach << 24 | GLITCH_BLEACH_COLOR);
+		int dropout = GlitchImpactTimeline.dropoutAlpha(tick);
+		if (dropout > 0) graphics.fill(0, 0, width, height, dropout << 24);
+		renderGlitchDebris(graphics, tick, width, height);
+		renderTornPicture(graphics, tick, width, height);
+		renderMistrackedBand(graphics, tick, width, height);
+		renderGlitchScanlines(graphics, tick, width, height);
+		renderGlitchCollapse(graphics, tick, width, height);
+	}
+
+	/**
+	 * The palms being torn apart by the burst instead of being switched off by it.
+	 *
+	 * <p>They used to vanish on the frame before the corruption started, so the two events the
+	 * anomaly is built out of never actually met - the hands left, and then separately the screen
+	 * broke. Shredding them across the same displaced bands as the tear, for the three ticks the
+	 * tear is at full strength, is what makes the corruption read as the thing that took them.</p>
+	 */
+	private static void renderGlitchDebris(GuiGraphics graphics, int tick, int width, int height) {
+		if (!anomalyId.equals("peripheral_residue")) return;
+		float strength = GlitchImpactTimeline.debrisStrength(tick);
+		if (strength <= 0.0F) return;
+		HandLayout hands = peripheralHandLayout(width, height, totalTicks - remainingTicks, totalTicks);
+		int alpha = Math.clamp(Math.round(255 * strength), 0, 255);
+		for (int slice = 0; slice < GlitchImpactTimeline.SLICES; slice++) {
+			int top = GlitchImpactTimeline.sliceTop(slice, height);
+			int bottom = GlitchImpactTimeline.sliceTop(slice + 1, height);
+			if (bottom <= top || GlitchImpactTimeline.sliceLost(slice, tick, strength)) continue;
+			int shift = GlitchImpactTimeline.sliceShift(slice, tick, width, strength);
+			graphics.enableScissor(0, top, width, bottom);
+			drawPeripheralHand(graphics, hands.leftX() + shift, hands.leftY(),
+					hands.width(), hands.height(), false, alpha);
+			drawPeripheralHand(graphics, hands.rightX() - shift, hands.rightY(),
+					hands.width(), hands.height(), true, alpha);
+			graphics.disableScissor();
 		}
 	}
 
+	/**
+	 * The picture torn into bands: some dragged sideways with a red and cyan ghost either side of
+	 * them, some carrying nothing at all.
+	 *
+	 * <p>Displaced streaks rather than a re-render of the shifted picture, for the same reason
+	 * {@link AlphaCorruptionRenderer#drawTrackingBand} draws them that way - the read is identical
+	 * at a fraction of the cost.</p>
+	 */
+	private static void renderTornPicture(GuiGraphics graphics, int tick, int width, int height) {
+		float strength = GlitchImpactTimeline.tearStrength(tick);
+		if (strength <= 0.0F) return;
+		int chroma = Math.round(GlitchImpactTimeline.chromaOffset(tick));
+		int streakAlpha = Math.round(148 * strength);
+		int ghostAlpha = Math.round(104 * strength);
+		for (int slice = 0; slice < GlitchImpactTimeline.SLICES; slice++) {
+			int top = GlitchImpactTimeline.sliceTop(slice, height);
+			int bottom = GlitchImpactTimeline.sliceTop(slice + 1, height);
+			if (bottom <= top) continue;
+			if (GlitchImpactTimeline.sliceLost(slice, tick, strength)) {
+				graphics.fill(0, top, width, bottom, Math.round(212 * strength) << 24);
+				graphics.fill(0, top, width, top + 1,
+						Math.round(150 * strength) << 24 | GLITCH_CHROMA_CYAN);
+				continue;
+			}
+			int shift = GlitchImpactTimeline.sliceShift(slice, tick, width, strength);
+			int left = GlitchImpactTimeline.sliceStreakLeft(slice, tick, width) + shift;
+			int right = left + GlitchImpactTimeline.sliceStreakWidth(slice, tick, width);
+			if (chroma > 0) {
+				fillClamped(graphics, left - chroma, top, right - chroma, bottom,
+						ghostAlpha << 24 | GLITCH_CHROMA_RED, width);
+				fillClamped(graphics, left + chroma, top, right + chroma, bottom,
+						ghostAlpha << 24 | GLITCH_CHROMA_CYAN, width);
+			}
+			fillClamped(graphics, left, top, right, bottom,
+					streakAlpha << 24 | GLITCH_STREAK_COLOR, width);
+		}
+	}
+
+	private static void renderMistrackedBand(GuiGraphics graphics, int tick, int width, int height) {
+		int top = GlitchImpactTimeline.rollBandTop(tick, height);
+		if (top == Integer.MIN_VALUE) return;
+		int bottom = Math.min(height, top + GlitchImpactTimeline.rollBandHeight(height));
+		if (bottom <= 0 || top >= height) return;
+		graphics.fill(0, Math.max(0, top), width, bottom, 0x30FFFFFF);
+		if (top >= 0) graphics.fill(0, top, width, top + 1, 0x5AFFFFFF);
+		if (bottom < height) graphics.fill(0, bottom - 1, width, bottom, 0x4D000000);
+	}
+
+	private static void renderGlitchScanlines(GuiGraphics graphics, int tick, int width, int height) {
+		int alpha = GlitchImpactTimeline.scanlineAlpha(tick);
+		if (alpha <= 0) return;
+		int color = alpha << 24 | GLITCH_SCANLINE_COLOR;
+		for (int y = 0; y < height; y += AlphaLoadTimeline.SCANLINE_SPACING)
+			graphics.fill(0, y, width, y + 1, color);
+	}
+
+	private static void renderGlitchCollapse(GuiGraphics graphics, int tick, int width, int height) {
+		if (!GlitchImpactTimeline.collapsing(tick)) return;
+		int halfHeight = GlitchImpactTimeline.collapseHalfHeight(tick, height);
+		int inset = GlitchImpactTimeline.collapseInset(tick, width);
+		int alpha = GlitchImpactTimeline.collapseAlpha(tick);
+		int centerY = height / 2;
+		if (width - inset <= inset) return;
+		int pinch = GlitchImpactTimeline.collapsePinchHeight(tick, height);
+		graphics.fill(0, centerY - halfHeight - pinch, width, centerY - halfHeight, 0xB4000000);
+		graphics.fill(0, centerY + halfHeight, width, centerY + halfHeight + pinch, 0xB4000000);
+		graphics.fill(inset, centerY - halfHeight, width - inset, centerY + halfHeight,
+				alpha << 24 | GLITCH_BLEACH_COLOR);
+	}
+
+	/** {@link GuiGraphics#fill} draws nothing at all when handed a reversed or off-screen span. */
+	private static void fillClamped(GuiGraphics graphics, int left, int top, int right, int bottom,
+			int color, int width) {
+		int clampedLeft = Math.max(0, Math.min(left, width));
+		int clampedRight = Math.max(0, Math.min(right, width));
+		if (clampedRight <= clampedLeft) return;
+		graphics.fill(clampedLeft, top, clampedRight, bottom, color);
+	}
+
 	private static void drawPeripheralHand(GuiGraphics graphics, int x, int y, int width, int height,
-			boolean mirrorHorizontally) {
+			boolean mirrorHorizontally, int alpha) {
+		int tint = Math.clamp(alpha, 0, 255) << 24 | 0x00FFFFFF;
 		if (!mirrorHorizontally) {
 			graphics.blit(RenderPipelines.GUI_TEXTURED, HANDS, x, y, 0.0F, 0.0F,
 					width, height, HAND_TEXTURE_WIDTH, HAND_TEXTURE_HEIGHT,
-					HAND_TEXTURE_WIDTH, HAND_TEXTURE_HEIGHT);
+					HAND_TEXTURE_WIDTH, HAND_TEXTURE_HEIGHT, tint);
 			return;
 		}
 		graphics.blit(RenderPipelines.GUI_TEXTURED, HANDS, x, y, HAND_TEXTURE_WIDTH, 0.0F,
 				width, height, -HAND_TEXTURE_WIDTH, HAND_TEXTURE_HEIGHT,
-				HAND_TEXTURE_WIDTH, HAND_TEXTURE_HEIGHT);
+				HAND_TEXTURE_WIDTH, HAND_TEXTURE_HEIGHT, tint);
 	}
 
 	private static void releaseAllInput(Minecraft client) {
@@ -638,6 +819,12 @@ public final class AnomalyPresentationController {
 		restoring = true;
 		try {
 			UUID completed = instanceId;
+			// A sustained anomaly ending is the moment a transmission stops, and that reads as
+			// worse than one starting. The short cues are excluded: at four seconds the tail would
+			// land almost on top of the anomaly's own start, which just sounds like a glitch.
+			if (completed != null && isSustainedAnomaly(anomalyId)) {
+				playSignalCue(client, ModSounds.SIGNAL_CARRIER_LOST, 0.55F);
+			}
 			if (fracturePos != null && activeLevel != null)
 				activeLevel.destroyBlockProgress(fractureBreakerId(), fracturePos, -1);
 			if (echoCrack != null && activeLevel != null)
@@ -686,16 +873,111 @@ public final class AnomalyPresentationController {
 	public static boolean isAudioMuted() {
 		return instanceId != null && anomalyId.equals("experience_gap");
 	}
+	/**
+	 * silent_world removes the world's own voice while leaving the player's intact: footsteps,
+	 * mining and hits still answer, but ambience, weather and every creature go quiet. The point
+	 * is that nothing announces itself - the player is left unsure whether anything is even
+	 * happening, which is why this runs for minutes rather than seconds.
+	 */
+	public static boolean isSilentWorldActive() {
+		return instanceId != null && anomalyId.equals("silent_world");
+	}
+	/**
+	 * The anomalies long enough that a closing cue reads as an ending rather than as a stutter.
+	 *
+	 * <p>Three of these run for minutes. red_horizon is the one exception at forty seconds, and
+	 * it earns the tail for the same reason: it is a transmission the player has been living
+	 * inside long enough to notice the moment it stops.</p>
+	 */
+	private static boolean isSustainedAnomaly(String id) {
+		return id.equals("silent_world") || id.equals("temporal_drift") || id.equals("metric_drift")
+				|| id.equals("red_horizon");
+	}
+	/**
+	 * Signal cues play as UI sound rather than through the level: restore() runs on disconnect and
+	 * dimension changes where {@code client.level} may already be gone, and the signal is not a
+	 * thing positioned in the world anyway.
+	 */
+	private static void playSignalCue(Minecraft client, SoundEvent cue, float volume) {
+		client.getSoundManager().play(
+				net.minecraft.client.resources.sounds.SimpleSoundInstance.forUI(cue, 1.0F, volume));
+	}
+	public static boolean isAmbientSourceSilenced(net.minecraft.sounds.SoundSource source) {
+		if (!isSilentWorldActive() || source == null) return false;
+		return switch (source) {
+			case AMBIENT, WEATHER, MUSIC, RECORDS, HOSTILE, NEUTRAL -> true;
+			default -> false;
+		};
+	}
+	/**
+	 * temporal_drift desynchronises the sky from the actual world time. Lighting, mob spawning and
+	 * every game rule keep obeying the real clock; only the celestial bodies move to the wrong
+	 * place. The result is a sky that contradicts everything else the player can verify - stars
+	 * out at noon, the sun below the horizon while the ground stays lit - which is far stranger
+	 * than simply forcing night.
+	 */
+	public static boolean isTemporalDriftActive() {
+		return instanceId != null && anomalyId.equals("temporal_drift");
+	}
+	/** Rotates a celestial angle (radians) by a stable per-session fraction of a full turn. */
+	public static float driftedCelestialAngle(float original) {
+		if (!isTemporalDriftActive()) return original;
+		float turn = 0.30F + Math.floorMod(seed, 1_000L) / 1_000.0F * 0.40F;
+		return (float) Math.floorMod((long) ((original + turn * Mth.TWO_PI) * 1_000.0F),
+				(long) (Mth.TWO_PI * 1_000.0F)) / 1_000.0F;
+	}
+	/** Keeps the stars visible even when the real clock says it is daytime. */
+	public static float driftedStarBrightness(float original) {
+		return isTemporalDriftActive() ? Math.max(original, 0.55F) : original;
+	}
+	/**
+	 * metric_drift bends what the terminal reports rather than what the world does. Distances and
+	 * coordinates read slightly wrong for minutes at a time, so the instrument the player has been
+	 * taught to rely on becomes the thing they cannot verify.
+	 */
+	public static boolean isMetricDriftActive() {
+		return instanceId != null && anomalyId.equals("metric_drift");
+	}
+	/** Deterministic per-session skew so a re-read of the same value stays consistently wrong. */
+	public static int driftedMetric(int original) {
+		if (!isMetricDriftActive()) return original;
+		int magnitude = 1 + (int) Math.floorMod(seed >>> 3, 3L);
+		return original + (Math.floorMod(seed + original, 2L) == 0L ? magnitude : -magnitude);
+	}
+	/**
+	 * The sky dome overhead, which takes only a fraction of the horizon's strength.
+	 *
+	 * <p>Vanilla blends the dome colour into the fog colour towards the horizon, so tinting the
+	 * two by different amounts buys a genuine vertical gradient out of two flat uniforms. That
+	 * is what makes the anomaly a horizon rather than a filter: the worst of it sits where the
+	 * player is already looking for distance, and directly overhead is nearly untouched.</p>
+	 */
 	public static int redSkyShaderColor(int original) {
-		float strength = redSkyStrength();
+		float strength = redSkyDomeStrength();
 		if (strength <= 0.0F) return original;
 		return tintRed(original, strength);
 	}
-	public static float redSkyStrength() {
-		if (instanceId == null || !anomalyId.equals("red_horizon")) return 0.0F;
-		int fadeTicks = totalTicks == 800 ? 200 : Math.max(4, totalTicks / 4);
-		float fade = remainingTicks > fadeTicks ? 1.0F : remainingTicks / (float) fadeTicks;
-		return Math.clamp(fade, 0.0F, 1.0F);
+	/** The horizon band and the fog that carries it, at full strength. */
+	public static int redHorizonShaderColor(int original) {
+		float strength = redHorizonStrength();
+		if (strength <= 0.0F) return original;
+		return tintRed(original, strength);
+	}
+	public static boolean isRedHorizonActive() {
+		return instanceId != null && anomalyId.equals("red_horizon");
+	}
+	public static float redHorizonStrength() {
+		if (!isRedHorizonActive()) return 0.0F;
+		return RedHorizonTimeline.horizonStrength(totalTicks - remainingTicks, remainingTicks, totalTicks);
+	}
+	public static float redSkyDomeStrength() {
+		if (!isRedHorizonActive()) return 0.0F;
+		return RedHorizonTimeline.skyDomeStrength(totalTicks - remainingTicks, remainingTicks, totalTicks);
+	}
+	/** How far the world has closed in. Trails the colour - see {@link RedHorizonTimeline}. */
+	public static float redFogTightness() {
+		if (!isRedHorizonActive()) return 0.0F;
+		return RedHorizonTimeline.fogTightness(totalTicks - remainingTicks, remainingTicks, totalTicks);
 	}
 	private static int tintRed(int original, float strength) {
 		int alpha = original >>> 24;
@@ -779,6 +1061,11 @@ public final class AnomalyPresentationController {
 		}
 		if (instanceId != null && anomalyId.equals("peripheral_residue") && !glitchTriggered)
 			overlays.add("peripheral_hand_instances");
+		// The sustained anomalies have no screen overlay of their own - that is the point - so
+		// they publish a marker here instead, giving the client GameTests something observable.
+		if (instanceId != null && anomalyId.equals("silent_world")) overlays.add("ambient_silenced");
+		if (isTemporalDriftActive()) overlays.add("sky_desynchronised");
+		if (isMetricDriftActive()) overlays.add("readout_skewed");
 		if (glitchImpactTicks > 0) overlays.add("glitch_impact");
 		if (fractureStage >= 0) overlays.add("surface_fracture");
 		if (simulatedWindow) overlays.add("window_fallback");
@@ -805,6 +1092,8 @@ public final class AnomalyPresentationController {
 			InteractionHand swingingArm, boolean sprinting, boolean shiftKeyDown, boolean swimming,
 			InteractionHand usingHand, List<ItemStack> equipment, BlockPos digging) { }
 	private record TracePosition(ResourceKey<Level> dimension, BlockPos position) { }
+	/** Both palms for one tick. Their two Y values differ by the opposed breathing drift. */
+	private record HandLayout(int leftX, int rightX, int leftY, int rightY, int width, int height) { }
 
 	private static final class ActionEchoPlayer extends RemotePlayer {
 		private final PlayerSkin skin;

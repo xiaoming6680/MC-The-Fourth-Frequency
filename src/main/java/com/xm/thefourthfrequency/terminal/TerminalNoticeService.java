@@ -19,15 +19,25 @@ public final class TerminalNoticeService {
 				TerminalNoticePayload.TONE_UNREAD);
 	}
 
-	public static void taskComplete(ServerPlayer player) {
-		send(player, Component.translatable("message.thefourthfrequency.task.completed"),
+	/**
+	 * Completion and its reward are one moment, so they are one line. A separate "task complete"
+	 * notice only ever preceded this one and carried nothing the reward text does not already imply.
+	 */
+	public static void rewardClaimed(ServerPlayer player, Component rewardName, int rewardCount,
+			boolean completedNow) {
+		send(player, Component.translatable(completedNow
+				? "message.thefourthfrequency.task.completed_reward_claimed"
+				: "message.thefourthfrequency.task.reward_claimed", rewardName, rewardCount),
 				TerminalNoticePayload.TONE_TASK_COMPLETE);
 	}
 
-	public static void rewardClaimed(ServerPlayer player, Component rewardName, int rewardCount) {
-		send(player, Component.translatable(
-				"message.thefourthfrequency.task.reward_claimed", rewardName, rewardCount),
-				TerminalNoticePayload.TONE_TASK_COMPLETE);
+	/** Feedback for an action the mod refused; presented and sounded apart from progress notices. */
+	public static void denied(ServerPlayer player, Component message) {
+		send(player, message, TerminalNoticePayload.TONE_DENIED);
+	}
+
+	public static void denied(ServerPlayer player, String messageKey) {
+		denied(player, Component.translatable(messageKey));
 	}
 
 	public static void pursuitWarning(ServerPlayer player) {

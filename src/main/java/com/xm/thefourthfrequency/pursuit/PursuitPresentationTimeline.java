@@ -40,10 +40,62 @@ public final class PursuitPresentationTimeline {
 		return 6 + (int) Math.round(normalized * 30.0D);
 	}
 
+	/**
+	 * Picks the mosaic/colour-depth band for how close the corrector currently is, giving the
+	 * player a spatial channel that does not depend on hearing the heartbeat.
+	 *
+	 * <p>Switching bands swaps the whole post-effect chain, so the thresholds are hysteretic:
+	 * a band is entered at one distance and only left at a further one. Without that, a player
+	 * hovering on a boundary would rebuild the chain every scan. Grades only ever step up
+	 * immediately (something got close - say so at once) while stepping back down waits for the
+	 * exit distance.</p>
+	 */
+	public static ProximityGrade proximityGrade(double distance, ProximityGrade current) {
+		ProximityGrade observed = rawGrade(distance);
+		ProximityGrade from = current == null ? ProximityGrade.DISTANT : current;
+		if (observed.ordinal() > from.ordinal()) return observed;
+		if (observed.ordinal() < from.ordinal() && distance > from.exitDistance()) return observed;
+		return from;
+	}
+
+	private static ProximityGrade rawGrade(double distance) {
+		if (distance <= ProximityGrade.CONTACT.enterDistance()) return ProximityGrade.CONTACT;
+		if (distance <= ProximityGrade.CLOSE.enterDistance()) return ProximityGrade.CLOSE;
+		if (distance <= ProximityGrade.NEAR.enterDistance()) return ProximityGrade.NEAR;
+		return ProximityGrade.DISTANT;
+	}
+
 	public enum Stage {
 		TERMINAL_WARNING,
 		WARNING,
 		FROZEN,
 		BLACKOUT
+	}
+
+	/**
+	 * Ordered from farthest to nearest; {@code ordinal()} is meaningful and is what
+	 * {@link #proximityGrade} compares, so new entries must preserve that ordering.
+	 */
+	public enum ProximityGrade {
+		DISTANT(Double.MAX_VALUE, Double.MAX_VALUE),
+		NEAR(34.0D, 38.0D),
+		CLOSE(18.0D, 22.0D),
+		CONTACT(8.0D, 12.0D);
+
+		private final double enterDistance;
+		private final double exitDistance;
+
+		ProximityGrade(double enterDistance, double exitDistance) {
+			this.enterDistance = enterDistance;
+			this.exitDistance = exitDistance;
+		}
+
+		public double enterDistance() {
+			return enterDistance;
+		}
+
+		public double exitDistance() {
+			return exitDistance;
+		}
 	}
 }

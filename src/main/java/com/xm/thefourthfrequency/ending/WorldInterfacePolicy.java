@@ -77,18 +77,45 @@ public final class WorldInterfacePolicy {
 				effectiveCollapseTicks(elapsedTicks, destroyedAnchors) / (double) COLLAPSE_DURATION_TICKS);
 	}
 
+	/** Collapse fraction below which combat shows no erosion at all. */
+	public static final double EROSION_START_COLLAPSE = 0.40D;
 	/**
-	 * Failure-material presentation is a separate resolution clock. The active collapse timer and
-	 * its anchor penalty must never leak into normal combat or the successful ending.
+	 * How far erosion may go while the fight is still winnable. The End has to stay readable
+	 * enough to fight in, so combat never approaches the full missing-texture wash that the
+	 * failure resolution ends on.
 	 */
-	public static float failurePresentationProgress(WorldInterfaceStage stage, long resolutionTick,
-			long gameTime, int durationTicks) {
+	public static final float COMBAT_EROSION_CEILING = 0.55F;
+
+	/**
+	 * How far the world has visibly stopped being able to describe itself, in [0, 1].
+	 *
+	 * <p>This used to key off the failure resolution clock alone, which meant the entire ten
+	 * minute fight rendered at exactly zero and only a lost encounter ever showed the erosion -
+	 * for six seconds, after the outcome was already decided. Winning players never saw it at all.
+	 * Driving it from the collapse timer instead turns the countdown from a number into something
+	 * visible: the island degrades as the deadline approaches, which is the pressure the fight was
+	 * missing.</p>
+	 *
+	 * <p>Erosion holds at zero until {@link #EROSION_START_COLLAPSE} so the opening minutes stay
+	 * clean, then accelerates quadratically to {@link #COMBAT_EROSION_CEILING}. A lost fight
+	 * continues from that ceiling to a full wash across the resolution clock; a won fight returns
+	 * to zero on the spot, so cutting the interface visibly restores the world's materials.</p>
+	 */
+	public static float presentationErosionProgress(WorldInterfaceStage stage, long elapsedTicks,
+			int destroyedAnchors, long resolutionTick, long gameTime, int durationTicks) {
 		if (stage == null) throw new IllegalArgumentException("Stage cannot be null");
 		if (durationTicks <= 0) throw new IllegalArgumentException("Presentation duration must be positive");
-		if (stage != WorldInterfaceStage.FAILURE_RESOLUTION || resolutionTick < 0L
-				|| gameTime <= resolutionTick) return 0.0F;
-		long age = gameTime - resolutionTick;
-		return Math.min(age, durationTicks) / (float) durationTicks;
+		if (stage == WorldInterfaceStage.FAILURE_RESOLUTION) {
+			if (resolutionTick < 0L || gameTime <= resolutionTick) return COMBAT_EROSION_CEILING;
+			long age = gameTime - resolutionTick;
+			float completion = Math.min(age, durationTicks) / (float) durationTicks;
+			return COMBAT_EROSION_CEILING + (1.0F - COMBAT_EROSION_CEILING) * completion;
+		}
+		if (!stage.isCombat()) return 0.0F;
+		double collapse = collapseProgress(Math.max(0L, elapsedTicks), destroyedAnchors);
+		if (collapse <= EROSION_START_COLLAPSE) return 0.0F;
+		double advance = (collapse - EROSION_START_COLLAPSE) / (1.0D - EROSION_START_COLLAPSE);
+		return (float) (COMBAT_EROSION_CEILING * advance * advance);
 	}
 
 	public static int remainingCollapseTicks(long elapsedTicks, int destroyedAnchors) {

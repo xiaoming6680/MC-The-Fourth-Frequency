@@ -139,25 +139,30 @@ public final class DebugPanelScreen extends Screen {
 
 	private void buildProgressActions(Layout layout) {
 		int y = layout.contentTop + (layout.contentHeight() < 150 ? 48 : 70);
+		int row = BUTTON_HEIGHT + BUTTON_GAP;
+		// The two jump-ahead tests always share a row, in either width. Giving the boss test its own
+		// full-width row would have pushed the reset button off the bottom of the narrow panel.
+		int halfWidth = (layout.contentWidth() - BUTTON_GAP) / 2;
+		int rightColumn = layout.contentLeft + halfWidth + BUTTON_GAP;
 		if (layout.contentWidth() >= 280) {
-			int width = (layout.contentWidth() - BUTTON_GAP) / 2;
-			actionButton(layout.contentLeft, y, width, new ActionSpec("完成前期准备", "prelude_ready", "", 0, false));
-			actionButton(layout.contentLeft + width + BUTTON_GAP, y, width,
+			actionButton(layout.contentLeft, y, halfWidth,
+					new ActionSpec("完成前期准备", "prelude_ready", "", 0, false));
+			actionButton(rightColumn, y, halfWidth,
 					new ActionSpec("主线前进一步", "progress_next", "", 0, false));
-			actionButton(layout.contentLeft, y + BUTTON_HEIGHT + BUTTON_GAP, layout.contentWidth(),
-					new ActionSpec("测试第 5 形态追逐", "pursuit_test", "", 5, true));
-			actionButton(layout.contentLeft, y + (BUTTON_HEIGHT + BUTTON_GAP) * 2, layout.contentWidth(),
-					new ActionSpec("重置个人主线", "progress_reset", "", 0, true));
+			y += row;
 		} else {
 			actionButton(layout.contentLeft, y, layout.contentWidth(),
 					new ActionSpec("完成前期准备", "prelude_ready", "", 0, false));
-			actionButton(layout.contentLeft, y + BUTTON_HEIGHT + BUTTON_GAP, layout.contentWidth(),
+			actionButton(layout.contentLeft, y + row, layout.contentWidth(),
 					new ActionSpec("主线前进一步", "progress_next", "", 0, false));
-			actionButton(layout.contentLeft, y + (BUTTON_HEIGHT + BUTTON_GAP) * 2, layout.contentWidth(),
-					new ActionSpec("测试第 5 形态追逐", "pursuit_test", "", 5, true));
-			actionButton(layout.contentLeft, y + (BUTTON_HEIGHT + BUTTON_GAP) * 3, layout.contentWidth(),
-					new ActionSpec("重置个人主线", "progress_reset", "", 0, true));
+			y += row * 2;
 		}
+		actionButton(layout.contentLeft, y, halfWidth,
+				new ActionSpec("测试第 5 形态追逐", "pursuit_test", "", 5, true));
+		actionButton(rightColumn, y, halfWidth,
+				new ActionSpec("测试 BOSS 战", "boss_test", "", 0, true));
+		actionButton(layout.contentLeft, y + row, layout.contentWidth(),
+				new ActionSpec("重置个人主线", "progress_reset", "", 0, true));
 	}
 
 	private void buildAnomalyActions(Layout layout) {
@@ -239,6 +244,7 @@ public final class DebugPanelScreen extends Screen {
 		if (ClientPlayNetworking.canSend(DebugActionPayload.TYPE)) {
 			if (action.equals("anomaly")) DebugPanelClient.expectAnomalyResponse(target);
 			if (action.equals("pursuit_test")) DebugPanelClient.expectPursuitResponse();
+			if (action.equals("boss_test")) DebugPanelClient.expectBossResponse();
 			ClientPlayNetworking.send(new DebugActionPayload(action, target, value));
 			pollTicks = 0;
 		}

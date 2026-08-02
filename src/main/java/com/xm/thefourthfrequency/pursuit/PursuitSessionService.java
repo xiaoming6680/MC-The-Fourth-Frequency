@@ -169,11 +169,14 @@ public final class PursuitSessionService {
 			clearSession(data, player, "mirror_missing");
 			return;
 		}
+		ServerLevel departureLevel = (ServerLevel) player.level();
+		BlockPos departurePosition = player.blockPosition();
 		mirror.getChunkAt(player.blockPosition());
 		player.teleportTo(mirror, player.getX(), player.getY(), player.getZ(), Set.of(),
 				player.getYRot(), player.getXRot(), true);
 		data.updateTerminalRecord(playerId,
 				value -> value.putString(TerminalData.PURSUIT_SESSION_PHASE, "running"));
+		notifyNearbyObservers(departureLevel, departurePosition, playerId);
 		if (!PursuitFormController.begin(player, sessionId,
 				record.getIntOr(TerminalData.PURSUIT_SESSION_FORM, 1),
 				record.getBooleanOr(TerminalData.PURSUIT_SESSION_DEBUG, false))) {
@@ -182,6 +185,26 @@ public final class PursuitSessionService {
 		}
 		sendPresentation(player, sessionId, PursuitPresentationPayload.RUNNING,
 				record.getIntOr(TerminalData.PURSUIT_SESSION_FORM, 1));
+	}
+
+	/**
+	 * Solitude comes from the observer being removed from shared reality, but the removal itself
+	 * should not read as a disconnect to the people standing next to them. Nearby bound terminals
+	 * record one impersonal line; it names no one and reveals nothing about the chase.
+	 */
+	private static void notifyNearbyObservers(ServerLevel source, BlockPos origin, UUID departedId) {
+		FrequencyWorldData data = FrequencyWorldData.get(source.getServer());
+		for (ServerPlayer observer : source.players()) {
+			if (observer.getUUID().equals(departedId)
+					|| observer.blockPosition().distSqr(origin) > 64.0D * 64.0D
+					|| data.terminalRecord(observer.getUUID()).isEmpty()) continue;
+			data.updateTerminalRecord(observer.getUUID(), record ->
+					TerminalSignalLog.append(record, SignalBand.UNKNOWN, "peer_signal_lost",
+							source.getGameTime(), source.getDayTime(),
+							source.dimension().identifier().toString(), origin.asLong(), 0, 2, true));
+			TerminalRuntimeService.synchronizeAttentionProjection(observer, data);
+			TerminalRuntimeService.refresh(observer);
+		}
 	}
 
 	private static void clearSession(FrequencyWorldData data, ServerPlayer player, String resolution) {

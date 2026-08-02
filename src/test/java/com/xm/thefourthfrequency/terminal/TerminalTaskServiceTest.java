@@ -2,6 +2,7 @@ package com.xm.thefourthfrequency.terminal;
 
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.persistence.PersistenceSchema;
+import com.xm.thefourthfrequency.pursuit.PursuitProgressPolicy;
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.SurvivalProgressService;
 import net.minecraft.SharedConstants;
@@ -65,7 +66,7 @@ final class TerminalTaskServiceTest {
 	@Test
 	void quantitativeTargetsUseTheRaisedCompletionRequirements() {
 		assertEquals(12, SurvivalProgressService.REQUIRED_WOOD);
-		assertEquals(12, SurvivalProgressService.REQUIRED_IRON);
+		assertEquals(6, SurvivalProgressService.REQUIRED_IRON);
 		assertEquals(8, SurvivalProgressService.REQUIRED_BLAZE_RODS);
 		assertEquals(3, SurvivalProgressService.REQUIRED_STRONGHOLD_UNLOCK_EYES);
 		assertEquals(4, SurvivalProgressService.REQUIRED_CRAFTED_EYES);
@@ -91,5 +92,26 @@ final class TerminalTaskServiceTest {
 		assertEquals(0, migrated.getIntOr(TerminalData.TASK_REWARD_CLAIMED_MASK, -1));
 		assertEquals(0, migrated.getIntOr(TerminalData.TASK_COMPLETION_NOTIFIED_MASK, -1));
 		assertFalse(migrated.getBooleanOr(TerminalData.UNREAD_ALERT_ACTIVE, true));
+	}
+
+	@Test
+	void migrationSeedsEncounteredChasesFromResolvedSoOldSavesKeepFinalEyeAccess() {
+		// Saves written before the encountered counter existed only tracked successes. A player who
+		// had already escaped a chase must not be sent back behind the final-Eye gate by the
+		// upgrade, so the new counter starts at least at the old resolved count.
+		CompoundTag escaped = new CompoundTag();
+		escaped.putInt(TerminalData.SCHEMA_VERSION, 9);
+		escaped.putInt(TerminalData.PURSUIT_RESOLVED_CHASES, 2);
+		CompoundTag migratedEscaped = TerminalData.migrateRecord(escaped);
+		assertEquals(2, migratedEscaped.getIntOr(TerminalData.PURSUIT_ENCOUNTERED_CHASES, -1));
+		assertTrue(PursuitProgressPolicy.finalEyeReady(
+				migratedEscaped.getIntOr(TerminalData.PURSUIT_ENCOUNTERED_CHASES, 0)));
+
+		CompoundTag untouched = new CompoundTag();
+		untouched.putInt(TerminalData.SCHEMA_VERSION, 9);
+		CompoundTag migratedUntouched = TerminalData.migrateRecord(untouched);
+		assertEquals(0, migratedUntouched.getIntOr(TerminalData.PURSUIT_ENCOUNTERED_CHASES, -1));
+		assertFalse(PursuitProgressPolicy.finalEyeReady(
+				migratedUntouched.getIntOr(TerminalData.PURSUIT_ENCOUNTERED_CHASES, 0)));
 	}
 }

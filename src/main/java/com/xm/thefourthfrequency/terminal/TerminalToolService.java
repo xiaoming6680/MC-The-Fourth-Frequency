@@ -122,7 +122,13 @@ public final class TerminalToolService {
 		boolean unstableSignal = unstableSignalAvailable(player, tag);
 		long mineralScanReady = tag.getLongOr(TerminalData.MINERAL_SCAN_READY_GAME_TIME, 0L);
 		int mineralScanTicks = mineralScanReady == 0L ? 0 : (int) Math.clamp(
-				Math.max(1L, mineralScanReady - now), 1L, 60L);
+				Math.max(1L, mineralScanReady - now), 1L, MineralSurveyPolicy.PROBE_REVEAL_TICKS);
+		MineralSurveyPolicy.ChargeState charges = probeCharges(tag, now);
+		int mineralReadingKind = tag.getIntOr(TerminalData.MINERAL_READING_KIND,
+				ResourceGuidanceService.READING_NONE);
+		boolean readingHere = tag.getStringOr(TerminalData.MINERAL_READING_DIMENSION, "")
+				.equals(player.level().dimension().identifier().toString());
+		if (!readingHere) mineralReadingKind = ResourceGuidanceService.READING_NONE;
 		boolean mineralSurveyNearby = tag.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false)
 				&& !disabled && (available & bit(TerminalTool.MINERALS)) != 0;
 		boolean navigationCompletion = StructureNavigationService.navigationCompletionAvailable(tag);
@@ -155,6 +161,15 @@ public final class TerminalToolService {
 				disabledTicks,
 				selectedResource(tag).wireId(),
 				mineralScanTicks,
+				charges.charges(),
+				MineralSurveyPolicy.rechargeTicksRemaining(charges, now),
+				mineralReadingKind,
+				mineralReadingKind == ResourceGuidanceService.READING_BEARING
+						? tag.getIntOr(TerminalData.MINERAL_READING_DX, 0) : 0,
+				mineralReadingKind == ResourceGuidanceService.READING_BEARING
+						? tag.getIntOr(TerminalData.MINERAL_READING_DZ, 0) : 0,
+				Math.max(0, tag.getIntOr(TerminalData.MINERAL_READING_MIN_DISTANCE, 0)),
+				Math.max(0, tag.getIntOr(TerminalData.MINERAL_READING_MAX_DISTANCE, 0)),
 				mineralSurveyNearby,
 				navigationCompletion,
 				navigationCompletionDirection,
@@ -203,26 +218,45 @@ public final class TerminalToolService {
 		return false;
 	}
 
+	/**
+	 * Spends one probe charge and arms a reading.
+	 *
+	 * <p>Nothing is rolled here any more. The terminal no longer decides what the player is looking
+	 * for - {@code ResourceGuidanceService} reads it off the surrounding ground - and there is no
+	 * failure chance, because a failure that costs nothing is not a difficulty, it is an invitation
+	 * to press again. The charge is the whole cost, and it is why the probe cannot be farmed.</p>
+	 */
 	public static boolean requestRescan(ServerPlayer player) {
 		CompoundTag tag = record(player);
 		if (tag == null || blockedByCorrection(player, tag)
 				|| (availableToolsMask(player, tag) & bit(TerminalTool.MINERALS)) == 0) return false;
 		long now = player.level().getGameTime();
 		if (tag.getLongOr(TerminalData.MINERAL_SCAN_READY_GAME_TIME, 0L) != 0L) return false;
-		TerminalResource resource = weightedResource(player.getRandom().nextInt(100));
-		boolean failed = MineralSurveyPolicy.manualScanFails(player.getRandom().nextInt(100));
+		MineralSurveyPolicy.ChargeState charges = probeCharges(tag, now);
+		if (charges.charges() <= 0) return false;
+		MineralSurveyPolicy.ChargeState spent = MineralSurveyPolicy.spend(charges, now);
 		FrequencyWorldData.get(player.level().getServer()).updateTerminalRecord(player.getUUID(), record -> {
 			StructureNavigationService.clearCompletion(record);
-			record.putInt(TerminalData.SELECTED_RESOURCE, resource.wireId());
-			record.putLong(TerminalData.MINERAL_SCAN_READY_GAME_TIME, now + 60L);
+			ResourceGuidanceService.clearReading(record);
+			record.putInt(TerminalData.MINERAL_PROBE_CHARGES, spent.charges());
+			record.putLong(TerminalData.MINERAL_PROBE_RECHARGE_TICK, spent.nextRechargeTick());
+			record.putLong(TerminalData.MINERAL_SCAN_READY_GAME_TIME,
+					now + MineralSurveyPolicy.PROBE_REVEAL_TICKS);
 			if (guidanceTool(record) == TerminalTool.MINERALS.slot())
 				record.putInt(TerminalData.ACTIVE_GUIDANCE_TOOL, NO_TOOL);
-			new NavigationState(failed ? ResourceGuidanceService.FAILED_SCAN_KIND : resource.id(),
-					resourceItem(resource), false, "", 0L, "", now).writeTo(record);
+			new NavigationState(ResourceGuidanceService.PROBE_KIND, "", false, "", 0L, "", now)
+					.writeTo(record);
 		});
-		ResourceGuidanceService.restartScan(player, false);
+		ResourceGuidanceService.abandonProbe(player);
 		TerminalRuntimeService.synchronizeProjection(player);
 		return true;
+	}
+
+	/** Resolves the stored charge bank forward to {@code now} without writing it back. */
+	public static MineralSurveyPolicy.ChargeState probeCharges(CompoundTag tag, long now) {
+		return MineralSurveyPolicy.charges(
+				tag.getIntOr(TerminalData.MINERAL_PROBE_CHARGES, MineralSurveyPolicy.MAX_PROBE_CHARGES),
+				tag.getLongOr(TerminalData.MINERAL_PROBE_RECHARGE_TICK, 0L), now);
 	}
 
 	public static boolean setHome(ServerPlayer player) {
@@ -243,6 +277,10 @@ public final class TerminalToolService {
 			long now = player.level().getGameTime();
 			FrequencyWorldData.get(player.level().getServer()).updateTerminalRecord(player.getUUID(), record -> {
 				record.putInt(TerminalData.SELECTED_RESOURCE, surveyed.resource().wireId());
+				// Promoted survey targets become ordinary exact readings, which is what gives them
+				// the stale-block and arrival upkeep that only runs for a recorded reading.
+				record.putInt(TerminalData.MINERAL_READING_KIND, ResourceGuidanceService.READING_EXACT);
+				record.putString(TerminalData.MINERAL_READING_DIMENSION, surveyed.dimension());
 				new NavigationState(surveyed.resource().id(), resourceItem(surveyed.resource()), true,
 						surveyed.blockId(), surveyed.position().asLong(), surveyed.dimension(), now).writeTo(record);
 			});
@@ -397,17 +435,7 @@ public final class TerminalToolService {
 	}
 
 	private static String resourceItem(TerminalResource resource) {
-		return switch (resource) {
-			case IRON -> "minecraft:raw_iron";
-			case COAL -> "minecraft:coal";
-			case GOLD -> "minecraft:raw_gold";
-			case DIAMOND -> "minecraft:diamond";
-			case NONE -> "";
-		};
-	}
-
-	public static TerminalResource weightedResource(int roll) {
-		return TerminalResource.weightedRoll(roll);
+		return ResourceGuidanceService.resourceItem(resource);
 	}
 
 	private static int ticksUntilLightChange(long dayTime) {

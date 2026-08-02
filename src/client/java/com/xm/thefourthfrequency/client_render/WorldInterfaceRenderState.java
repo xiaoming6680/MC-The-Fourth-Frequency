@@ -7,4 +7,6 @@ public final class WorldInterfaceRenderState extends LivingEntityRenderState {
 	public int actionId;
 	public long actionAgeMillis;
 	public boolean blackened;
+	/** Escalation band from {@link WorldInterfacePalette}; drives the emissive colour and breath. */
+	public int paletteBand;
 }

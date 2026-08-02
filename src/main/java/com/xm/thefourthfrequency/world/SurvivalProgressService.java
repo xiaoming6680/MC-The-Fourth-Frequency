@@ -1,6 +1,7 @@
 package com.xm.thefourthfrequency.world;
 
 import com.xm.thefourthfrequency.content.TerminalData;
+import com.xm.thefourthfrequency.terminal.AmbientAnomalyService;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
 import com.xm.thefourthfrequency.pursuit.PursuitDimensions;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -23,7 +24,7 @@ public final class SurvivalProgressService {
 	public static final int REQUIRED_WOOD = 12;
 	/** Stable compatibility alias for older tests and saved objective wording. */
 	public static final int REQUIRED_LOGS = REQUIRED_WOOD;
-	public static final int REQUIRED_IRON = 12;
+	public static final int REQUIRED_IRON = 6;
 	public static final int REQUIRED_BLAZE_RODS = 8;
 	public static final int REQUIRED_STRONGHOLD_UNLOCK_EYES = 3;
 	public static final int REQUIRED_CRAFTED_EYES = 4;
@@ -92,6 +93,9 @@ public final class SurvivalProgressService {
 		data.updateTerminalRecord(player.getUUID(), tag -> tag.putInt(TerminalData.SURVIVAL_MILESTONE_MASK,
 				tag.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0) | milestone.mask()));
 		TerminalRuntimeService.refresh(player);
+		if (milestone == SurvivalMilestone.ENTERED_NETHER || milestone == SurvivalMilestone.THREW_EYE) {
+			AmbientAnomalyService.scheduleSignature(player);
+		}
 		return true;
 	}
 

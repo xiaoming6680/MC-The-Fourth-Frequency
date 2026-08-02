@@ -59,8 +59,10 @@ public final class TheFourthFrequencyClient implements ClientModInitializer {
 		AmbientAnomalyClient.initialize();
 		AnomalyPresentationController.initialize();
 		MenuErosionState.initialize();
+		MusicDirector.initialize();
 		DebugPanelClient.initialize();
 		WorldDecayClient.initialize();
+		SignalBedController.initialize();
 		UseItemCallback.EVENT.register((player, level, hand) -> {
 			if (level.isClientSide() && player.getItemInHand(hand).is(ModItems.OLD_TERMINAL)
 					&& TerminalData.belongsTo(player.getItemInHand(hand), player.getUUID())) {

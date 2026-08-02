@@ -107,13 +107,9 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 			record.putInt(TerminalData.BAND_STAGE, 0);
 			record.putBoolean(TerminalData.BOUND, false);
 			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, SurvivalMilestone.MINED_LOGS.mask());
-			record.putInt(TerminalData.SELECTED_RESOURCE, TerminalResource.IRON.wireId());
-			record.putLong(TerminalData.MINERAL_SCAN_READY_GAME_TIME, player.level().getGameTime());
-			record.putString(TerminalData.TARGET_KIND, TerminalResource.IRON.id());
 		});
 
-		ResourceGuidanceService.requestRescan(player);
-		ResourceGuidanceService.updatePlayer(player);
+		ResourceGuidanceService.probeForTesting(player);
 		CompoundTag located = data.terminalRecord(player.getUUID()).orElseThrow();
 		helper.assertTrue(located.getBooleanOr(TerminalData.TARGET_LOCATED, false),
 				"Early terminal observation can locate a real resource before the fourth band appears");
@@ -427,12 +423,19 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 
 		helper.assertTrue(AnomalyGameTestBridge.start(player, "light_dropout", 0x2200B22L, 12),
 				"Light dropout starts when any nearby extinguishable light exists");
-		helper.assertTrue(helper.getLevel().getBlockState(glowstone).isAir(),
-				"Solid luminous blocks are temporarily extinguished");
-		helper.assertTrue(helper.getLevel().getBlockState(torch).isAir(),
-				"Nearby torches are temporarily extinguished");
-		helper.assertFalse(helper.getLevel().getBlockState(campfire).getValue(BlockStateProperties.LIT),
-				"Lit blocks use their real unlit state");
+		helper.assertTrue(helper.getLevel().getBlockState(glowstone).is(Blocks.GLOWSTONE),
+				"Lights go out over the extinguish window rather than on the starting frame");
+
+		// The lights go out farthest first across LightDropoutSequence.extinguishWindow, which is
+		// four ticks at this duration; every one of them is out well before the held dark.
+		helper.runAfterDelay(6, () -> {
+			helper.assertTrue(helper.getLevel().getBlockState(glowstone).isAir(),
+					"Solid luminous blocks are temporarily extinguished");
+			helper.assertTrue(helper.getLevel().getBlockState(torch).isAir(),
+					"Nearby torches are temporarily extinguished");
+			helper.assertFalse(helper.getLevel().getBlockState(campfire).getValue(BlockStateProperties.LIT),
+					"Lit blocks use their real unlit state");
+		});
 
 		helper.runAfterDelay(13, () -> {
 			helper.assertTrue(helper.getLevel().getBlockState(glowstone).is(Blocks.GLOWSTONE),

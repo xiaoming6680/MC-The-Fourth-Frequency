@@ -224,6 +224,7 @@ public final class TerminalScreen extends Screen {
 		if (!gameplayBefore && receiverGameplayActive() && localTuningOnly) {
 			localTuningOnly = false;
 			if (snapshot.tuning() != tuning) retargetTuningVisual(snapshot.tuning(), nowMillis());
+			TerminalClientAudio.signalSweep();
 		}
 		long nowMillis = nowMillis();
 		waveformMorphTransition.retarget(waveformMorphTarget(tuning), nowMillis);
@@ -543,9 +544,15 @@ public final class TerminalScreen extends Screen {
 		drawCard(graphics, TerminalUiLayout.TOOL_DETAIL, GREEN);
 		List<Component> lines = toolDetailLines(tool);
 		int y = TerminalUiLayout.TOOL_DETAIL.top() + 8;
+		// NAVIGATION keeps the tighter ceiling because its target buttons sit at y=139. Every other
+		// tool has empty card all the way down to the action row, and the old shared 136 clipped the
+		// status line - the mineral probe's "scanning" and located-bearing readouts both live on the
+		// second line, so they vanished the moment the summary above them grew to two lines.
+		int detailLimit = tool == TerminalTool.NAVIGATION
+				? TerminalUiLayout.TOOL_OPTION_ONE.top() - 17
+				: TerminalUiLayout.TOOL_ACTION_PRIMARY.top() - 3;
 		for (Component line : lines) {
 			for (FormattedCharSequence wrapped : font.split(line, TerminalUiLayout.TOOL_DETAIL.width() - 14)) {
-				int detailLimit = tool == TerminalTool.NAVIGATION ? 122 : 136;
 				if (y + font.lineHeight > detailLimit) break;
 				graphics.drawString(font, wrapped, TerminalUiLayout.TOOL_DETAIL.left() + 7, y, GREEN, false);
 				y += 12;
@@ -566,13 +573,18 @@ public final class TerminalScreen extends Screen {
 					lines.add(mineralScanningLine());
 				} else if (mineralTargetLocated()) {
 					lines.add(snapshot.navigationLine(navigation, tools.playerY()));
+				} else if (tools.mineralBearingReading()) {
+					lines.add(tools.mineralBearingLine());
+				} else if (tools.mineralProbeHeardNothing()) {
+					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.not_found"));
 				} else if (tools.mineralSurveyNearby()) {
 					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.nearby"));
-				} else if (tools.selectedResource() == TerminalResource.NONE) {
-					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.waiting"));
 				} else {
-					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.not_found"));
+					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.waiting"));
 				}
+				// The charge bank sits under the reading rather than on the button, so a player
+				// deciding whether to spend one can see the cost next to what the last one bought.
+				if (!tools.mineralScanning()) lines.add(tools.mineralProbeLine());
 			}
 			case PORTAL -> lines.add(tools.portalLine());
 			case WEATHER -> lines.add(tools.weatherLine());
@@ -658,9 +670,11 @@ public final class TerminalScreen extends Screen {
 						TerminalUiLayout.TOOL_ACTION_FULL);
 			}
 			case MINERALS -> {
+				// Selected-looking while probing or out of charges: in both cases the button is
+				// inert, and it should look inert rather than inviting another press.
 				drawToolButton(graphics, TerminalUiLayout.TOOL_ACTION_PRIMARY,
 						Component.translatable("terminal.thefourthfrequency.tool.minerals.refresh"),
-						tools.mineralScanning());
+						tools.mineralScanning() || !tools.mineralProbeReady());
 				if (tools.guidanceTool() == tool || mineralTargetLocated()) drawGuidanceToggle(graphics, tool,
 						TerminalUiLayout.TOOL_ACTION_SECONDARY);
 			}
@@ -882,7 +896,12 @@ public final class TerminalScreen extends Screen {
 		Minecraft client = Minecraft.getInstance();
 		if (client.player == null || client.level == null || !client.level.dimension().identifier().toString().equals(entry.dimension())) return -1;
 		BlockPos target = BlockPos.of(entry.position());
-		return (int) Math.round(Math.hypot(target.getX() - client.player.getX(), target.getZ() - client.player.getZ()));
+		int distance = (int) Math.round(
+				Math.hypot(target.getX() - client.player.getX(), target.getZ() - client.player.getZ()));
+		// While metric_drift is running the terminal misreports what it measures. The reading is
+		// display-only - navigation and arrival still use the real position - so the instrument
+		// becomes untrustworthy without the player actually being sent anywhere wrong.
+		return Math.max(0, AnomalyPresentationController.driftedMetric(distance));
 	}
 
 	private static String dimensionLabel(String id) {
@@ -1326,7 +1345,8 @@ public final class TerminalScreen extends Screen {
 		switch (selectedTool) {
 			case HOME -> { }
 			case MINERALS -> {
-				if (TerminalUiLayout.TOOL_ACTION_PRIMARY.contains(x, y) && !tools.mineralScanning()) {
+				if (TerminalUiLayout.TOOL_ACTION_PRIMARY.contains(x, y)
+						&& !tools.mineralScanning() && tools.mineralProbeReady()) {
 					send(TerminalControlPayload.REQUEST_RESCAN, 0);
 					TerminalClientAudio.click();
 					return true;
@@ -1623,6 +1643,9 @@ public final class TerminalScreen extends Screen {
 		retargetTuningVisual(safe, nowMillis());
 		boolean receiverLockAfter = gameplay && receiverLocked(tuning);
 		TerminalClientAudio.tuningInput();
+		// The loop covers the sweep; the detent marks that the dial actually moved a notch, which
+		// is what makes a stepped control feel mechanical rather than painted on.
+		TerminalClientAudio.detent();
 		if (!receiverLockBefore && receiverLockAfter) TerminalClientAudio.lock();
 		if (gameplay) {
 			localTuningOnly = false;
@@ -1647,7 +1670,8 @@ public final class TerminalScreen extends Screen {
 			fileListScroll = selectedFile - TerminalUiLayout.FILE_LIST_VISIBLE_ROWS + 1;
 		}
 		fileListScroll = Math.clamp(fileListScroll, 0, TerminalUiLayout.fileMaxScrollRow(total));
-		TerminalClientAudio.click();
+		// Moving the highlight is not choosing anything, so it gets the lighter contact.
+		TerminalClientAudio.keypress();
 	}
 
 	private int indexOfFile(String id) {

@@ -30,20 +30,37 @@ final class ResourceContractTest {
 		String titleMixin = Files.readString(Path.of(
 				"src/client/java/com/xm/thefourthfrequency/mixin/TitleScreenErosionMixin.java"),
 				StandardCharsets.UTF_8);
-		int catalogStart = state.indexOf("BOOT_SPLASHES = List.of(");
-		int catalogEnd = state.indexOf(");", catalogStart);
-		assertTrue(catalogStart >= 0, "Boot splash catalog must remain declared");
-		assertTrue(catalogEnd > catalogStart, "Boot splash catalog must remain well formed");
-		String catalog = state.substring(catalogStart, catalogEnd);
-		long entryCount = catalog.lines().map(String::strip)
-				.filter(line -> line.startsWith("\"")).count();
-		assertTrue(entryCount >= 4, "Boot splash catalog must retain at least four choices");
-		assertFalse(catalog.contains("\"\""), "Boot splash catalog must not contain blank entries");
+		JsonObject en = JsonParser.parseString(Files.readString(ASSETS.resolve("lang/en_us.json"),
+				StandardCharsets.UTF_8)).getAsJsonObject();
+		JsonObject zh = JsonParser.parseString(Files.readString(ASSETS.resolve("lang/zh_cn.json"),
+				StandardCharsets.UTF_8)).getAsJsonObject();
+		Matcher declared = Pattern.compile("(BOOT|EARLY|MID|LATE|RESTORED)\\((\\d+)\\)").matcher(state);
+		int stages = 0;
+		while (declared.find()) {
+			stages++;
+			String stage = declared.group(1).toLowerCase(java.util.Locale.ROOT);
+			int count = Integer.parseInt(declared.group(2));
+			if ("boot".equals(stage)) {
+				assertTrue(count >= 4, "Boot splash catalog must retain at least four choices");
+			}
+			// Every declared line must be translated in both languages, and the count must not drift.
+			for (int index = 0; index < count; index++) {
+				String key = "splash.thefourthfrequency." + stage + "." + index;
+				assertTrue(en.has(key) && !en.get(key).getAsString().isBlank(), "missing English " + key);
+				assertTrue(zh.has(key) && !zh.get(key).getAsString().isBlank(), "missing Chinese " + key);
+			}
+			assertFalse(zh.has("splash.thefourthfrequency." + stage + "." + count),
+					"Untracked splash copy for stage " + stage + "; raise its declared count");
+		}
+		assertEquals(5, stages, "Every erosion stage must declare a splash count");
 		assertTrue(titleMixin.contains("splash = new SplashRenderer"));
 		assertTrue(titleMixin.contains("VANILLA_SPLASH_YELLOW = 0xFFFF00"));
 		assertTrue(titleMixin.contains("withColor(VANILLA_SPLASH_YELLOW)"));
-		assertTrue(titleMixin.contains("MenuErosionState.sessionSplash()"));
-		assertTrue(titleMixin.contains("label.contains(\"realms\")"));
+		assertTrue(titleMixin.contains("MenuErosionState.sessionSplashKey()"));
+		assertTrue(titleMixin.contains("REALMS_BUTTON_KEY = \"menu.online\""),
+				"Realms must be matched by translation key so it stays disabled in every language");
+		assertFalse(titleMixin.contains("toLowerCase"),
+				"Title-screen buttons must not be matched by localized label text");
 		assertFalse(titleMixin.contains("renderBackground"),
 				"Returning to the title screen must keep the normal menu background");
 	}
@@ -176,8 +193,10 @@ final class ResourceContractTest {
 				"The full-screen failure cue must not rise in pitch before its stuck buffer");
 		for (String event : new String[]{"alpha_corruption_warning", "alpha_corruption_collapse"}) {
 			assertTrue(sounds.has(event), event);
-			assertFalse(sounds.getAsJsonObject(event).has("subtitle"),
-					"The environmental cue should not explain itself through subtitles");
+			// These two are events, not ambience: one warns that the downgrade is coming apart
+			// and the other is the failure itself. Withholding their subtitles did not protect
+			// any atmosphere, it just meant a player reading captions got no warning at all.
+			assertTrue(sounds.getAsJsonObject(event).has("subtitle"), event);
 			for (var sound : sounds.getAsJsonObject(event).getAsJsonArray("sounds")) {
 				String name = sound.getAsString();
 				Path path = ASSETS.resolve("sounds/"
@@ -190,6 +209,63 @@ final class ResourceContractTest {
 				assertEquals('S', header[3]);
 			}
 		}
+	}
+
+	@Test
+	void analogHorrorSignalBedsArePresentLoopableAndUnsubtitled() throws Exception {
+		JsonObject sounds = JsonParser.parseString(Files.readString(ASSETS.resolve("sounds.json"),
+				StandardCharsets.UTF_8)).getAsJsonObject();
+		String generator = Files.readString(Path.of("tools/generate_signal_bed_audio.py"),
+				StandardCharsets.UTF_8);
+		// The two-tone attention signal borrows its authority from the real Emergency Alert
+		// System frequencies; retuning them would quietly discard that association.
+		assertTrue(generator.contains("853.0 * time"));
+		assertTrue(generator.contains("960.0 * time"));
+		// Beds must stay far below the event sounds or they stop being deniable.
+		assertTrue(generator.contains("BED_PEAK = 10 ** (-24.0 / 20.0)"));
+		assertTrue(generator.contains("def seamless("),
+				"loop beds depend on the head/tail cross-fade to wrap without a click");
+
+		// Only the continuous beds stay uncaptioned. Deniability is a property of something that
+		// is always there - a subtitle would confirm the hiss is real, which is the one thing it
+		// must never do. The three one-shots are the opposite: they fire because something
+		// specific just happened, and signal_alert in particular is a pursuit warning, so
+		// withholding their captions denied deaf players information rather than atmosphere.
+		for (String event : new String[]{"signal_carrier", "signal_static", "signal_tape_hiss",
+				"signal_dead_air"}) {
+			assertTrue(sounds.has(event), event);
+			assertFalse(sounds.getAsJsonObject(event).has("subtitle"),
+					event + " is an environmental bed and must not explain itself through subtitles");
+			for (var sound : sounds.getAsJsonObject(event).getAsJsonArray("sounds")) {
+				String name = sound.isJsonPrimitive() ? sound.getAsString()
+						: sound.getAsJsonObject().get("name").getAsString();
+				Path path = ASSETS.resolve("sounds/" + name.substring(name.indexOf(':') + 1) + ".ogg");
+				byte[] header = Files.readAllBytes(path);
+				assertTrue(header.length > 8_000, path.toString());
+				assertEquals('O', header[0]);
+				assertEquals('g', header[1]);
+				assertEquals('g', header[2]);
+				assertEquals('S', header[3]);
+			}
+		}
+
+		for (String event : new String[]{"signal_alert", "signal_carrier_lost", "signal_tuning_sweep"}) {
+			assertTrue(sounds.has(event), event);
+			assertTrue(sounds.getAsJsonObject(event).has("subtitle"),
+					event + " is a one-shot event and must be captioned");
+		}
+
+		// The beds run on MASTER specifically so silent_world, which mutes the ambient family,
+		// cannot silence them: the signal is not part of the world it is transmitted over.
+		String bed = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/SignalBedController.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(bed.contains("SoundSource.MASTER"));
+		assertTrue(bed.contains("canStartSilent"));
+		// MASTER leaves the game's own sliders unable to reach the beds without taking everything
+		// else down too, so the mod has to supply the trim itself.
+		assertTrue(bed.contains("effectiveBedVolume"),
+				"the beds must read their own volume trim, not the shared peak volume");
 	}
 
 	@Test
@@ -230,8 +306,16 @@ final class ResourceContractTest {
 				"The first document must explain the current four-page terminal instead of obsolete tuning");
 		assertEquals("接收到新文件：%s",
 				zh.get("message.thefourthfrequency.file.discovered").getAsString());
-		assertEquals("接收到来自【%s】共享的一份破损文件",
-				zh.get("message.thefourthfrequency.fragment.received").getAsString());
+		assertEquals("接收到来自【%s】共享的第 %s 份破损文件",
+				zh.get("message.thefourthfrequency.fragment.received").getAsString(),
+				"Both senders pass the fragment number, so the copy must actually show it");
+		assertEquals("已发现并共享第 %s 份破损文件",
+				zh.get("message.thefourthfrequency.fragment.shared").getAsString());
+		assertEquals("接收到 %s 份共享的破损文件",
+				zh.get("message.thefourthfrequency.fragment.received_batch").getAsString(),
+				"A late owner catching up on old shares must get one counted line, not a replay");
+		assertEquals("接收到 %s 份新文件",
+				zh.get("message.thefourthfrequency.file.discovered_batch").getAsString());
 		assertEquals(List.of("避难所日记", "观测点日记", "矿站日记", "仓库日记"),
 				List.of("surface_shelter_record", "field_observation_record",
 								"underground_mine_record", "abandoned_warehouse_record").stream()
@@ -253,8 +337,8 @@ final class ResourceContractTest {
 				zh.get("terminal.thefourthfrequency.receiver.label").getAsString());
 		assertEquals("待机",
 				zh.get("terminal.thefourthfrequency.receiver.standby").getAsString());
-		assertEquals("终端记下了你带回的资源。",
-				zh.get("message.thefourthfrequency.guidance.accepted").getAsString());
+		assertFalse(zh.has("message.thefourthfrequency.guidance.accepted"),
+				"The terminal is the record; a notice that only says it recorded something is noise");
 		for (String retired : List.of("terminal.thefourthfrequency.band.weather",
 				"terminal.thefourthfrequency.band.mining", "terminal.thefourthfrequency.band.public",
 				"terminal.thefourthfrequency.band.unknown", "terminal.thefourthfrequency.objective.calibrate",
@@ -271,11 +355,11 @@ final class ResourceContractTest {
 				zh.get("terminal.thefourthfrequency.tool.navigation.summary").getAsString());
 		assertEquals("自动记录你的重生点",
 				zh.get("terminal.thefourthfrequency.tool.home.summary").getAsString());
-		assertEquals("尝试在任意距离寻找并标记矿物；探测有 60% 几率失败。",
+		assertEquals("谐振探针只报告它真实听见的矿；越稀有的矿必须离得越近。",
 				zh.get("terminal.thefourthfrequency.tool.minerals.summary").getAsString());
 		assertEquals("正在探测矿物",
 				zh.get("terminal.thefourthfrequency.tool.minerals.scanning").getAsString());
-		assertEquals("探测失败",
+		assertEquals("范围内无可分辨的矿脉读数",
 				zh.get("terminal.thefourthfrequency.tool.minerals.not_found").getAsString());
 		assertEquals("已自动勘测到最近的矿物，正在读取详细方位",
 				zh.get("terminal.thefourthfrequency.tool.minerals.nearby").getAsString());
@@ -289,13 +373,26 @@ final class ResourceContractTest {
 				zh.get("message.thefourthfrequency.guidance.nearby").getAsString());
 		assertEquals("已到达矿物附近，导航已结束",
 				zh.get("message.thefourthfrequency.navigation.mineral_arrived").getAsString());
-		assertEquals("已接近%s，导航结束；目标已记录在终端中。",
+		assertEquals("已接近%s，导航结束",
 				zh.get("message.thefourthfrequency.navigation.structure_nearby").getAsString());
 		assertFalse(zh.has("message.thefourthfrequency.terminal.unread"));
-		assertEquals("您有【%s】条未读记录",
+		assertEquals("你有【%s】条未读记录",
 				zh.get("message.thefourthfrequency.terminal.unread_reminder").getAsString());
-		assertTrue(zh.has("message.thefourthfrequency.task.completed"));
-		assertEquals("目的地在您%s侧，本次导航结束",
+		assertFalse(zh.has("message.thefourthfrequency.task.completed"),
+				"Completion folded into the reward line it always preceded");
+		assertEquals("任务完成 · 已领取 %s ×%s。",
+				zh.get("message.thefourthfrequency.task.completed_reward_claimed").getAsString());
+		assertFalse(zh.has("message.thefourthfrequency.terminal.stock_zero"),
+				"The empty rack folded into the single dispense line it always followed");
+		assertEquals("零号站给了你一台个人终端；这里已经没有备用的了。",
+				zh.get("message.thefourthfrequency.terminal.dispensed").getAsString());
+		for (var entry : zh.entrySet()) {
+			if (!entry.getKey().startsWith("message.thefourthfrequency.")
+					&& !entry.getKey().startsWith("terminal.thefourthfrequency.navigation.")) continue;
+			assertFalse(entry.getValue().getAsString().contains("您"),
+					"Player-facing copy stays on 你: " + entry.getKey());
+		}
+		assertEquals("目的地在你%s侧，本次导航结束",
 				zh.get("terminal.thefourthfrequency.navigation.completed").getAsString());
 		assertEquals("开始导航", zh.get("terminal.thefourthfrequency.tool.guide").getAsString());
 		assertEquals("停止导航", zh.get("terminal.thefourthfrequency.tool.stop").getAsString());
@@ -460,7 +557,7 @@ final class ResourceContractTest {
 	}
 
 	@Test
-	void terminalFeedbackUsesABoundedBottomFirstNoticeStackAndClearAttentionTone() throws Exception {
+	void terminalFeedbackUsesABoundedOldestFirstNoticeStackAndClearAttentionTone() throws Exception {
 		String hud = Files.readString(Path.of(
 				"src/client/java/com/xm/thefourthfrequency/client_ui/TerminalNoticeHud.java"),
 				StandardCharsets.UTF_8);
@@ -517,15 +614,28 @@ final class ResourceContractTest {
 		assertTrue(hud.contains("promotePending(now)"));
 		assertTrue(hud.contains("priority(PENDING.get(index).tone)"),
 				"Unread and task notices must keep priority inside the throttled queue");
-		assertTrue(hud.contains("ENTRIES.add(new NoticeEntry"));
-		assertTrue(hud.contains("entry.targetSlot++"),
-				"A new bottom entry must push existing entries upward");
-		assertTrue(hud.contains("exiting = ENTRIES.getLast()"),
-				"The bottom entry must be the first one to leave");
-		assertTrue(hud.contains("entry.targetSlot = Math.max(0, entry.targetSlot - 1)"),
-				"Remaining entries must fall after the bottom entry leaves");
+		assertTrue(hud.contains("ENTRIES.add(pending)"),
+				"The queued entry itself must be promoted so a merged repeat count survives the wait");
+		assertTrue(hud.contains("offset += entry.height(font, wrapWidth) + ENTRY_GAP"),
+				"A new bottom entry must push existing entries upward by their measured height");
+		assertTrue(hud.contains("exiting = ENTRIES.getFirst()"),
+				"The oldest entry at the top must be the first one to leave");
 		assertTrue(hud.contains("PENDING.size() <= MAX_PENDING"),
 				"The waiting queue must stay bounded during notification bursts");
+		assertTrue(hud.contains("PENDING.removeIf(entry -> now - entry.queuedAt >= PENDING_TTL_MILLIS)"),
+				"A notice that outlived the moment it described must be dropped, not replayed late");
+		assertTrue(hud.contains("if (mergeDuplicate(key, now)) return;"),
+				"A repeat of a live notice must become a counter instead of a silent drop");
+		assertTrue(hud.contains("now - lastAttentionAt >= ATTENTION_INTERVAL_MILLIS"),
+				"Attention audio must not machine-gun during a burst");
+		assertTrue(hud.contains("font.split(display(), wrapWidth)"),
+				"Long notices must wrap instead of shrinking below a readable size");
+		assertTrue(hud.contains("client.isPaused() || client.screen != null"),
+				"A notice must not spend its display time behind a screen or a paused game");
+		assertTrue(hud.contains("suspend(delta)"),
+				"Every hold path must rebase the deadlines it skipped");
+		assertTrue(hud.contains("HudStatusBarHeightRegistry.getHeight"),
+				"The stack must follow the status bars instead of a fixed inset above the hotbar");
 		assertTrue(networking.contains("TerminalNoticeHud.enqueue(payload.message(), payload.tone())"));
 		assertFalse(networking.contains("TerminalClientAudio.attention(payload.tone())"),
 				"Attention audio must wait until the queued notice is actually visible");
@@ -535,8 +645,17 @@ final class ResourceContractTest {
 		assertTrue(commonNetworking.contains("TerminalNoticePayload.TYPE"));
 		assertTrue(audio.contains("UI_TOAST_CHALLENGE_COMPLETE"));
 		assertTrue(audio.contains("NOTE_BLOCK_CHIME"));
-		assertTrue(hud.contains("taskComplete ? TASK_BACKGROUND : DEFAULT_BACKGROUND"),
+		assertTrue(hud.contains("case TerminalNoticePayload.TONE_TASK_COMPLETE -> TASK_BACKGROUND"),
 				"Task completion notices must use the dedicated green background");
+		assertTrue(hud.contains("case TerminalNoticePayload.TONE_DENIED -> DENIED_BACKGROUND"),
+				"A refused action must not be dressed as another progress line");
+		assertTrue(hud.contains("case TerminalNoticePayload.TONE_DENIED -> 2"),
+				"Direct feedback on a refused action outranks narration in the queue");
+		assertTrue(audio.contains("tone == TerminalNoticePayload.TONE_DENIED"),
+				"A refusal must sound like a fault, never like the progress chime");
+		assertTrue(noticePayload.contains("TONE_DENIED = 4"));
+		assertTrue(noticePayload.contains("Math.clamp(value.tone, TONE_NONE, TONE_DENIED)"),
+				"The wire clamp must admit the new tone or it degrades into a pursuit warning");
 		assertTrue(noticePayload.contains("TONE_PURSUIT_WARNING = 3"));
 		assertTrue(hud.contains("PURSUIT_BACKGROUND = 0x59151B"));
 		assertTrue(hud.contains("PURSUIT_BORDER = 0xF05B65"));
@@ -556,21 +675,35 @@ final class ResourceContractTest {
 		assertTrue(terminalScreen.contains("TerminalPage.fromIndex(snapshot.initialPage())"));
 		assertTrue(terminalScreen.contains("TerminalControlPayload.MARK_RECORDS_READ"));
 		assertTrue(taskService.contains("consumeCompletionAlert"));
-		assertTrue(taskService.contains("TerminalNoticeService.taskComplete(player)"),
-				"Completing a task must restore the dedicated bottom completion notice");
-		assertTrue(taskService.contains("TerminalNoticeService.rewardClaimed(player, rewardName, rewardCount)"),
-				"Automatic and manual reward delivery must share the bottom reward notice");
+		assertFalse(taskService.contains("TerminalNoticeService.taskComplete(player)"),
+				"Completion and its reward are one moment and must not take two stack slots");
+		assertTrue(taskService.contains(
+				"TerminalNoticeService.rewardClaimed(player, rewardName, rewardCount, completed[0] >= 0)"),
+				"Automatic and manual reward delivery must share the single merged notice");
 		assertTrue(noticeService.contains(
 				"message.thefourthfrequency.task.reward_claimed\", rewardName, rewardCount"));
 		assertTrue(noticeService.contains("TerminalNoticePayload.TONE_TASK_COMPLETE"),
 				"Reward notices must retain the task-completion tone and green presentation");
 		assertFalse(signalService.contains("TerminalNoticeService.unread(player)"),
 				"New files must not also raise the old generic unread notice");
+		assertTrue(signalService.contains("message.thefourthfrequency.file.discovered_batch"),
+				"A multi-file sync must collapse into one counted line instead of naming each file");
+		assertTrue(signalService.contains("message.thefourthfrequency.fragment.received_batch"),
+				"A late owner's backlog of shares must collapse into one counted line");
+		assertTrue(noticeService.contains("TerminalNoticePayload.TONE_DENIED"),
+				"Refused actions must route through the dedicated denial tone");
+		for (String refusal : new String[]{
+				"src/main/java/com/xm/thefourthfrequency/mixin/PlayerDropMixin.java",
+				"src/main/java/com/xm/thefourthfrequency/mixin/BoundTerminalContainerMixin.java",
+				"src/main/java/com/xm/thefourthfrequency/mixin/EnderEyeItemMixin.java"}) {
+			assertTrue(Files.readString(Path.of(refusal), StandardCharsets.UTF_8)
+					.contains("TerminalNoticeService.denied("), refusal);
+		}
 		assertTrue(signalService.contains("TerminalNoticeService.unreadReminder(player, unreadCount[0])"));
 		assertTrue(signalService.contains("totalUnreadCount(tag)"));
 		assertTrue(noticeService.contains(
 				"message.thefourthfrequency.terminal.unread_reminder\", unreadCount"));
-		assertTrue(survivalProgress.contains("public static final int REQUIRED_IRON = 12;"));
+		assertTrue(survivalProgress.contains("public static final int REQUIRED_IRON = 6;"));
 		assertTrue(taskService.contains(
 				"new TaskDefinition(\"bring_iron\", SurvivalProgressService.REQUIRED_IRON, Items.TORCH, 24)"));
 		assertTrue(targets.contains("MINESHAFT(2, \"mineshaft\", true"));
@@ -610,7 +743,7 @@ final class ResourceContractTest {
 				StandardCharsets.UTF_8);
 		assertTrue(snapshot.contains("CURRENT_PROTOCOL_VERSION = 11"));
 		assertTrue(navigation.contains("CURRENT_PROTOCOL_VERSION = 6"));
-		assertTrue(toolSnapshot.contains("CURRENT_PROTOCOL_VERSION = 5"));
+		assertTrue(toolSnapshot.contains("CURRENT_PROTOCOL_VERSION = 6"));
 		assertTrue(resourceGuidance.contains("TerminalRuntimeService.isOpen(player)"),
 				"Automatic mineral surveys must pause while the terminal is open");
 		assertFalse(resourceGuidance.contains(
@@ -800,7 +933,13 @@ final class ResourceContractTest {
 		assertTrue(screen.contains("shouldCloseOnEsc() { return false; }"));
 		assertTrue(screen.contains("isPauseScreen() { return true; }"));
 		assertTrue(screen.contains("button.thefourthfrequency.first_run_notice.acknowledge"));
-		assertTrue(screen.contains("graphics.fill(0, 0, width, height, 0xFF080D0A)"));
+		assertTrue(screen.contains("graphics.fill(0, 0, width, height, SHELL_BACKDROP)"));
+		assertFalse(screen.contains("0xFF080D0A") || screen.contains("0xFF020A06"),
+				"Notice shell and glass colors belong to FirstRunNoticePalette");
+		assertTrue(screen.contains("setInitialFocus(acknowledgementButton)"),
+				"The only exit from the mandatory notice must be reachable by keyboard");
+		assertTrue(screen.contains("returnScreen.resize(width, height)"),
+				"The title screen behind the zoom transition only learns about resizes through here");
 		assertFalse(screen.contains("renderBlurredBackground"));
 		assertFalse(screen.contains("drawBackdropWaveform"));
 		assertFalse(screen.contains("drawRollingBeam"));
@@ -809,11 +948,11 @@ final class ResourceContractTest {
 		assertFalse(screen.contains("renderTransientTextGhosts"));
 		assertTrue(screen.contains("enum EntrancePhase"));
 		assertTrue(screen.contains("enum PresentationPhase"));
-		assertTrue(screen.contains("LOCK_TICK = 64"));
-		assertTrue(screen.contains("CALIBRATION_END_TICK = 72"));
-		assertTrue(screen.contains("renderBandCalibration"));
-		assertTrue(screen.contains("drawCalibrationWave"));
-		assertTrue(screen.contains("drawCalibrationRail"));
+		assertTrue(screen.contains("TUBE_LIT_TICK = IGNITION_TICKS + UNFOLD_TICKS"));
+		assertTrue(screen.contains("POWER_ON_END_TICK = TUBE_LIT_TICK + BLOOM_TICKS"));
+		assertTrue(screen.contains("renderPowerOn"));
+		assertFalse(screen.contains("Calibration") || screen.contains("MHz"),
+				"The band-sweep entrance is replaced by a copy-free tube power-on");
 		assertFalse(screen.contains("drawHeaderScope"));
 		assertTrue(screen.contains("TerminalClientAudio.noticeOpening()"));
 		assertTrue(screen.contains("TerminalClientAudio.noticeStable()"));
@@ -1176,6 +1315,16 @@ final class ResourceContractTest {
 		assertTrue(controller.contains("drawWidth * 0.78F"));
 		assertTrue(controller.contains("width * 0.42F"));
 		assertTrue(controller.contains("anomalyId.equals(\"peripheral_residue\") && !glitchTriggered"));
+		assertTrue(controller.contains("PERIPHERAL_HAND_CREEP_FRACTION"),
+				"The palms must keep reaching after the slide rather than freezing into a decal");
+		// The corruption burst owns none of its own numbers, and it must never go back to being a
+		// white fill under neon bars and enchantment-table glyphs.
+		assertTrue(controller.contains("GlitchImpactTimeline.IMPACT_TICKS"));
+		assertTrue(controller.contains("renderGlitchDebris"),
+				"The hands have to be torn apart by the burst, not switched off before it");
+		assertFalse(controller.contains("ChatFormatting.OBFUSCATED"));
+		assertFalse(controller.contains("0x00C000E8"));
+		assertFalse(controller.contains("0x00F4F4F4"));
 		assertTrue(controller.contains("LOCAL_RULE_FRAGMENT_LIMIT = 24"));
 		assertTrue(controller.contains("LOCAL_RULE_MIN_SPACING_SQR = 9.0D"));
 		assertTrue(controller.contains("separatedFromExistingTraces"));
@@ -1443,6 +1592,56 @@ final class ResourceContractTest {
 		assertTrue(loadingMixin.contains("shouldRenderLegacyLoadingScreen"));
 		assertTrue(loadingMixin.contains("hideVanillaLoadingText"));
 		assertFalse(loadingMixin.contains("0xE0080507"));
+
+		String corruptionRenderer = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/AlphaCorruptionRenderer.java"),
+				StandardCharsets.UTF_8);
+		String corruptionAudio = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/AlphaCorruptionAudio.java"),
+				StandardCharsets.UTF_8);
+		// The analog-horror layers live outside the mixin so they stay readable and so the timing
+		// they obey can be unit tested without a client.
+		assertTrue(loadingMixin.contains("AlphaCorruptionRenderer.drawMediumLayers"));
+		assertTrue(loadingMixin.contains("AlphaCorruptionRenderer.drawDeadAir"));
+		assertTrue(loadingMixin.contains("AlphaCorruptionRenderer.drawRecoveryLock"));
+		assertTrue(loadingMixin.contains("AlphaCorruptionRenderer.drawChromaString"));
+		assertTrue(loadingMixin.contains("AlphaLoadTimeline.floodWipeProgress"));
+		assertFalse(loadingMixin.contains("deadAirFlashbackFrame"),
+				"Dead air must stay dead; the lost picture does not come back in single frames");
+		assertTrue(loadingMixin.contains("AlphaLoadTimeline.noise"),
+				"One seed must drive every layer, or a frozen frame freezes unevenly");
+		for (String layer : new String[]{"drawScanlines", "drawTrackingBand", "drawTimecode",
+				"drawDeadAir", "drawRecoveryLock", "drawChromaCenteredString"}) {
+			assertTrue(corruptionRenderer.contains(layer), "missing medium layer " + layer);
+		}
+		// Phase boundaries belong to the timeline alone; the renderer only draws a given tick.
+		for (String phase : new String[]{"GLITCH_START_TICK", "FAILURE_TICK", "FLOOD_START_TICK",
+				"BLACKOUT_START_TICK", "LEGACY_RECOVERY_START_TICK"}) {
+			assertFalse(corruptionRenderer.contains(phase),
+					"AlphaCorruptionRenderer must not own timing: " + phase);
+		}
+		assertTrue(enLang.has("screen.thefourthfrequency.alpha_loading.timecode"));
+		assertTrue(zhLang.has("screen.thefourthfrequency.alpha_loading.timecode"));
+
+		// Every bed the corruption starts must be stoppable from both routes out of the loading
+		// screen. Multiplayer can lose the screen to a kick or timeout without onClose ever
+		// running, and a bed that survives that follows the player into the world.
+		assertTrue(corruptionAudio.contains("looping = true"));
+		assertTrue(corruptionAudio.contains("SoundSource.MASTER"));
+		assertTrue(corruptionAudio.contains("ModSounds.SIGNAL_TAPE_HISS"));
+		assertTrue(corruptionAudio.contains("ModSounds.SIGNAL_STATIC"));
+		assertTrue(corruptionAudio.contains("ModSounds.SIGNAL_DEAD_AIR"));
+		assertTrue(corruptionAudio.contains("ModSounds.SIGNAL_CARRIER_LOST"));
+		assertTrue(loadingMixin.contains("AlphaCorruptionAudio.stopAll()"));
+		assertTrue(controller.contains("AlphaCorruptionAudio.stopAll()"));
+		assertTrue(controller.substring(controller.indexOf("private static void end(Minecraft"))
+						.contains("AlphaCorruptionAudio.stopAll()"),
+				"The multiplayer disconnect path must silence the corruption beds");
+		// The window title is asked for every tick but changes six times; setting it every tick
+		// is twenty GLFW calls a second to write a string the window already has.
+		assertTrue(controller.contains("if (!force && resolved == appliedVersionStage"));
+		assertTrue(controller.contains("private static String titleForStage(int stage)"));
+
 		assertTrue(overlayMixin.contains("consumeResourceReloadAnimationSuppression"));
 		assertTrue(overlayMixin.contains("screen.render(graphics"));
 		assertTrue(overlayMixin.contains(
@@ -1500,11 +1699,20 @@ final class ResourceContractTest {
 		String serverEffects = Files.readString(Path.of(
 				"src/main/java/com/xm/thefourthfrequency/terminal/AnomalyServerEffects.java"),
 				StandardCharsets.UTF_8);
-		assertTrue(serverEffects.contains("case \"light_dropout\" -> lightDropout(player)"));
+		assertTrue(serverEffects.contains("case \"light_dropout\" -> lightDropout(player, durationTicks)"));
 		assertTrue(serverEffects.contains("BlockStateProperties.LIT"));
 		assertTrue(serverEffects.contains("LightBlock.LEVEL"));
-		assertTrue(serverEffects.contains("level.getBlockState(pos).equals(snapshot.extinguished())"));
+		assertTrue(serverEffects.contains("level.getBlockState(pos).equals(extinguishedState)"),
+				"Restoration must still refuse to overwrite a block the world changed meanwhile");
 		assertTrue(serverEffects.contains("Block.UPDATE_CLIENTS"));
+		// The dark arrives from the outside in and lifts from the inside out. Losing the ordering
+		// or the pacing turns the anomaly back into the two-frame switch it used to be.
+		assertTrue(serverEffects.contains("LightDropoutSequence.extinguishedBy"));
+		assertTrue(serverEffects.contains("LightDropoutSequence.restoredBy"));
+		assertTrue(serverEffects.contains("LightDropoutSequence.restoreIndex"));
+		assertTrue(serverEffects.contains("value.position().distSqr(origin)).reversed()"));
+		assertTrue(serverEffects.contains("SoundEvents.FIRE_EXTINGUISH"),
+				"A light going out has to be audible where it happens");
 	}
 
 	@Test

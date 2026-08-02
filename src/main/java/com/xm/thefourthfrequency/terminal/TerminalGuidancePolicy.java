@@ -22,10 +22,22 @@ public final class TerminalGuidancePolicy {
 		return mask;
 	}
 
+	/**
+	 * Which ores the probe is allowed to hear, by mainline position.
+	 *
+	 * <p>All four used to open at once the moment the player had twelve logs, which meant a
+	 * stone-age player could stand still and be handed diamond. The tool's actual job at that
+	 * point is coal and iron - it exists to carry the {@code bring_iron} objective - so the rarer
+	 * two now arrive when the mainline has already asked for them. {@code hintTier} is deliberately
+	 * not consulted: it measures how long the player has been stalled, and being stuck is not the
+	 * same as having earned a deeper instrument.</p>
+	 */
 	public static int availableResourcesMask(int milestones, int hintTier) {
 		if (!SurvivalMilestone.MINED_LOGS.present(milestones)) return 0;
-		return bit(TerminalResource.IRON) | bit(TerminalResource.COAL)
-				| bit(TerminalResource.GOLD) | bit(TerminalResource.DIAMOND);
+		int mask = bit(TerminalResource.IRON) | bit(TerminalResource.COAL);
+		if (SurvivalMilestone.IRON.present(milestones)) mask |= bit(TerminalResource.GOLD);
+		if (SurvivalMilestone.ENTERED_NETHER.present(milestones)) mask |= bit(TerminalResource.DIAMOND);
+		return mask;
 	}
 
 	public static Recommendations recommendations(String objectiveId, int availableToolsMask,

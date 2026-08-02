@@ -36,7 +36,10 @@ public final class M0GameTests implements CustomTestMethodInvoker {
 				|| RuntimeServices.config().meta().peakVolume() > 1.0D) {
 			throw new AssertionError("M9 peak sound volume escaped its safe range");
 		}
-		if (ResourceGuidanceService.maximumBlockChecksPerServerTick() != 4096) {
+		// Four concurrent players at 3072 blocks each. The budget was widened when the survey became
+		// a real world probe rather than a category draw; what must not regress is that it stays
+		// globally bounded rather than scaling with the player count.
+		if (ResourceGuidanceService.maximumBlockChecksPerServerTick() != 12_288) {
 			throw new AssertionError("M9 resource scan lost its global four-player tick budget");
 		}
 		helper.succeed();

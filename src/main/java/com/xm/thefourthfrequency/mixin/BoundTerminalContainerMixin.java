@@ -35,8 +35,8 @@ public abstract class BoundTerminalContainerMixin {
 		if (!blocked) {
 			return;
 		}
-		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(serverPlayer,
-				Component.translatable("message.thefourthfrequency.terminal.bound_no_container"));
+		com.xm.thefourthfrequency.terminal.TerminalNoticeService.denied(serverPlayer,
+				"message.thefourthfrequency.terminal.bound_no_container");
 		callback.cancel();
 	}
 }

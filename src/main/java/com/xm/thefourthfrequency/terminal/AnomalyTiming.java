@@ -21,6 +21,12 @@ public final class AnomalyTiming {
 			case "window_pulse" -> 80;
 			case "desktop_presence" -> 160;
 			case "channel_override" -> 300;
+			// Sustained anomalies run for minutes, not seconds. They are meant to be lived
+			// through and doubted rather than witnessed, so they are deliberately an order of
+			// magnitude longer than everything above.
+			case "silent_world" -> 2_400 + Math.floorMod((int) (seed >>> 16), 1_201);
+			case "temporal_drift" -> 3_600 + Math.floorMod((int) (seed >>> 24), 2_401);
+			case "metric_drift" -> 3_000 + Math.floorMod((int) (seed >>> 32), 1_801);
 			default -> throw new IllegalArgumentException("Unknown anomaly timing: " + id);
 		};
 	}

@@ -30,6 +30,7 @@ import java.util.List;
 public final class AlphaLoadSessionController {
 	private static final String JAVA_ICON_RESOURCE =
 			"/assets/thefourthfrequency/textures/gui/alpha_java_icon.png";
+	private static final String VANILLA_VERSION_PREFIX = "Minecraft ";
 	private static final String MENU_VERSION_TEXT = "Minecraft 1.0.0";
 	private static final String MENU_WINDOW_TITLE = "Minecraft 1.0.0";
 	private static boolean initialized;
@@ -118,6 +119,10 @@ public final class AlphaLoadSessionController {
 	}
 
 	private static void end(Minecraft client) {
+		// Also covers the multiplayer paths the loading screen never gets to finish: a kick, a
+		// timeout or a server shutdown replaces the screen outright, so its own onClose is not a
+		// hook the corruption beds can rely on to be silenced.
+		AlphaCorruptionAudio.stopAll();
 		active = false;
 		corruptionInProgress = false;
 		resourceReloadFinished = true;
@@ -200,8 +205,11 @@ public final class AlphaLoadSessionController {
 		}
 	}
 
+	/** Only the vanilla version stamp may be rewritten; any other title-screen string passes through. */
 	public static String menuVersionText(String vanillaText) {
-		return corruptionEverPlayed && !presentationRetired ? MENU_VERSION_TEXT : vanillaText;
+		if (!corruptionEverPlayed || presentationRetired) return vanillaText;
+		return vanillaText != null && vanillaText.startsWith(VANILLA_VERSION_PREFIX)
+				? MENU_VERSION_TEXT : vanillaText;
 	}
 
 	public static void recordLegacyLoadingScreenRendered() {
@@ -483,6 +491,7 @@ public final class AlphaLoadSessionController {
 	}
 
 	public static void resetForReplay() {
+		AlphaCorruptionAudio.stopAll();
 		active = false;
 		corruptionEverPlayed = false;
 		corruptionInProgress = false;
@@ -499,21 +508,39 @@ public final class AlphaLoadSessionController {
 	}
 
 	private static void applyVersionTitle(Minecraft client, int stage) {
-		appliedVersionStage = Math.clamp(stage, 0, AlphaLoadTimeline.finalVersionStage());
-		String version = AlphaLoadTimeline.versionAt(appliedVersionStage, launchedVersion);
-		String contextKey = AlphaLoadTimeline.windowContextKey(sessionKind == SessionKind.SINGLEPLAYER);
-		appliedWindowTitle = Component.translatable(contextKey, "Minecraft " + version).getString();
+		applyVersionTitle(client, stage, false);
+	}
+
+	private static void applyVersionTitle(Minecraft client, int stage, boolean force) {
+		int resolved = Math.clamp(stage, 0, AlphaLoadTimeline.finalVersionStage());
+		String title = titleForStage(resolved);
+		// The corruption sequence asks for this every tick but the title only changes six times.
+		// Without the guard that is twenty GLFW calls a second to set a string the window already
+		// has. Callers that are recovering a title Minecraft may have overwritten pass force.
+		if (!force && resolved == appliedVersionStage && title.equals(appliedWindowTitle)) return;
+		appliedVersionStage = resolved;
+		appliedWindowTitle = title;
 		client.getWindow().setTitle(appliedWindowTitle);
 	}
 
+	/**
+	 * The final step drops the world-context suffix on purpose.
+	 *
+	 * <p>Every earlier step is still a Minecraft that knows which world it is showing. The last
+	 * one is the title this client keeps from then on, on the menu and in every later session,
+	 * so it has to be the identical string the menu uses - a session that ended at
+	 * "Minecraft 1.0.0 - Singleplayer World" and then sat at "Minecraft 1.0.0" would read as
+	 * two different states rather than one permanent one.</p>
+	 */
+	private static String titleForStage(int stage) {
+		if (stage >= AlphaLoadTimeline.finalVersionStage()) return MENU_WINDOW_TITLE;
+		String version = AlphaLoadTimeline.versionAt(stage, launchedVersion);
+		String contextKey = AlphaLoadTimeline.windowContextKey(sessionKind == SessionKind.SINGLEPLAYER);
+		return Component.translatable(contextKey, VANILLA_VERSION_PREFIX + version).getString();
+	}
+
 	private static void applyPersistentFinalTitle(Minecraft client) {
-		if (active) {
-			applyVersionTitle(client, AlphaLoadTimeline.finalVersionStage());
-			return;
-		}
-		appliedVersionStage = AlphaLoadTimeline.finalVersionStage();
-		appliedWindowTitle = MENU_WINDOW_TITLE;
-		client.getWindow().setTitle(appliedWindowTitle);
+		applyVersionTitle(client, AlphaLoadTimeline.finalVersionStage(), true);
 	}
 
 	private enum SessionKind {

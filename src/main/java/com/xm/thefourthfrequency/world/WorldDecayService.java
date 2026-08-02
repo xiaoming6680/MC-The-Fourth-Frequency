@@ -4,6 +4,7 @@ import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.ending.FinaleRuntimePolicy;
 import com.xm.thefourthfrequency.networking.WorldDecayPayload;
 import com.xm.thefourthfrequency.networking.MenuErosionStageS2C;
+import com.xm.thefourthfrequency.terminal.WorldDecayResiduePolicy;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.nbt.CompoundTag;
@@ -49,6 +50,12 @@ public final class WorldDecayService {
 				: SurvivalMilestone.RETURNED_NETHER.present(milestones) ? 4
 				: SurvivalMilestone.IRON.present(milestones) ? 3 : 0;
 		if (FinaleRuntimePolicy.pressureActive(data)) return 5;
-		return Math.max(anomaly, survival);
+		// The tier and milestone terms both describe where the player currently is, and both can
+		// sit still for a long time. The residue term describes what they have already been
+		// through and only ever climbs, so surviving anomalies leaves the world permanently worse
+		// even when nothing else has advanced.
+		int residue = WorldDecayResiduePolicy.residueStage(
+				record.getIntOr(TerminalData.ANOMALY_RESIDUE_COUNT, 0));
+		return Math.max(Math.max(anomaly, survival), residue);
 	}
 }

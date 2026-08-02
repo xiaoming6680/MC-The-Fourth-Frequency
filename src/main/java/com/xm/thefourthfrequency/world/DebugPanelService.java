@@ -1,6 +1,7 @@
 package com.xm.thefourthfrequency.world;
 
 import com.xm.thefourthfrequency.content.TerminalData;
+import com.xm.thefourthfrequency.ending.EndBossEncounterService;
 import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
 import com.xm.thefourthfrequency.networking.DebugActionPayload;
@@ -113,6 +114,15 @@ public final class DebugPanelService {
 				}
 				yield "追逐测试已启动：第 " + value + " 形态；本次结算不会改动正式追逐进度";
 			}
+			case "boss_test" -> {
+				EndBossEncounterService.DebugBossResult result =
+						EndBossEncounterService.debugStartEncounter(player);
+				yield switch (result) {
+					case STARTED -> "BOSS 战测试已启动：已进入末地竞技场并完成终端献祭";
+					case WAITING_FOR_OTHERS -> "竞技场已就绪，你的终端已投入；其余在线玩家仍需向祭坛投入终端";
+					default -> throw new IllegalArgumentException(bossFailure(result));
+				};
+			}
 			case "file_unlock" -> {
 				NarrativeFileCatalog.require(target);
 				long now = player.level().getGameTime();
@@ -198,10 +208,20 @@ public final class DebugPanelService {
 			case NO_TERMINAL_RECORD -> "没有可用的个人终端记录";
 			case ALREADY_ACTIVE -> "玩家已经处于追逐或镜像世界中";
 			case UNSUPPORTED_DIMENSION -> "测试追逐只能从主世界或下界开始";
-			case UNSAFE -> "当前状态不安全：关闭终端、停止异象、恢复生命并离开敌对生物后重试";
+			case UNSAFE -> "当前状态无法开始追逐：需要存活且非旁观，且不处于镜像世界、末地或空段中";
 			case NO_SLOT -> "两个私人追逐槽位都已占用";
 			case TRANSFER_REJECTED -> "镜像世界未能接受追逐会话";
 			case STARTED -> "";
+		};
+	}
+
+	private static String bossFailure(EndBossEncounterService.DebugBossResult result) {
+		return switch (result) {
+			case ALREADY_RUNNING -> "世界接口战斗已经开始或已经结束，请先重置该存档的终局状态";
+			case END_MISSING -> "服务器没有末地维度";
+			case ARENA_FAILED -> "末地竞技场未能建立或玩家未能进入";
+			case DEPOSIT_REJECTED -> "祭坛拒绝了终端献祭，请确认玩家持有已绑定的终端";
+			case STARTED, WAITING_FOR_OTHERS -> "";
 		};
 	}
 

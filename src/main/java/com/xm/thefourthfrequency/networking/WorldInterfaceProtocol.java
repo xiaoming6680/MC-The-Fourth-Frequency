@@ -12,6 +12,18 @@ public final class WorldInterfaceProtocol {
 	public static final int MAX_GATEWAYS = 20;
 	public static final int ANCHOR_MASK = 0x03FF;
 	public static final long COLLAPSE_DURATION_TICKS = 12_000L;
+	/**
+	 * Ticks the laser spends aiming before it fires. Shared so the client beam can widen against the
+	 * exact same clock the server damages on, instead of guessing from the action duration.
+	 */
+	public static final int LASER_WARNING_TICKS = 45;
+	/** Ticks the fired laser keeps glowing after the action envelope has already completed. */
+	public static final int LASER_AFTERGLOW_TICKS = 6;
+	/**
+	 * Ticks the mental assault spends closing in before it lands. Shared so the client can escalate
+	 * its screen treatment on the same clock rather than a duplicated literal.
+	 */
+	public static final int MENTAL_WARNING_TICKS = 40;
 
 	private WorldInterfaceProtocol() {
 	}

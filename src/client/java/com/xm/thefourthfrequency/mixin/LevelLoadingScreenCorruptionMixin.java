@@ -2,6 +2,8 @@ package com.xm.thefourthfrequency.mixin;
 
 import com.xm.thefourthfrequency.audio.ModSounds;
 import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
+import com.xm.thefourthfrequency.client_ui.AlphaCorruptionAudio;
+import com.xm.thefourthfrequency.client_ui.AlphaCorruptionRenderer;
 import com.xm.thefourthfrequency.client_ui.AlphaLoadSessionController;
 import com.xm.thefourthfrequency.client_ui.AlphaLoadTimeline;
 import com.xm.thefourthfrequency.client_ui.PersistentAlphaLoadingStyle;
@@ -53,6 +55,7 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 		if (!thefourthfrequency$shouldCorrupt()) return;
 		AlphaLoadSessionController.loadingScreenTick(thefourthfrequency$screenTicks);
 		Minecraft client = Minecraft.getInstance();
+		AlphaCorruptionAudio.tick(client, thefourthfrequency$screenTicks);
 		if (thefourthfrequency$screenTicks == AlphaLoadTimeline.GLITCH_START_TICK) {
 			client.getSoundManager().play(SimpleSoundInstance.forUI(
 					ModSounds.ALPHA_CORRUPTION_WARNING, 1.0F, 0.62F));
@@ -150,6 +153,7 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 				&& AlphaLoadSessionController.shouldRenderLegacyLoadingScreen();
 		if (blackout) {
 			graphics.fill(0, 0, graphics.guiWidth(), graphics.guiHeight(), 0xFF000000);
+			AlphaCorruptionRenderer.drawDeadAir(graphics, thefourthfrequency$screenTicks);
 			callback.cancel();
 			return;
 		}
@@ -180,6 +184,10 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 		graphics.fill(barLeft, barY,
 				barLeft + Math.round(barWidth * thefourthfrequency$legacyProgress), barY + 2,
 				0xFF80FF80);
+
+		if (recoveringFromCorruption) {
+			AlphaCorruptionRenderer.drawRecoveryLock(graphics, thefourthfrequency$screenTicks);
+		}
 
 		if (!thefourthfrequency$legacyFrameRecorded) {
 			thefourthfrequency$legacyFrameRecorded = true;
@@ -227,10 +235,11 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 		String suffix = Component.translatable(!failed
 				? "screen.thefourthfrequency.alpha_loading.progress"
 				: "screen.thefourthfrequency.alpha_loading.failed").getString();
-		String failedLine = prefix + Component.translatable(
-				"screen.thefourthfrequency.alpha_loading.failed").getString();
+		String failedLine = thefourthfrequency$failedLine();
 		if (AlphaLoadTimeline.fullScreenFailureWall(thefourthfrequency$screenTicks)) {
-			thefourthfrequency$renderFullScreenFailureWall(graphics, font, failedLine);
+			thefourthfrequency$renderFullScreenFailureWall(graphics, font, failedLine,
+					AlphaLoadTimeline.floodWipeProgress(thefourthfrequency$screenTicks));
+			AlphaCorruptionRenderer.drawMediumLayers(graphics, thefourthfrequency$screenTicks);
 			thefourthfrequency$viewportFlooded = true;
 			AlphaLoadSessionController.recordViewportFlooded(true);
 			if (!thefourthfrequency$testScreenshotRequested
@@ -252,13 +261,13 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 			graphics.drawString(font, failedLine, startX + 1, labelY,
 					failed ? 0x4C651E22 : 0x383C3531, false);
 		}
-		graphics.drawString(font, prefix, startX + tremorX, labelY + tremorY,
-				failed ? 0xFFD5CEC3 : 0xFFE8E3DA, false);
+		AlphaCorruptionRenderer.drawChromaString(graphics, font, prefix, startX + tremorX,
+				labelY + tremorY, failed ? 0xFFD5CEC3 : 0xFFE8E3DA, thefourthfrequency$screenTicks);
 		int suffixColor = !failed
 				? (Math.floorMod(motionTick, 11) == 4 ? 0xFF766C65 : 0xFFE8E3DA)
 				: 0xFF9B302C;
-		graphics.drawString(font, suffix, suffixX + tremorX, labelY + tremorY,
-				suffixColor, false);
+		AlphaCorruptionRenderer.drawChromaString(graphics, font, suffix, suffixX + tremorX,
+				labelY + tremorY, suffixColor, thefourthfrequency$screenTicks);
 
 		if (AlphaLoadTimeline.observerMessageVisible(thefourthfrequency$screenTicks)) {
 			String observer = Component.translatable(
@@ -266,8 +275,8 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 			int observerX = centerX + (Math.floorMod(tremorSeed >>> 12, 3) - 1);
 			graphics.drawCenteredString(font, observer, observerX + 1, labelY + 29,
 					0x6A321416);
-			graphics.drawCenteredString(font, observer, observerX, labelY + 28,
-					0xC9D8D0C4);
+			AlphaCorruptionRenderer.drawChromaCenteredString(graphics, font, observer, observerX,
+					labelY + 28, 0xC9D8D0C4, thefourthfrequency$screenTicks);
 		}
 
 		int copies = AlphaLoadTimeline.copiedFailureLines(thefourthfrequency$screenTicks);
@@ -284,14 +293,33 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 			graphics.drawCenteredString(font, failedLine, centerX + jitter, y, color);
 		}
 		thefourthfrequency$renderSignalDropouts(graphics, motionTick, failed);
+		AlphaCorruptionRenderer.drawMediumLayers(graphics, thefourthfrequency$screenTicks);
 	}
 
 	@Unique
+	private static String thefourthfrequency$failedLine() {
+		return Component.translatable("screen.thefourthfrequency.alpha_loading.prefix").getString()
+				+ Component.translatable("screen.thefourthfrequency.alpha_loading.failed").getString();
+	}
+
+	/**
+	 * @param wipeProgress 0 to 1; the wall opens outward from the middle of the screen rather
+	 *                     than replacing the picture on a single frame. Six ticks is fast enough
+	 *                     to still land as a shock and slow enough that the eye reads it as the
+	 *                     picture being overtaken rather than as a cut to another image.
+	 */
+	@Unique
 	private static void thefourthfrequency$renderFullScreenFailureWall(GuiGraphics graphics,
-			Font font, String failedLine) {
+			Font font, String failedLine, float wipeProgress) {
 		int width = graphics.guiWidth();
 		int height = graphics.guiHeight();
-		graphics.fill(0, 0, width, height, 0xD00B0000);
+		float opening = Math.clamp(wipeProgress, 0.0F, 1.0F);
+		int halfOpening = Math.round(height * 0.5F * opening);
+		int wipeTop = height / 2 - halfOpening;
+		int wipeBottom = height / 2 + halfOpening;
+		if (wipeBottom <= wipeTop) return;
+		graphics.enableScissor(0, wipeTop, width, wipeBottom);
+		graphics.fill(0, wipeTop, width, wipeBottom, 0xD00B0000);
 
 		float scale = 2.85F;
 		int logicalWidth = (int) Math.ceil(width / scale);
@@ -317,6 +345,12 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 					0xFF000000 | red << 16 | green << 8 | blue, false);
 		}
 		graphics.pose().popMatrix();
+		graphics.disableScissor();
+		// The leading edges of the wipe stay lit for as long as they are still travelling.
+		if (opening < 1.0F) {
+			graphics.fill(0, wipeTop, width, wipeTop + 1, 0xB3E8DCD4);
+			graphics.fill(0, wipeBottom - 1, width, wipeBottom, 0xB3E8DCD4);
+		}
 	}
 
 	@Unique
@@ -337,13 +371,10 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 		}
 	}
 
+	/** Same seed source the medium layers use, so one tick shakes every layer the same way. */
 	@Unique
 	private static int thefourthfrequency$chaos(int value) {
-		value ^= value >>> 16;
-		value *= 0x7FEB352D;
-		value ^= value >>> 15;
-		value *= 0x846CA68B;
-		return value ^ value >>> 16;
+		return AlphaLoadTimeline.noise(value);
 	}
 
 	@Unique
@@ -366,6 +397,8 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 
 	@Inject(method = "onClose", at = @At("TAIL"))
 	private void thefourthfrequency$finishInitialFailure(CallbackInfo callback) {
+		// Unconditional: a bed that outlives this screen would follow the player into the world.
+		AlphaCorruptionAudio.stopAll();
 		if (thefourthfrequency$corruptionClaimed) {
 			AlphaLoadSessionController.loadingScreenClosed(thefourthfrequency$screenTicks,
 					thefourthfrequency$viewportFlooded);

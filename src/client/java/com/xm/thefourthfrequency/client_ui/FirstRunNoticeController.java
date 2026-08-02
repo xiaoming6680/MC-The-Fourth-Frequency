@@ -78,12 +78,11 @@ public final class FirstRunNoticeController {
 	}
 
 	private static Path noticeVersionPath() {
-		return ConfigManager.configPathForTesting().resolveSibling(VERSION_FILE).toAbsolutePath().normalize();
+		return ConfigManager.configPath().resolveSibling(VERSION_FILE).toAbsolutePath().normalize();
 	}
 
 	public static boolean acknowledgedForTesting() { return acknowledged; }
 	public static boolean pendingForTesting() { return pending; }
-	public static Path configPathForTesting() { return ConfigManager.configPathForTesting(); }
 	public static Path noticeVersionPathForTesting() { return noticeVersionPath(); }
 	public static void reloadFromDiskForTesting() {
 		acknowledged = readAcknowledged();

@@ -2,7 +2,7 @@ package com.xm.thefourthfrequency.client_ui;
 
 import com.xm.thefourthfrequency.audio.ModSounds;
 import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
-import com.xm.thefourthfrequency.client_render.WorldInterfaceGatewayBatchRenderer;
+import com.xm.thefourthfrequency.client_render.WorldInterfaceBeamBatchRenderer;
 import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.networking.BossActionS2C;
 import com.xm.thefourthfrequency.networking.WorldInterfaceProtocol;
@@ -14,6 +14,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.resources.sounds.AbstractTickableSoundInstance;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.sounds.SoundEvent;
@@ -29,6 +30,8 @@ public final class WorldInterfacePresentationController {
 	private static final int AMBIENT_FADE_IN_TICKS = 20;
 	private static final int AMBIENT_FADE_OUT_TICKS = 16;
 	private static final long DAMAGE_FLASH_TICKS = 5L;
+	/** Horizontal reach of the visual-only failure erosion, and of the rebuild it needs. */
+	private static final int EROSION_RADIUS_BLOCKS = 160;
 	private static boolean initialized;
 	private static UUID trackedEncounterId;
 	private static UUID trackedBossId;
@@ -47,14 +50,20 @@ public final class WorldInterfacePresentationController {
 	public static void initialize() {
 		if (initialized) return;
 		initialized = true;
-		WorldInterfaceGatewayBatchRenderer.initialize();
+		WorldInterfaceBeamBatchRenderer.initialize();
 		ClientTickEvents.END_CLIENT_TICK.register(WorldInterfacePresentationController::tick);
 		HudRenderCallback.EVENT.register((graphics, tickCounter) -> renderOverlay(graphics));
-		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> resetPresentationState());
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> hardReset());
 	}
 
 	public static void resetForEnding() {
+		hardReset();
+	}
+
+	/** Teardown that also snaps the atmosphere, for paths where no further frames will ease it out. */
+	private static void hardReset() {
 		resetPresentationState();
+		WorldInterfaceAtmosphereController.reset();
 	}
 
 	/** Lets the entity renderer turn authoritative virtual-health deltas into a short hit-material flash. */
@@ -72,7 +81,7 @@ public final class WorldInterfacePresentationController {
 		if (encounter == null || level.dimension() != Level.END) return original;
 		long dx = pos.getX() - encounter.center().getX();
 		long dz = pos.getZ() - encounter.center().getZ();
-		if (dx * dx + dz * dz > 160L * 160L) return original;
+		if (dx * dx + dz * dz > (long) EROSION_RADIUS_BLOCKS * EROSION_RADIUS_BLOCKS) return original;
 		return erosionThreshold(encounter.encounterId().getMostSignificantBits()
 				^ encounter.encounterId().getLeastSignificantBits() ^ pos.asLong()) <= encounter.failureProgress()
 				? ModBlocks.MISSING_TEXTURE_PROXY.defaultBlockState() : original;
@@ -91,13 +100,15 @@ public final class WorldInterfacePresentationController {
 		return erosionThreshold(textureSeed) <= encounter.failureProgress();
 	}
 
+	/**
+	 * Any encounter currently reporting visible erosion, not just a lost one. The server now drives
+	 * this progress from the collapse timer during combat as well, so gating on
+	 * FAILURE_RESOLUTION here would throw away everything except the final six seconds.
+	 */
 	private static WorldInterfaceSnapshotS2C failureEncounter(net.minecraft.client.multiplayer.ClientLevel level) {
 		if (level == null) return null;
 		WorldInterfaceSnapshotS2C encounter = WorldInterfaceClientState.snapshot().encounter();
-		return encounter != null
-				&& encounter.stage() == WorldInterfaceProtocol.Stage.FAILURE_RESOLUTION
-				&& encounter.outcome() == WorldInterfaceProtocol.Outcome.FAILURE
-				&& encounter.failureProgress() > 0.0F ? encounter : null;
+		return encounter != null && encounter.failureProgress() > 0.0F ? encounter : null;
 	}
 
 	private static float erosionThreshold(long value) {
@@ -112,6 +123,8 @@ public final class WorldInterfacePresentationController {
 
 	private static void resetPresentationState() {
 		stopAmbientLoops();
+		WorldInterfaceBeamBatchRenderer.resetSession();
+		WorldInterfacePostEffectController.clearOwned(Minecraft.getInstance());
 		trackedEncounterId = null;
 		trackedBossId = null;
 		lastObservedHealth = Float.NaN;
@@ -123,13 +136,18 @@ public final class WorldInterfacePresentationController {
 
 	private static void tick(Minecraft client) {
 		if (client.level == null || client.player == null || client.isPaused()) return;
-		WorldInterfaceSnapshotS2C encounter = WorldInterfaceClientState.snapshot().encounter();
+		WorldInterfaceClientState.Projection projection = WorldInterfaceClientState.snapshot();
+		// Runs before the early exit so the atmosphere eases back out after an encounter ends
+		// instead of snapping the fog and sky back in a single frame.
+		WorldInterfaceAtmosphereController.tick(client, projection);
+		WorldInterfaceSnapshotS2C encounter = projection.encounter();
 		if (encounter == null) {
 			if (trackedEncounterId != null) resetPresentationState();
 			return;
 		}
 		long now = client.level.getGameTime();
 		observeEncounter(client, encounter, now);
+		WorldInterfacePostEffectController.tick(client, projection);
 	}
 
 	private static void observeEncounter(Minecraft client, WorldInterfaceSnapshotS2C encounter, long now) {
@@ -153,13 +171,41 @@ public final class WorldInterfacePresentationController {
 		tickFailureErosion(client, encounter);
 	}
 
+	/**
+	 * Erosion is baked into chunk meshes, so a changed progress value is invisible until the
+	 * sections are rebuilt. This keys off the progress itself rather than the resolution stage:
+	 * gating on FAILURE_RESOLUTION meant the collapse-driven erosion during combat was computed
+	 * and then never actually shown, since nothing asked for a rebuild until the fight was over.
+	 *
+	 * <p>Twelve buckets keep the rebuild down to a handful of requests spread across the whole
+	 * encounter instead of one per progress change.</p>
+	 */
 	private static void tickFailureErosion(Minecraft client, WorldInterfaceSnapshotS2C encounter) {
-		int bucket = encounter.stage() == WorldInterfaceProtocol.Stage.FAILURE_RESOLUTION
-				&& encounter.outcome() == WorldInterfaceProtocol.Outcome.FAILURE
+		int bucket = encounter.failureProgress() > 0.0F
 				? Math.clamp((int) Math.ceil(encounter.failureProgress() * 12.0F), 0, 12) : -1;
 		if (bucket == failureErosionBucket) return;
 		failureErosionBucket = bucket;
-		if (client.levelRenderer != null) client.levelRenderer.allChanged();
+		rebuildErodedSections(client, encounter);
+	}
+
+	/**
+	 * Rebuilds only the cylinder {@link #failureBlockReplacement} can actually touch.
+	 *
+	 * <p>{@code allChanged()} does not merely re-mesh: it tears down and recreates the section render
+	 * dispatcher and every render region. Calling it once per bucket meant twelve full renderer
+	 * reloads during the exact seconds the frame budget matters most. Marking the affected section
+	 * range dirty produces the same picture, and the meshes are rebuilt progressively.</p>
+	 */
+	private static void rebuildErodedSections(Minecraft client, WorldInterfaceSnapshotS2C encounter) {
+		if (client.levelRenderer == null || client.level == null) return;
+		BlockPos center = encounter.center();
+		client.levelRenderer.setSectionRangeDirty(
+				SectionPos.blockToSectionCoord(center.getX() - EROSION_RADIUS_BLOCKS),
+				client.level.getMinSectionY(),
+				SectionPos.blockToSectionCoord(center.getZ() - EROSION_RADIUS_BLOCKS),
+				SectionPos.blockToSectionCoord(center.getX() + EROSION_RADIUS_BLOCKS),
+				client.level.getMaxSectionY(),
+				SectionPos.blockToSectionCoord(center.getZ() + EROSION_RADIUS_BLOCKS));
 	}
 
 	private static void tickGatewayAudio(Minecraft client, WorldInterfaceSnapshotS2C encounter) {
@@ -215,7 +261,7 @@ public final class WorldInterfacePresentationController {
 		float volume = (float) Math.clamp(RuntimeServices.config().meta().peakVolume()
 				* Math.clamp(relativeVolume, 0.0F, 1.0F), 0.0D, 1.0D);
 		if (volume <= 0.0F) return;
-		client.level.playLocalSound(x, y, z, cue, SoundSource.AMBIENT, volume,
+		client.level.playLocalSound(x, y, z, cue, SoundSource.HOSTILE, volume,
 				Math.clamp(pitch, 0.5F, 2.0F), false);
 	}
 
@@ -272,7 +318,9 @@ public final class WorldInterfacePresentationController {
 			return;
 		}
 		int intensity = Math.clamp((int) (elapsed - 40L), 0, 80);
-		graphics.fill(0, 0, width, height, ((45 + intensity) << 24) | 0x000B0010);
+		// The peak post-effect chain now supplies the violet cast and the blur; keeping the old
+		// opaque veil on top of it only crushed the scene into unreadable mud.
+		graphics.fill(0, 0, width, height, ((18 + intensity / 3) << 24) | 0x000B0010);
 		String glyphs = "0101/空/见/频/我/你";
 		for (int index = 0; index < 18; index++) {
 			long mixed = action.seed() ^ action.sequence() * 0x9E3779B97F4A7C15L
@@ -290,7 +338,9 @@ public final class WorldInterfacePresentationController {
 		int width = graphics.guiWidth();
 		int height = graphics.guiHeight();
 		double progress = Math.clamp(elapsed / Math.max(1.0D, action.duration()), 0.0D, 1.0D);
-		int alpha = 50 + (int) Math.round(progress * 155.0D);
+		// Shares the screen with the expulsion post-effect chain, so the veil only has to carry the
+		// final blackout rather than the whole colour treatment.
+		int alpha = 22 + (int) Math.round(progress * 120.0D);
 		graphics.fill(0, 0, width, height, (alpha << 24) | 0x00150008);
 		int bands = 3 + (int) Math.round(progress * 14.0D);
 		for (int index = 0; index < bands; index++) {
@@ -342,13 +392,32 @@ public final class WorldInterfacePresentationController {
 	}
 
 	private static final class AmbientLoop extends AbstractTickableSoundInstance {
+		/**
+		 * Slow detune and gain sway, on two periods that are not multiples of each other.
+		 *
+		 * <p>A phase can run for minutes, and the bed under it is a fixed recording however long
+		 * that recording is. Drifting the playback the way a transmitter drifts pushes the point
+		 * where a listener can pick out the wrap far past the length of the fight.</p>
+		 */
+		private static final float PITCH_DRIFT_TICKS = 743.0F;
+		private static final float SWAY_TICKS = 509.0F;
+		private static final float PITCH_DRIFT_AMOUNT = 0.008F;
+		private static final float SWAY_AMOUNT = 0.06F;
+
 		private final float relativeVolume;
+		private final float phase;
+		private int age;
 		private int fadeInAge;
 		private int fadeOutAge = -1;
 
 		private AmbientLoop(SoundEvent cue, float relativeVolume) {
-			super(cue, SoundSource.AMBIENT, RandomSource.create());
+			// HOSTILE, matching the attack cues this bed plays under. On AMBIENT it shared a
+			// slider with cave and weather ambience - the one category a horror-mod player is
+			// most likely to have already turned off - and turning it off took the entire
+			// atmosphere of the finale with it while leaving the attacks at full volume.
+			super(cue, SoundSource.HOSTILE, RandomSource.create());
 			this.relativeVolume = Math.clamp(relativeVolume, 0.0F, 1.0F);
+			this.phase = this.random.nextFloat() * (float) (Math.PI * 2.0D);
 			this.volume = 0.0F;
 			this.pitch = 1.0F;
 			this.looping = true;
@@ -371,6 +440,7 @@ public final class WorldInterfacePresentationController {
 
 		@Override
 		public void tick() {
+			age++;
 			float envelope;
 			if (fadeOutAge >= 0) {
 				fadeOutAge++;
@@ -383,8 +453,12 @@ public final class WorldInterfacePresentationController {
 				fadeInAge++;
 				envelope = Math.clamp(fadeInAge / (float) AMBIENT_FADE_IN_TICKS, 0.0F, 1.0F);
 			}
+			pitch = 1.0F + PITCH_DRIFT_AMOUNT
+					* (float) Math.sin(phase + age * (Math.PI * 2.0D) / PITCH_DRIFT_TICKS);
+			float sway = 1.0F + SWAY_AMOUNT
+					* (float) Math.sin(phase * 1.7D + age * (Math.PI * 2.0D) / SWAY_TICKS);
 			volume = (float) Math.clamp(RuntimeServices.config().meta().peakVolume()
-					* relativeVolume * envelope, 0.0D, 1.0D);
+					* relativeVolume * envelope * sway, 0.0D, 1.0D);
 		}
 	}
 }

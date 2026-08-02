@@ -6,6 +6,8 @@ import com.xm.thefourthfrequency.terminal.TerminalResource;
 import com.xm.thefourthfrequency.terminal.TerminalTool;
 import com.xm.thefourthfrequency.terminal.TerminalToolService;
 import com.xm.thefourthfrequency.terminal.TerminalStructureTarget;
+import com.xm.thefourthfrequency.world.MineralSurveyPolicy;
+import com.xm.thefourthfrequency.world.ResourceGuidanceService;
 import com.xm.thefourthfrequency.world.SurvivalProgressService;
 import net.minecraft.network.chat.Component;
 
@@ -24,7 +26,8 @@ public record TerminalToolSnapshot(TerminalToolSnapshotPayload payload) {
 				TerminalToolService.NO_TOOL, TerminalToolService.NO_TOOL,
 				TerminalTool.WEATHER.slot(), TerminalTool.HOME.slot(), 0, 0,
 				TerminalStructureTarget.NONE.wireId(), false,
-				false, 0, TerminalResource.NONE.wireId(), 0, false, false, 0,
+				false, 0, TerminalResource.NONE.wireId(), 0,
+				MineralSurveyPolicy.MAX_PROBE_CHARGES, 0, 0, 0, 0, 0, 0, false, false, 0,
 				0, 0L, 13_000, 0,
 				false, false, false, 0, 0, 0, "",
 				false, false, 0, 0, 0, "",
@@ -83,7 +86,57 @@ public record TerminalToolSnapshot(TerminalToolSnapshotPayload payload) {
 	}
 
 	public int mineralScanTicks() {
-		return Math.clamp(payload.mineralScanTicks(), 0, 60);
+		return Math.clamp(payload.mineralScanTicks(), 0, (int) MineralSurveyPolicy.PROBE_REVEAL_TICKS);
+	}
+
+	public int mineralProbeCharges() {
+		return Math.clamp(payload.mineralProbeCharges(), 0, MineralSurveyPolicy.MAX_PROBE_CHARGES);
+	}
+
+	public boolean mineralProbeReady() {
+		return mineralProbeCharges() > 0;
+	}
+
+	/** Label for the probe button: the charge count while it can fire, the wait while it cannot. */
+	public Component mineralProbeLine() {
+		if (mineralProbeReady()) return Component.translatable(
+				"terminal.thefourthfrequency.tool.minerals.charges",
+				mineralProbeCharges(), MineralSurveyPolicy.MAX_PROBE_CHARGES);
+		return Component.translatable("terminal.thefourthfrequency.tool.minerals.recharging",
+				clockText(payload.mineralRechargeTicks()));
+	}
+
+	public int mineralReadingKind() {
+		return payload.mineralReadingKind();
+	}
+
+	public boolean mineralBearingReading() {
+		return payload.mineralReadingKind() == ResourceGuidanceService.READING_BEARING;
+	}
+
+	/** A probe that resolved with nothing in range, as opposed to a probe never taken. */
+	public boolean mineralProbeHeardNothing() {
+		return payload.mineralReadingKind() == ResourceGuidanceService.READING_EMPTY;
+	}
+
+	/**
+	 * The bearing reading: what was heard, which way, and roughly how far.
+	 *
+	 * <p>Deliberately anchored to where the probe was taken rather than tracking the player, and
+	 * deliberately without a Y: it is a measurement the terminal made once, not a waypoint.</p>
+	 */
+	public Component mineralBearingLine() {
+		return Component.translatable("terminal.thefourthfrequency.tool.minerals.bearing",
+				Component.translatable("terminal.thefourthfrequency.resource." + selectedResource().id()),
+				Component.translatable("terminal.thefourthfrequency.direction."
+						+ TerminalNavigationMath.direction(payload.mineralReadingDx(), payload.mineralReadingDz())),
+				Math.max(0, payload.mineralReadingMinDistance()),
+				Math.max(0, payload.mineralReadingMaxDistance()));
+	}
+
+	private static String clockText(int ticks) {
+		int seconds = Math.max(0, (Math.max(0, ticks) + 19) / 20);
+		return seconds / 60 + ":" + (seconds % 60 < 10 ? "0" : "") + seconds % 60;
 	}
 
 	public boolean mineralSurveyNearby() {

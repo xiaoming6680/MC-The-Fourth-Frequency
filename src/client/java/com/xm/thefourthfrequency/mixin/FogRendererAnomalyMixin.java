@@ -4,6 +4,7 @@ import com.xm.thefourthfrequency.client_ui.AnomalyPresentationController;
 import com.xm.thefourthfrequency.client_ui.AtmosphericFogProfile;
 import com.xm.thefourthfrequency.client_ui.DimensionViewDistanceController;
 import com.xm.thefourthfrequency.client_ui.DimensionViewDistancePolicy;
+import com.xm.thefourthfrequency.client_ui.WorldInterfaceAtmosphereController;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -62,7 +63,8 @@ public abstract class FogRendererAnomalyMixin {
 			target = "Lnet/minecraft/client/renderer/fog/FogRenderer;updateBuffer(Ljava/nio/ByteBuffer;ILorg/joml/Vector4f;FFFFFF)V"),
 			index = 2)
 	private Vector4f thefourthfrequency$tintWorldFogUniform(Vector4f original) {
-		return thefourthfrequency$tintRed(thefourthfrequency$tintAtmosphere(original));
+		return WorldInterfaceAtmosphereController.tintFog(
+				thefourthfrequency$tintRed(thefourthfrequency$tintAtmosphere(original)));
 	}
 
 	@ModifyArg(method = "setupFog", at = @At(value = "INVOKE",
@@ -70,8 +72,9 @@ public abstract class FogRendererAnomalyMixin {
 			index = 5)
 	private float thefourthfrequency$bringRedFogStartCloser(float original) {
 		float atmospheric = thefourthfrequency$atmosphericFog.clampRenderStart(original);
-		float strength = AnomalyPresentationController.redSkyStrength();
-		return thefourthfrequency$mix(atmospheric, Math.min(atmospheric, 6.0F), strength);
+		float strength = AnomalyPresentationController.redFogTightness();
+		return WorldInterfaceAtmosphereController.fogStart(
+				thefourthfrequency$mix(atmospheric, Math.min(atmospheric, 6.0F), strength));
 	}
 
 	@ModifyArg(method = "setupFog", at = @At(value = "INVOKE",
@@ -79,16 +82,17 @@ public abstract class FogRendererAnomalyMixin {
 			index = 6)
 	private float thefourthfrequency$bringRedFogEndCloser(float original) {
 		float atmospheric = thefourthfrequency$atmosphericFog.clampRenderEnd(original);
-		float strength = AnomalyPresentationController.redSkyStrength();
-		return thefourthfrequency$mix(atmospheric, Math.min(atmospheric, 28.0F), strength);
+		float strength = AnomalyPresentationController.redFogTightness();
+		return WorldInterfaceAtmosphereController.fogEnd(
+				thefourthfrequency$mix(atmospheric, Math.min(atmospheric, 28.0F), strength));
 	}
 
 	@Inject(method = "setupFog", at = @At("RETURN"), cancellable = true)
 	private void thefourthfrequency$tintAtmosphericHorizon(Camera camera, int viewDistance,
 			DeltaTracker deltaTracker, float darkness, ClientLevel level,
 			CallbackInfoReturnable<Vector4f> callback) {
-		Vector4f tinted = thefourthfrequency$tintRed(
-				thefourthfrequency$tintAtmosphere(callback.getReturnValue()));
+		Vector4f tinted = WorldInterfaceAtmosphereController.tintFog(thefourthfrequency$tintRed(
+				thefourthfrequency$tintAtmosphere(callback.getReturnValue())));
 		if (tinted != callback.getReturnValue()) callback.setReturnValue(tinted);
 	}
 
@@ -99,9 +103,10 @@ public abstract class FogRendererAnomalyMixin {
 		return new Vector4f(color.red(), color.green(), color.blue(), original.w);
 	}
 
+	/** The fog carries the horizon band, so it takes the full strength the sky dome does not. */
 	@Unique
 	private static Vector4f thefourthfrequency$tintRed(Vector4f original) {
-		float strength = AnomalyPresentationController.redSkyStrength();
+		float strength = AnomalyPresentationController.redHorizonStrength();
 		if (strength <= 0.0F) return original;
 		return new Vector4f(
 				thefourthfrequency$mix(original.x, 0.58F, strength),

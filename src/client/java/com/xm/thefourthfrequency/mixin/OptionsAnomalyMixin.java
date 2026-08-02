@@ -34,7 +34,10 @@ public abstract class OptionsAnomalyMixin {
 	@Inject(method = "getFinalSoundSourceVolume", at = @At("HEAD"), cancellable = true)
 	private void thefourthfrequency$muteAnomalyOutput(SoundSource source,
 			CallbackInfoReturnable<Float> callback) {
-		if (AnomalyPresentationController.isAudioMuted()) callback.setReturnValue(0.0F);
+		if (AnomalyPresentationController.isAudioMuted()
+				|| AnomalyPresentationController.isAmbientSourceSilenced(source)) {
+			callback.setReturnValue(0.0F);
+		}
 	}
 
 	@Inject(method = "getEffectiveRenderDistance", at = @At("RETURN"), cancellable = true)

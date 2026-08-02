@@ -401,8 +401,10 @@ public final class FragmentInvestigationService {
 		for (ServerPlayer online : discoverer.level().getServer().getPlayerList().getPlayers()) {
 			if (data.terminalRecord(online.getUUID()).isEmpty()) continue;
 			Component message = online.getUUID().equals(discoverer.getUUID())
-					? Component.translatable("message.thefourthfrequency.fragment.shared")
-					: Component.translatable("message.thefourthfrequency.fragment.received", discovererName);
+					? Component.translatable("message.thefourthfrequency.fragment.shared",
+							candidate.fragment() + 1)
+					: Component.translatable("message.thefourthfrequency.fragment.received",
+							discovererName, candidate.fragment() + 1);
 			com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(online, message);
 			TerminalLifecycleService.ensureCarried(online, false);
 			TerminalRuntimeService.synchronizeProjection(online);

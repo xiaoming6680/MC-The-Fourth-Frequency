@@ -84,8 +84,7 @@ public final class TerminalTaskService {
 				tag.putInt(TerminalData.TASK_REWARD_CLAIMED_MASK,
 						tag.getIntOr(TerminalData.TASK_REWARD_CLAIMED_MASK, 0) | taskBit);
 			});
-			if (completed[0] >= 0) TerminalNoticeService.taskComplete(player);
-			TerminalNoticeService.rewardClaimed(player, rewardName, rewardCount);
+			TerminalNoticeService.rewardClaimed(player, rewardName, rewardCount, completed[0] >= 0);
 			delivered = true;
 		}
 		if (!delivered) return false;
@@ -133,8 +132,7 @@ public final class TerminalTaskService {
 					tag.getIntOr(TerminalData.TASK_REWARD_CLAIMED_MASK, 0) | 1 << task.index());
 		});
 		TerminalRuntimeService.synchronizeProjection(player, data);
-		if (completed[0] >= 0) TerminalNoticeService.taskComplete(player);
-		TerminalNoticeService.rewardClaimed(player, rewardName, rewardCount);
+		TerminalNoticeService.rewardClaimed(player, rewardName, rewardCount, completed[0] >= 0);
 		notifyIfCompleted(player);
 		return ClaimResult.CLAIMED;
 	}

@@ -9,15 +9,35 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class TerminalGuidancePolicyTest {
 	@Test
-	void refreshCanChooseEveryPublishedMineralAsSoonAsTheToolUnlocks() {
+	void theProbeOnlyHearsRarerOreAsTheMainlineAsksForIt() {
 		int logs = SurvivalMilestone.MINED_LOGS.mask();
 		int initial = TerminalGuidancePolicy.availableResourcesMask(logs, 0);
 		assertTrue(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.IRON));
 		assertTrue(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.COAL));
-		assertTrue(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.GOLD));
-		assertTrue(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.DIAMOND));
+		assertFalse(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.GOLD),
+				"Gold must wait until the terminal has actually been brought iron");
+		assertFalse(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.DIAMOND),
+				"A stone-age player must not be able to have diamond located for them");
+
+		int withIron = TerminalGuidancePolicy.availableResourcesMask(logs | SurvivalMilestone.IRON.mask(), 0);
+		assertTrue(TerminalGuidancePolicy.resourceAvailable(withIron, TerminalResource.GOLD));
+		assertFalse(TerminalGuidancePolicy.resourceAvailable(withIron, TerminalResource.DIAMOND));
+
+		int afterNether = TerminalGuidancePolicy.availableResourcesMask(
+				logs | SurvivalMilestone.IRON.mask() | SurvivalMilestone.ENTERED_NETHER.mask(), 0);
+		assertTrue(TerminalGuidancePolicy.resourceAvailable(afterNether, TerminalResource.DIAMOND));
+
 		assertFalse(TerminalGuidancePolicy.resourceAvailable(0, TerminalResource.IRON));
 		assertFalse(TerminalGuidancePolicy.resourceAvailable(initial, TerminalResource.NONE));
+	}
+
+	@Test
+	void beingStalledNeverUnlocksARarerReading() {
+		int logs = SurvivalMilestone.MINED_LOGS.mask();
+		// hintTier rises when a player is stuck, which is a reason to help them along their current
+		// objective and not a reason to hand them a deeper instrument.
+		assertEquals(TerminalGuidancePolicy.availableResourcesMask(logs, 0),
+				TerminalGuidancePolicy.availableResourcesMask(logs, 2));
 	}
 
 	@Test

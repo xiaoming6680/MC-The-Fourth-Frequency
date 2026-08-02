@@ -50,20 +50,26 @@ class WorldInterfaceClientFidelityContractTest {
 	}
 
 	@Test
-	void gatewaysUseOneBoundedWorldBatchAndAmbientAudioIsStoppable() throws Exception {
-		String gateway = read("client_render/WorldInterfaceGatewayBatchRenderer.java");
+	void everyWorldSpacePrimitiveSharesOneBoundedBatchAndAmbientAudioIsStoppable() throws Exception {
+		String beams = read("client_render/WorldInterfaceBeamBatchRenderer.java");
 		String presentation = read("client_ui/WorldInterfacePresentationController.java");
 		String renderer = read("client_render/WorldInterfaceRenderer.java");
-		assertTrue(gateway.contains("MAX_GATEWAYS = WorldInterfaceProtocol.MAX_GATEWAYS"));
-		assertTrue(gateway.contains("RENDER_LAYER_COUNT = 1"));
-		assertTrue(gateway.contains("MAX_VERTICES_PER_GATE = 16"));
-		assertTrue(gateway.contains("FULL_DETAIL_DISTANCE = 36.0D"));
-		assertTrue(gateway.contains("RENDER_CUTOFF_DISTANCE = 112.0D"));
-		assertTrue(gateway.contains("WorldRenderEvents.END_EXTRACTION.register"));
-		assertTrue(gateway.contains("WorldRenderEvents.BEFORE_TRANSLUCENT.register"));
-		assertEquals(1, count(gateway, "getBuffer(RenderTypes.lightning())"));
-		assertTrue(gateway.contains("deltaX * deltaX + deltaZ * deltaZ"),
+		assertTrue(beams.contains("MAX_GATEWAYS = WorldInterfaceProtocol.MAX_GATEWAYS"));
+		assertTrue(beams.contains("RENDER_LAYER_COUNT = 1"));
+		// Camera-facing shafts halved the old axis-aligned pair's vertex cost.
+		assertTrue(beams.contains("MAX_VERTICES_PER_GATE = 8"));
+		assertTrue(beams.contains("FULL_DETAIL_DISTANCE = 36.0D"));
+		assertTrue(beams.contains("RENDER_CUTOFF_DISTANCE = 112.0D"));
+		assertTrue(beams.contains("WorldRenderEvents.END_EXTRACTION.register"));
+		assertTrue(beams.contains("WorldRenderEvents.BEFORE_TRANSLUCENT.register"));
+		// The whole point of folding the laser, tethers and orb halos in here: still one layer.
+		assertEquals(1, count(beams, "getBuffer(RenderTypes.lightning())"));
+		assertTrue(beams.contains("deltaX * deltaX + deltaZ * deltaZ"),
 				"gateway LOD must use horizontal distance so the radius-96 ring remains visible");
+		assertTrue(beams.contains("MAX_BATCH_VERTICES = MAX_GATEWAYS * MAX_VERTICES_PER_GATE"),
+				"every primitive family must stay inside one declared vertex budget");
+		assertTrue(beams.contains("public static void resetSession()"),
+				"entity references must be droppable so a disconnect cannot strand a stale level");
 		assertFalse(presentation.contains("addParticle("));
 		assertTrue(presentation.contains("extends AbstractTickableSoundInstance"));
 		assertTrue(presentation.contains("this.looping = true"));
@@ -71,6 +77,42 @@ class WorldInterfaceClientFidelityContractTest {
 		assertTrue(presentation.contains("stopAmbientLoops()"));
 		assertFalse(presentation.contains("AMBIENT_LOOP_TICKS"));
 		assertTrue(renderer.contains("MAX_RENDER_LAYERS = 2"));
+	}
+
+	@Test
+	void erosionRebuildsOnlyTheCylinderItCanTouch() throws Exception {
+		String presentation = read("client_ui/WorldInterfacePresentationController.java");
+		// allChanged() recreates the whole section render dispatcher; twelve of them during the
+		// collapse was a visible hitch at the worst possible moment.
+		assertFalse(presentation.contains("levelRenderer.allChanged()"));
+		assertTrue(presentation.contains("setSectionRangeDirty("));
+		assertTrue(presentation.contains("EROSION_RADIUS_BLOCKS = 160"));
+	}
+
+	@Test
+	void screenTreatmentsNeverStealAChainTheyDoNotOwn() throws Exception {
+		String post = read("client_ui/WorldInterfacePostEffectController.java");
+		assertTrue(post.contains("if (active != null && !isOwned(active)) return;"),
+				"the pursuit chain must survive an overlapping encounter action");
+		assertTrue(post.contains("clearOwned("));
+		for (String effect : new String[]{"world_interface_mental", "world_interface_mental_peak",
+				"world_interface_expulsion"}) {
+			assertTrue(Files.exists(Path.of("src/main/resources/assets/thefourthfrequency/post_effect",
+					effect + ".json")), "missing post effect: " + effect);
+		}
+	}
+
+	@Test
+	void escalationPaletteIsSharedRatherThanRestatedPerRenderer() throws Exception {
+		String palette = read("client_render/WorldInterfacePalette.java");
+		String renderer = read("client_render/WorldInterfaceRenderer.java");
+		String beams = read("client_render/WorldInterfaceBeamBatchRenderer.java");
+		String hud = read("client_ui/WorldInterfaceHud.java");
+		assertTrue(palette.contains("PHASE_BAND_COUNT = 3"));
+		for (String consumer : new String[]{renderer, beams, hud}) {
+			assertTrue(consumer.contains("WorldInterfacePalette."),
+					"escalation colour must come from the shared palette");
+		}
 	}
 
 	@Test

@@ -1,6 +1,6 @@
 # 测试与验收
 
-本文记录 `0.2.1-beta` 当前测试入口、最近已完成证据和已知测试基础设施边界。只把实际运行完成且与当前 schema v10/个人追逐代码对应的结果列为当前证据。
+本文记录 `0.3.0-beta` 当前测试入口、最近已完成证据和已知测试基础设施边界。只把实际运行完成且与当前 schema v10/个人追逐代码对应的结果列为当前证据。
 
 ## 固定环境
 
@@ -63,14 +63,14 @@
 | --- | --- | --- |
 | 主端/客户端/测试源码编译 | `BUILD SUCCESSFUL` | `compileJava compileClientJava compileGametestJava compileTestJava` |
 | 追逐演出/资源定向测试 | 37/37；0 失败、0 错误 | 覆盖无前置滤镜、混色临时预警、返程记录、矿洞降速接线、单一常驻提示与加载遮罩 |
-| 服务端 GameTest | 60/60 必需测试通过 | 包含校正者反搭高与快速破障回归 |
+| 服务端 GameTest | 60/60 必需测试通过 | 包含校正者反搭高与快速破障回归；2026-08-03 含玩法调优（签名异象、曝光压缩、探测保底、捕获软底、锚警告、旁观者痕迹）后复跑通过 |
 | 六镜像维度资源 | 通过 | JAR 含六份 JSON；正常专用服务器已实例化六个维度目录 |
 | `clean build`（含 `check`、`runGameTest`、`remapJar`） | `BUILD SUCCESSFUL` | 2026-08-02 当前发布物 |
-| 聚合 `unitTest` | 216 个测试条目；216 通过、0 失败 | 见下方"聚合测试门禁修复"说明；现为全绿证据 |
+| 聚合 `unitTest` | 237 个测试条目；237 通过、0 失败（2026-08-03） | 见下方"聚合测试门禁修复"说明；含玩法调优新增的曝光压缩、探测保底与捕获软底策略测试 |
 | `notice-entry` 客户端 GameTest | `BUILD SUCCESSFUL` | 客户端混入、资源、音频、HUD 与首次终端入口冒烟 |
 | 完整（`all`）客户端 GameTest | 本轮未复跑 | 定向冒烟不能替代未筛选的完整客户端套件 |
 
-当前发布结论建立在编译、37 项追逐演出/资源定向测试、60 项 GameTest、216 项聚合 `unitTest`、镜像维度实例化与 remap 打包之上。完整（`all`）客户端套件仍是发布前待复跑项。
+当前发布结论建立在编译、37 项追逐演出/资源定向测试、60 项 GameTest、237 项聚合 `unitTest`、镜像维度实例化与 remap 打包之上。完整（`all`）客户端套件仍是发布前待复跑项。
 
 ### 聚合测试门禁修复（2026-08-02）
 
@@ -117,15 +117,16 @@
 - 所有 Markdown 相对链接都能解析到仓库内目标。
 - 对外文档不再把旧协议号、固定 30 格边界、旧测试数字或旧追逐设计写成当前状态。
 - `git diff --check` 无尾随空格或补丁格式错误。
-- `clean build`（含 `remapJar`）于 2026-08-02 `BUILD SUCCESSFUL`；发布 JAR 已核对流式快照类和六镜像维度资源。
+- `clean build`（含 `remapJar`）于 2026-08-03 `BUILD SUCCESSFUL`；240 项单元测试与 GameTest 全部通过。
 
-候选包人工流程见 [Beta 0.2.1 人工验收](alpha-acceptance.md)。
+候选包人工流程见 [Beta 0.3.0 人工验收](alpha-acceptance.md)。
 
 ## 发布物
 
 | 文件 | 当前结果 |
 | --- | --- |
-| `build/libs/thefourthfrequency-0.2.1-beta.jar` | 15,130,453 字节；SHA-256 `02CE9D2C7E3B08723227FB93CFE5660E4B618B6CD9890743B1E67F917BA70FE4` |
+| `build/libs/thefourthfrequency-0.3.0-beta.jar` | 16,983,291 字节；SHA-256 `CCB0FC48F080222E3E4238F776BFB2D3C467D85C59D74B8A27356C998831AA93` |
+| `build/libs/thefourthfrequency-0.2.1-beta.jar` | 上一版实测：15,130,787 字节；SHA-256 `6CA1D934AC864230030914E9635B68D52F799E900E8FD0B7147B91DCE5C1D61F` |
 
 ## 发布前仍需完成
 

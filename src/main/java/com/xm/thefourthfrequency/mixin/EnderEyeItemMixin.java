@@ -34,13 +34,13 @@ public abstract class EnderEyeItemMixin {
 		var center = StrongholdPortalService.findPortalRingNear(
 				context.getLevel(), context.getClickedPos(), 4).orElse(null);
 		if (center == null || StrongholdPortalService.eyeCount(context.getLevel(), center) != 11) return;
-		int resolved = FrequencyWorldData.get(player.level().getServer())
+		int encountered = FrequencyWorldData.get(player.level().getServer())
 				.terminalRecord(player.getUUID())
-				.map(tag -> tag.getIntOr(TerminalData.PURSUIT_RESOLVED_CHASES, 0))
+				.map(tag -> tag.getIntOr(TerminalData.PURSUIT_ENCOUNTERED_CHASES, 0))
 				.orElse(0);
-		if (PursuitProgressPolicy.finalEyeReady(resolved)) return;
-		TerminalNoticeService.send(player, Component.translatable(
-				"message.thefourthfrequency.world_interface.final_eye_requires_pursuit"));
+		if (PursuitProgressPolicy.finalEyeReady(encountered)) return;
+		TerminalNoticeService.denied(player,
+				"message.thefourthfrequency.world_interface.final_eye_requires_pursuit");
 		callback.setReturnValue(InteractionResult.FAIL);
 	}
 

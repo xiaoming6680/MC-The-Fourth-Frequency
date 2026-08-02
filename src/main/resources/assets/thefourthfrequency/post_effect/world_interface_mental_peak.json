@@ -1,0 +1,135 @@
+{
+  "targets": {
+    "veil": {},
+    "temp": {}
+  },
+  "passes": [
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/box_blur",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "minecraft:main",
+          "bilinear": true
+        }
+      ],
+      "output": "temp",
+      "uniforms": {
+        "BlurConfig": [
+          {
+            "name": "BlurDir",
+            "type": "vec2",
+            "value": [1.0, 0.0]
+          },
+          {
+            "name": "Radius",
+            "type": "float",
+            "value": 9.0
+          }
+        ]
+      }
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/box_blur",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "temp",
+          "bilinear": true
+        }
+      ],
+      "output": "veil",
+      "uniforms": {
+        "BlurConfig": [
+          {
+            "name": "BlurDir",
+            "type": "vec2",
+            "value": [0.0, 1.0]
+          },
+          {
+            "name": "Radius",
+            "type": "float",
+            "value": 9.0
+          }
+        ]
+      }
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/color_convolve",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "veil"
+        }
+      ],
+      "output": "temp",
+      "uniforms": {
+        "ColorConfig": [
+          {
+            "name": "RedMatrix",
+            "type": "vec3",
+            "value": [0.58, 0.20, 0.36]
+          },
+          {
+            "name": "GreenMatrix",
+            "type": "vec3",
+            "value": [0.06, 0.18, 0.06]
+          },
+          {
+            "name": "BlueMatrix",
+            "type": "vec3",
+            "value": [0.42, 0.26, 0.86]
+          }
+        ]
+      }
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/bits",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "temp"
+        }
+      ],
+      "output": "veil",
+      "uniforms": {
+        "BitsConfig": [
+          {
+            "name": "Resolution",
+            "type": "float",
+            "value": 9.0
+          },
+          {
+            "name": "MosaicSize",
+            "type": "float",
+            "value": 2.0
+          }
+        ]
+      }
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/blit",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "veil"
+        }
+      ],
+      "output": "minecraft:main",
+      "uniforms": {
+        "BlitConfig": [
+          {
+            "name": "ColorModulate",
+            "type": "vec4",
+            "value": [0.88, 0.70, 1.0, 1.0]
+          }
+        ]
+      }
+    }
+  ]
+}

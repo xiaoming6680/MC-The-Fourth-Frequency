@@ -52,7 +52,11 @@ public final class ReworkBodyModel extends EntityModel<ReworkBodyRenderState> {
 		rightLeg = root.getChild("right_leg");
 		rightLowerLeg = rightLeg.getChild("lower_leg");
 		List<BackArm> found = new ArrayList<>();
-		for (int index = 0; index < this.stage * 2; index++) {
+		// Must stay in lockstep with addBackArms(), which builds exactly backArmCount() parts.
+		// These two counts used to be written independently (stage * 2 here against the profile
+		// field there); they happened to agree only because the old table set backArmCount to
+		// stage * 2, so any change to that column would have crashed here on a missing child.
+		for (int index = 0; index < FormProfile.forStage(this.stage).backArmCount(); index++) {
 			ModelPart upper = torso.getChild("back_arm_" + index);
 			ModelPart forearm = upper.getChild("forearm");
 			found.add(new BackArm(index, index % 2 == 0 ? 1.0F : -1.0F,
@@ -84,7 +88,7 @@ public final class ReworkBodyModel extends EntityModel<ReworkBodyRenderState> {
 				PartPose.offsetAndRotation(0.0F, pelvisY, 0.0F, 0.0F, 0.0F, profile.torsoTwist()));
 
 		PartDefinition ribs = torso.addOrReplaceChild("ribs", ribGeometry(profile), PartPose.ZERO);
-		ribs.addOrReplaceChild("sternum", profile.stage() >= 2
+		ribs.addOrReplaceChild("sternum", profile.stage() <= 3
 				? CubeListBuilder.create().texOffs(100, 64).addBox(-0.45F, -profile.torsoHeight() + 1.5F,
 						-halfDepth - 0.45F, 0.9F, profile.torsoHeight() * 0.62F, 0.9F)
 				: CubeListBuilder.create(), PartPose.ZERO);
@@ -94,25 +98,29 @@ public final class ReworkBodyModel extends EntityModel<ReworkBodyRenderState> {
 				.addBox(-profile.neckWidth() * 0.5F, -profile.neckHeight(), -profile.neckDepth() * 0.5F,
 						profile.neckWidth(), profile.neckHeight(), profile.neckDepth()),
 				PartPose.offsetAndRotation(0.0F, -profile.torsoHeight(), -0.15F,
-						0.04F + profile.stage() * 0.008F, 0.0F, -profile.torsoTwist() * 0.55F));
+						0.04F + (6 - profile.stage()) * 0.008F, 0.0F, -profile.torsoTwist() * 0.55F));
+		// The head sits crooked on the early necks and straightens as the guess improves; by the
+		// last form it is centred, which is precisely what makes it read as wrong.
+		boolean crookedHead = profile.stage() <= 2;
 		PartDefinition head = neck.addOrReplaceChild("head", CubeListBuilder.create().texOffs(70, 0)
 				.addBox(-profile.headWidth() * 0.5F, -profile.headHeight(), -profile.headDepth() * 0.56F,
 						profile.headWidth(), profile.headHeight(), profile.headDepth()),
-				PartPose.offsetAndRotation(profile.stage() >= 3 ? 0.35F : 0.0F, -profile.neckHeight(), -0.25F,
-						0.0F, 0.0F, profile.stage() >= 3 ? -0.045F * profile.stage() : 0.0F));
+				PartPose.offsetAndRotation(crookedHead ? 0.35F : 0.0F, -profile.neckHeight(), -0.25F,
+						0.0F, 0.0F, crookedHead ? -0.045F * (4 - profile.stage()) : 0.0F));
+		boolean splitFace = profile.stage() == 1;
 		head.addOrReplaceChild("face_left", facePlate(profile, true), PartPose.offsetAndRotation(
-				profile.stage() >= 5 ? -0.55F : 0.0F, 0.0F, 0.0F, 0.0F,
-				profile.stage() >= 5 ? -0.14F : 0.0F, profile.stage() >= 5 ? -0.08F : 0.0F));
+				splitFace ? -0.55F : 0.0F, 0.0F, 0.0F, 0.0F,
+				splitFace ? -0.14F : 0.0F, splitFace ? -0.08F : 0.0F));
 		head.addOrReplaceChild("face_right", facePlate(profile, false), PartPose.offsetAndRotation(
-				profile.stage() >= 5 ? 0.55F : 0.0F, 0.0F, 0.0F, 0.0F,
-				profile.stage() >= 5 ? 0.14F : 0.0F, profile.stage() >= 5 ? 0.08F : 0.0F));
+				splitFace ? 0.55F : 0.0F, 0.0F, 0.0F, 0.0F,
+				splitFace ? 0.14F : 0.0F, splitFace ? 0.08F : 0.0F));
 		PartDefinition jaw = head.addOrReplaceChild("jaw", CubeListBuilder.create().texOffs(96, 0)
 				.addBox(-profile.headWidth() * 0.47F, -0.15F, -profile.headDepth() * 0.62F,
 						profile.headWidth() * 0.94F, profile.jawHeight(), profile.headDepth() * 0.82F),
-				PartPose.offset(profile.stage() >= 3 ? 0.45F : 0.0F, -profile.jawHeight() - 0.35F, -0.15F));
+				PartPose.offset(crookedHead ? 0.45F : 0.0F, -profile.jawHeight() - 0.35F, -0.15F));
 		jaw.addOrReplaceChild("teeth", teethGeometry(profile, false), PartPose.ZERO);
 		PartDefinition innerJaw = head.addOrReplaceChild("inner_jaw",
-				profile.stage() >= 4 ? CubeListBuilder.create().texOffs(96, 12)
+				profile.stage() <= 2 ? CubeListBuilder.create().texOffs(96, 12)
 						.addBox(-profile.headWidth() * 0.33F, 0.0F, -profile.headDepth() * 0.68F,
 								profile.headWidth() * 0.66F, profile.jawHeight() * 0.72F,
 								profile.headDepth() * 0.55F) : CubeListBuilder.create(),
@@ -127,11 +135,16 @@ public final class ReworkBodyModel extends EntityModel<ReworkBodyRenderState> {
 		return LayerDefinition.create(mesh, 128, 128);
 	}
 
+	/**
+	 * Exposed ribs belong to the early forms: at that point the body is still a frame with nothing
+	 * convincingly wrapped around it. They thin out and vanish as the silhouette learns to close
+	 * over itself, which is why this reads as "stage 4 and 5 have none" rather than the reverse.
+	 */
 	private static CubeListBuilder ribGeometry(FormProfile profile) {
 		CubeListBuilder ribs = CubeListBuilder.create();
-		if (profile.stage() < 2) return ribs;
+		if (profile.stage() > 3) return ribs;
 		float depth = profile.torsoDepth() * 0.5F;
-		int count = Math.min(6, profile.stage() + 1);
+		int count = 6 - profile.stage();
 		for (int index = 0; index < count; index++) {
 			float width = profile.torsoWidth() + (profile.stage() - 1) * 0.55F - index * 0.18F;
 			float y = -profile.torsoHeight() + 2.2F + index * 1.65F;
@@ -143,8 +156,8 @@ public final class ReworkBodyModel extends EntityModel<ReworkBodyRenderState> {
 
 	private static CubeListBuilder spineGeometry(FormProfile profile) {
 		CubeListBuilder spine = CubeListBuilder.create();
-		if (profile.stage() < 3) return spine;
-		int vertebrae = 5 + profile.stage();
+		if (profile.stage() > 3) return spine;
+		int vertebrae = 9 - profile.stage() * 2;
 		float back = profile.torsoDepth() * 0.5F + 0.25F;
 		for (int index = 0; index < vertebrae; index++) {
 			float y = -profile.torsoHeight() + 1.0F + index * (profile.torsoHeight() - 2.0F) / (vertebrae - 1);
@@ -155,10 +168,14 @@ public final class ReworkBodyModel extends EntityModel<ReworkBodyRenderState> {
 		return spine;
 	}
 
+	/**
+	 * Two mismatched plates stapled where a face should go - an early, unconvincing attempt at one.
+	 * Stage 1 splits them apart entirely; by stage 3 they are gone and the head is simply a head.
+	 */
 	private static CubeListBuilder facePlate(FormProfile profile, boolean left) {
-		if (profile.stage() < 4) return CubeListBuilder.create();
-		float width = profile.headWidth() * (profile.stage() == 5 ? 0.42F : 0.86F);
-		float x = profile.stage() == 5 ? (left ? -profile.headWidth() * 0.47F : 0.05F)
+		if (profile.stage() > 2) return CubeListBuilder.create();
+		float width = profile.headWidth() * (profile.stage() == 1 ? 0.42F : 0.86F);
+		float x = profile.stage() == 1 ? (left ? -profile.headWidth() * 0.47F : 0.05F)
 				: -profile.headWidth() * 0.43F;
 		return CubeListBuilder.create().texOffs(left ? 70 : 96, 20)
 				.addBox(x, -profile.headHeight() * 0.86F, -profile.headDepth() * 0.60F - 0.22F,
@@ -167,7 +184,9 @@ public final class ReworkBodyModel extends EntityModel<ReworkBodyRenderState> {
 
 	private static CubeListBuilder teethGeometry(FormProfile profile, boolean inner) {
 		CubeListBuilder teeth = CubeListBuilder.create();
-		int count = inner ? (profile.stage() >= 4 ? 5 : 0) : 4 + profile.stage();
+		// Teeth recede along with the jaw: the late forms keep a mouth that could pass for a
+		// player's, and the second row of them only exists while the first guess is still showing.
+		int count = inner ? (profile.stage() <= 2 ? 5 : 0) : Math.max(0, 8 - profile.stage() * 2);
 		float spread = profile.headWidth() * (inner ? 0.46F : 0.72F);
 		for (int index = 0; index < count; index++) {
 			float x = count == 1 ? 0.0F : -spread * 0.5F + spread * index / (count - 1);
@@ -368,28 +387,43 @@ public final class ReworkBodyModel extends EntityModel<ReworkBodyRenderState> {
 
 	private record BackArm(int index, float side, ModelPart upper, ModelPart forearm, ModelPart claw) { }
 
+	/**
+	 * The five silhouettes read as one thing learning to wear a body, so the progression converges
+	 * on the vanilla player's proportions instead of growing into a larger monster.
+	 *
+	 * <p>Stage 1 is the worst guess at a human: stilt legs, a small head, thread-thin limbs and a
+	 * surplus of arms, because nothing here yet knows how many a body is supposed to have. Each
+	 * stage sheds the surplus and moves toward the player skeleton (legs 12, torso 12x8x4, head
+	 * 8x8x8, arm 12 total, limbs 4 thick). Stage 5 lands close enough to pass at a glance but is
+	 * deliberately never exact - a slightly long leg, a torso a shade too shallow, a residual
+	 * twist - so the last form is uncanny rather than merely large. Horror moves from "obviously
+	 * not a person" to "almost a person", which is also what the fiction asks for: the fifth form
+	 * is the one that forges coordinates and text.</p>
+	 */
 	private record FormProfile(int stage, int backArmCount, float legLength, float torsoHeight,
 			float neckHeight, float headHeight, float torsoWidth, float torsoDepth,
 			float headWidth, float headDepth, float armUpperLength, float armForeLength,
 			float backUpperLength, float backForeLength, float limbThickness, float torsoTwist) {
 		static FormProfile forStage(int stage) {
 			return switch (stage) {
-				case 1 -> new FormProfile(1, 2, 17.0F, 12.0F, 4.0F, 6.2F,
-						5.5F, 3.4F, 4.5F, 4.2F, 9.0F, 11.0F, 6.5F, 7.5F, 1.40F, 0.0F);
-				case 2 -> new FormProfile(2, 4, 18.0F, 13.0F, 4.4F, 6.2F,
-						6.0F, 3.8F, 5.0F, 4.5F, 10.0F, 12.0F, 7.0F, 8.0F, 1.48F, -0.025F);
-				case 3 -> new FormProfile(3, 6, 19.0F, 14.0F, 4.8F, 6.2F,
-						6.5F, 4.2F, 5.2F, 4.8F, 11.0F, 13.0F, 7.5F, 9.0F, 1.52F, 0.075F);
-				case 4 -> new FormProfile(4, 8, 20.0F, 15.0F, 5.2F, 7.0F,
-						7.0F, 4.8F, 5.8F, 5.2F, 12.0F, 14.0F, 8.5F, 10.0F, 1.60F, -0.055F);
-				default -> new FormProfile(5, 10, 21.0F, 16.0F, 5.6F, 7.8F,
-						7.5F, 5.2F, 6.2F, 5.6F, 13.0F, 15.0F, 9.5F, 11.0F, 1.68F, 0.090F);
+				case 1 -> new FormProfile(1, 10, 21.0F, 9.0F, 5.2F, 5.0F,
+						4.2F, 2.2F, 4.0F, 3.8F, 9.5F, 11.5F, 9.5F, 11.0F, 1.30F, 0.160F);
+				case 2 -> new FormProfile(2, 8, 19.0F, 10.0F, 4.4F, 5.8F,
+						5.2F, 2.7F, 5.0F, 4.8F, 8.6F, 10.2F, 8.5F, 10.0F, 1.80F, -0.120F);
+				case 3 -> new FormProfile(3, 6, 16.5F, 11.0F, 3.4F, 6.6F,
+						6.3F, 3.2F, 6.2F, 6.0F, 7.6F, 8.8F, 7.5F, 9.0F, 2.50F, 0.080F);
+				case 4 -> new FormProfile(4, 4, 14.0F, 11.6F, 2.2F, 7.3F,
+						7.2F, 3.6F, 7.2F, 7.0F, 6.7F, 7.3F, 7.0F, 8.0F, 3.20F, -0.040F);
+				default -> new FormProfile(5, 2, 12.6F, 12.2F, 1.1F, 7.9F,
+						7.8F, 4.3F, 7.9F, 7.7F, 6.1F, 6.2F, 6.5F, 7.5F, 3.80F, 0.015F);
 			};
 		}
 
-		float neckWidth() { return 2.2F + stage * 0.18F; }
-		float neckDepth() { return 2.0F + stage * 0.16F; }
-		float jawHeight() { return 1.8F + stage * 0.22F; }
-		float clawLength() { return 3.2F + stage * 0.30F; }
+		// These also converge: the neck all but disappears (the player has none), the jaw stops
+		// jutting out, and the claws retract toward something closer to a hand.
+		float neckWidth() { return 3.6F - stage * 0.28F; }
+		float neckDepth() { return 3.3F - stage * 0.26F; }
+		float jawHeight() { return 3.0F - stage * 0.35F; }
+		float clawLength() { return 4.4F - stage * 0.55F; }
 	}
 }

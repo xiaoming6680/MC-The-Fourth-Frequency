@@ -14,6 +14,7 @@ import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
 import com.xm.thefourthfrequency.terminal.TerminalTaskService;
 import com.xm.thefourthfrequency.narrative.HiddenFilePolicy;
 import com.xm.thefourthfrequency.narrative.TerminalFileState;
+import com.xm.thefourthfrequency.world.MineralSurveyPolicy;
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.SurvivalProgressService;
 
@@ -74,6 +75,12 @@ public final class TerminalData {
 	public static final String PRIVATE_ANOMALY_SEED = "private_anomaly_seed";
 	public static final String PRIVATE_ANOMALY_VARIANT = "private_anomaly_variant";
 	public static final String PRIVATE_ANOMALY_COUNT = "private_anomaly_count";
+	/**
+	 * Lifetime count of completed anomalies, never reset. Distinct from
+	 * {@code ANOMALY_STAGE_SUCCESSES}, which zeroes on every stage advance: this one only ever
+	 * grows, so world decay can accumulate irreversibly instead of resetting with the pacing.
+	 */
+	public static final String ANOMALY_RESIDUE_COUNT = "anomaly_residue_count";
 	public static final String PREFERRED_WEAPON = "preferred_weapon";
 	public static final String WEAPON_SAMPLE_COUNT = "weapon_sample_count";
 	public static final String ESCAPE_AXIS = "escape_axis";
@@ -105,6 +112,7 @@ public final class TerminalData {
 	public static final String ANOMALY_RECENT_IDS = "anomaly_recent_ids";
 	public static final String ANOMALY_STAGE_SUCCESSES = "anomaly_stage_successes";
 	public static final String NEXT_STRONG_ANOMALY_TICK = "next_strong_anomaly_tick";
+	public static final String SIGNATURE_ANOMALY_PENDING = "signature_anomaly_pending";
 	public static final String NEXT_COMPOSITE_ANOMALY_TICK = "next_composite_anomaly_tick";
 	public static final String ANOMALY_LEGACY_RAMP = "anomaly_legacy_ramp";
 	public static final String ANOMALY_LEGACY_RAMP_TICKS = "anomaly_legacy_ramp_ticks";
@@ -126,6 +134,15 @@ public final class TerminalData {
 	public static final String ACTIVE_GUIDANCE_TOOL = "active_guidance_tool";
 	public static final String SELECTED_RESOURCE = "selected_resource";
 	public static final String MINERAL_SCAN_READY_GAME_TIME = "mineral_scan_ready_game_time";
+	public static final String MINERAL_PROBE_CHARGES = "mineral_probe_charges";
+	public static final String MINERAL_PROBE_RECHARGE_TICK = "mineral_probe_recharge_tick";
+	/** 0 none, 1 exact block, 2 bearing and distance band. */
+	public static final String MINERAL_READING_KIND = "mineral_reading_kind";
+	public static final String MINERAL_READING_DX = "mineral_reading_dx";
+	public static final String MINERAL_READING_DZ = "mineral_reading_dz";
+	public static final String MINERAL_READING_MIN_DISTANCE = "mineral_reading_min_distance";
+	public static final String MINERAL_READING_MAX_DISTANCE = "mineral_reading_max_distance";
+	public static final String MINERAL_READING_DIMENSION = "mineral_reading_dimension";
 	public static final String MINERAL_SURVEY_PROXIMITY = "mineral_survey_proximity";
 	public static final String MINERAL_SURVEY_NEARBY = "mineral_survey_nearby";
 	public static final String MINERAL_SURVEY_POSITION = "mineral_survey_position";
@@ -159,6 +176,13 @@ public final class TerminalData {
 	public static final String NAVIGATION_COMPLETION_DIMENSION = "navigation_completion_dimension";
 	public static final String NAVIGATION_COMPLETION_DIRECTION = "navigation_completion_direction";
 	public static final String PURSUIT_RESOLVED_CHASES = "pursuit_resolved_chases";
+	/**
+	 * Chases the player actually lived through, counting captures as well as escapes. This is
+	 * deliberately separate from {@link #PURSUIT_RESOLVED_CHASES}, which only counts successes and
+	 * still drives form progression: gating the final Eye on successes alone permanently locked
+	 * less skilled players out of the ending, since being caught never advanced anything.
+	 */
+	public static final String PURSUIT_ENCOUNTERED_CHASES = "pursuit_encountered_chases";
 	public static final String PURSUIT_ALLOWED_FORM = "pursuit_allowed_form";
 	public static final String PURSUIT_TUTORIAL_DEMO_MASK = "pursuit_tutorial_demo_mask";
 	public static final String PURSUIT_TUTORIAL_WARNING_MASK = "pursuit_tutorial_warning_mask";
@@ -242,6 +266,7 @@ public final class TerminalData {
 		tag.putLong(PRIVATE_ANOMALY_SEED, personalitySeed ^ 0x5446464D364C4F4EL);
 		tag.putInt(PRIVATE_ANOMALY_VARIANT, Math.floorMod(cacheVariant, 4));
 		tag.putInt(PRIVATE_ANOMALY_COUNT, 0);
+		tag.putInt(ANOMALY_RESIDUE_COUNT, 0);
 		tag.putString(PREFERRED_WEAPON, "");
 		tag.putInt(WEAPON_SAMPLE_COUNT, 0);
 		tag.putString(ESCAPE_AXIS, "none");
@@ -265,6 +290,7 @@ public final class TerminalData {
 		tag.put(ANOMALY_RECENT_IDS, new ListTag());
 		tag.putInt(ANOMALY_STAGE_SUCCESSES, 0);
 		tag.putLong(NEXT_STRONG_ANOMALY_TICK, 0L);
+		tag.putBoolean(SIGNATURE_ANOMALY_PENDING, false);
 		tag.putLong(NEXT_COMPOSITE_ANOMALY_TICK, 0L);
 		tag.putBoolean(ANOMALY_LEGACY_RAMP, false);
 		tag.putLong(ANOMALY_LEGACY_RAMP_TICKS, 0L);
@@ -286,6 +312,14 @@ public final class TerminalData {
 		tag.putInt(ACTIVE_GUIDANCE_TOOL, 6);
 		tag.putInt(SELECTED_RESOURCE, 3);
 		tag.putLong(MINERAL_SCAN_READY_GAME_TIME, 0L);
+		tag.putInt(MINERAL_PROBE_CHARGES, MineralSurveyPolicy.MAX_PROBE_CHARGES);
+		tag.putLong(MINERAL_PROBE_RECHARGE_TICK, 0L);
+		tag.putInt(MINERAL_READING_KIND, 0);
+		tag.putInt(MINERAL_READING_DX, 0);
+		tag.putInt(MINERAL_READING_DZ, 0);
+		tag.putInt(MINERAL_READING_MIN_DISTANCE, 0);
+		tag.putInt(MINERAL_READING_MAX_DISTANCE, 0);
+		tag.putString(MINERAL_READING_DIMENSION, "");
 		tag.putBoolean(MINERAL_SURVEY_PROXIMITY, false);
 		tag.putBoolean(MINERAL_SURVEY_NEARBY, false);
 		tag.putLong(MINERAL_SURVEY_POSITION, 0L);
@@ -319,6 +353,7 @@ public final class TerminalData {
 		tag.putString(NAVIGATION_COMPLETION_DIMENSION, "");
 		tag.putInt(NAVIGATION_COMPLETION_DIRECTION, 0);
 		tag.putInt(PURSUIT_RESOLVED_CHASES, 0);
+		tag.putInt(PURSUIT_ENCOUNTERED_CHASES, 0);
 		tag.putInt(PURSUIT_ALLOWED_FORM, 0);
 		tag.putInt(PURSUIT_TUTORIAL_DEMO_MASK, 0);
 		tag.putInt(PURSUIT_TUTORIAL_WARNING_MASK, 0);
@@ -376,7 +411,15 @@ public final class TerminalData {
 		if (!record.contains(ANOMALY_SEEN_MASK)) record.putLong(ANOMALY_SEEN_MASK, 0L);
 		if (!record.contains(ANOMALY_RECENT_IDS)) record.put(ANOMALY_RECENT_IDS, new ListTag());
 		if (!record.contains(ANOMALY_STAGE_SUCCESSES)) record.putInt(ANOMALY_STAGE_SUCCESSES, 0);
+		// Saves from before this counter existed cannot recover their true total, but every set bit
+		// in the seen mask is one anomaly that definitely completed, so it is a safe lower bound -
+		// better than resetting a long-running world's accumulated decay back to pristine.
+		if (!record.contains(ANOMALY_RESIDUE_COUNT)) {
+			record.putInt(ANOMALY_RESIDUE_COUNT,
+					Long.bitCount(record.getLongOr(ANOMALY_SEEN_MASK, 0L)));
+		}
 		if (!record.contains(NEXT_STRONG_ANOMALY_TICK)) record.putLong(NEXT_STRONG_ANOMALY_TICK, 0L);
+		if (!record.contains(SIGNATURE_ANOMALY_PENDING)) record.putBoolean(SIGNATURE_ANOMALY_PENDING, false);
 		if (!record.contains(NEXT_COMPOSITE_ANOMALY_TICK)) record.putLong(NEXT_COMPOSITE_ANOMALY_TICK, 0L);
 		if (!record.contains(ANOMALY_LEGACY_RAMP)) record.putBoolean(ANOMALY_LEGACY_RAMP,
 				sourceSchema < 4 && record.getBooleanOr(BOUND, false));
@@ -404,6 +447,17 @@ public final class TerminalData {
 		if (!record.contains(SELECTED_RESOURCE)) record.putInt(SELECTED_RESOURCE,
 				resourceWire(record.getStringOr(TARGET_KIND, "unresolved")));
 		if (!record.contains(MINERAL_SCAN_READY_GAME_TIME)) record.putLong(MINERAL_SCAN_READY_GAME_TIME, 0L);
+		// Saves written before the probe had a budget arrive with a full one rather than an empty
+		// one: the old tool was unlimited, so starting them at zero would read as a regression.
+		if (!record.contains(MINERAL_PROBE_CHARGES)) record.putInt(MINERAL_PROBE_CHARGES,
+				MineralSurveyPolicy.MAX_PROBE_CHARGES);
+		if (!record.contains(MINERAL_PROBE_RECHARGE_TICK)) record.putLong(MINERAL_PROBE_RECHARGE_TICK, 0L);
+		if (!record.contains(MINERAL_READING_KIND)) record.putInt(MINERAL_READING_KIND, 0);
+		if (!record.contains(MINERAL_READING_DX)) record.putInt(MINERAL_READING_DX, 0);
+		if (!record.contains(MINERAL_READING_DZ)) record.putInt(MINERAL_READING_DZ, 0);
+		if (!record.contains(MINERAL_READING_MIN_DISTANCE)) record.putInt(MINERAL_READING_MIN_DISTANCE, 0);
+		if (!record.contains(MINERAL_READING_MAX_DISTANCE)) record.putInt(MINERAL_READING_MAX_DISTANCE, 0);
+		if (!record.contains(MINERAL_READING_DIMENSION)) record.putString(MINERAL_READING_DIMENSION, "");
 		if (!record.contains(MINERAL_SURVEY_PROXIMITY)) record.putBoolean(MINERAL_SURVEY_PROXIMITY, false);
 		if (!record.contains(MINERAL_SURVEY_NEARBY)) record.putBoolean(MINERAL_SURVEY_NEARBY, false);
 		if (!record.contains(MINERAL_SURVEY_POSITION)) record.putLong(MINERAL_SURVEY_POSITION, 0L);
@@ -448,6 +502,12 @@ public final class TerminalData {
 		if (!record.contains(NAVIGATION_COMPLETION_DIMENSION)) record.putString(NAVIGATION_COMPLETION_DIMENSION, "");
 		if (!record.contains(NAVIGATION_COMPLETION_DIRECTION)) record.putInt(NAVIGATION_COMPLETION_DIRECTION, 0);
 		if (!record.contains(PURSUIT_RESOLVED_CHASES)) record.putInt(PURSUIT_RESOLVED_CHASES, 0);
+		// Saves written before the encountered-chase counter existed only recorded successes. Seed
+		// the new counter from them so a player who already escaped a chase is never re-gated by
+		// the final Eye; captures before this point are simply not recoverable and count as zero.
+		if (!record.contains(PURSUIT_ENCOUNTERED_CHASES)) {
+			record.putInt(PURSUIT_ENCOUNTERED_CHASES, record.getIntOr(PURSUIT_RESOLVED_CHASES, 0));
+		}
 		if (!record.contains(PURSUIT_ALLOWED_FORM)) record.putInt(PURSUIT_ALLOWED_FORM, 0);
 		if (!record.contains(PURSUIT_TUTORIAL_DEMO_MASK)) record.putInt(PURSUIT_TUTORIAL_DEMO_MASK, 0);
 		if (!record.contains(PURSUIT_TUTORIAL_WARNING_MASK)) record.putInt(PURSUIT_TUTORIAL_WARNING_MASK, 0);

@@ -51,6 +51,45 @@ final class PursuitPresentationContractTest {
 	}
 
 	@Test
+	void proximityBandsDegradeMonotonicallyTowardContact() throws Exception {
+		// One chain per ProximityGrade, ordered farthest to nearest. The picture must get coarser
+		// (fewer colour steps, larger mosaic) with every step inward; getting this backwards would
+		// hand the player *better* vision the closer the corrector gets, which is the whole point
+		// inverted, and nothing else in the build would catch it.
+		String[] bands = {"pursuit_low_res_distant", "pursuit_low_res",
+				"pursuit_low_res_close", "pursuit_low_res_contact"};
+		float previousResolution = Float.MAX_VALUE;
+		float previousMosaic = 0.0F;
+		for (String band : bands) {
+			Path path = Path.of("src/main/resources/assets/thefourthfrequency/post_effect/"
+					+ band + ".json");
+			assertTrue(Files.exists(path), band + " must exist for its proximity grade");
+			var chain = JsonParser.parseString(Files.readString(path, StandardCharsets.UTF_8))
+					.getAsJsonObject();
+			float resolution = Float.NaN;
+			float mosaic = Float.NaN;
+			for (var pass : chain.getAsJsonArray("passes")) {
+				var uniforms = pass.getAsJsonObject().getAsJsonObject("uniforms");
+				if (uniforms == null || !uniforms.has("BitsConfig")) continue;
+				for (var uniform : uniforms.getAsJsonArray("BitsConfig")) {
+					var entry = uniform.getAsJsonObject();
+					if ("Resolution".equals(entry.get("name").getAsString())) {
+						resolution = entry.get("value").getAsFloat();
+					} else if ("MosaicSize".equals(entry.get("name").getAsString())) {
+						mosaic = entry.get("value").getAsFloat();
+					}
+				}
+			}
+			assertTrue(resolution < previousResolution,
+					band + " must drop colour resolution relative to the band before it");
+			assertTrue(mosaic > previousMosaic,
+					band + " must enlarge the mosaic relative to the band before it");
+			previousResolution = resolution;
+			previousMosaic = mosaic;
+		}
+	}
+
+	@Test
 	void presentationProtocolIsRegisteredOnBothSides() throws Exception {
 		String bootstrap = Files.readString(Path.of(
 				"src/main/java/com/xm/thefourthfrequency/bootstrap/TheFourthFrequency.java"),
@@ -183,8 +222,13 @@ final class PursuitPresentationContractTest {
 		String client = Files.readString(Path.of(
 				"src/client/java/com/xm/thefourthfrequency/client_ui/PursuitPresentationClient.java"),
 				StandardCharsets.UTF_8);
+		String policy = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/pursuit/PursuitProgressPolicy.java"),
+				StandardCharsets.UTF_8);
 		assertTrue(controller.contains("RESOLUTION_TICKS = 60L"));
-		assertTrue(controller.contains("HEART_HEALTH_POINTS = 2.0D"));
+		assertTrue(policy.contains("HEART_HEALTH_POINTS = 2.0D"));
+		assertTrue(policy.contains("CAPTURE_PENALTY_FLOOR_HEALTH = 12.0D"));
+		assertTrue(controller.contains("PursuitProgressPolicy.resolutionMaxHealthDelta"));
 		assertTrue(controller.contains("PursuitPresentationPayload.CAPTURE_FREEZE"));
 		assertTrue(controller.contains("PursuitPresentationPayload.ESCAPE_RESOLUTION"));
 		assertTrue(controller.contains("if (!\"caught\".equals(reason))"));

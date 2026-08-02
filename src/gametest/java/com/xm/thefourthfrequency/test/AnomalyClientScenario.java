@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Complete data registry for the sixteen isolated client anomaly fixtures. */
+/** Complete data registry for the nineteen isolated client anomaly fixtures. */
 public record AnomalyClientScenario(int catalogNumber, String id, int tier, long seed, Fixture fixture,
 		Set<String> peakOverlays, int minimumDedicatedSounds, int minimumAmbientSounds,
 		IntRange hiddenLights, IntRange misreadItems, int temporaryEntities, boolean cameraSeparated,
@@ -39,7 +39,7 @@ public record AnomalyClientScenario(int catalogNumber, String id, int tier, long
 		List<String> scenarios = DEFINITIONS.stream().map(AnomalyClientScenario::id).toList();
 		if (!catalog.equals(scenarios)) throw new AssertionError("Anomaly client scenarios differ from catalog: "
 				+ scenarios + " vs " + catalog);
-		if (DEFINITIONS.size() != 16) throw new AssertionError("Expected exactly sixteen anomaly client scenarios");
+		if (DEFINITIONS.size() != 19) throw new AssertionError("Expected exactly nineteen anomaly client scenarios");
 		AnomalyTestTimeline.assertCatalogCoverage();
 	}
 
@@ -49,6 +49,7 @@ public record AnomalyClientScenario(int catalogNumber, String id, int tier, long
 		put(values, "light_dropout", 0x2200B22L, Fixture.LIGHTS);
 		put(values, "surface_fracture", 0x3300C33L, Fixture.WALL)
 				.overlays("surface_fracture", "glitch_impact").sounds(1, 1);
+		put(values, "silent_world", 0x404D404L, Fixture.EMPTY).overlays("ambient_silenced");
 		put(values, "peripheral_residue", 0x4400D44L, Fixture.EMPTY)
 				.overlays("glitch_impact").sounds(1, 0);
 		put(values, "watcher_alignment", 0x5500E55L, Fixture.MOBS);
@@ -62,10 +63,12 @@ public record AnomalyClientScenario(int catalogNumber, String id, int tier, long
 				.cleanup(Cleanup.EXACT_CAMERA_RESTORE);
 		put(values, "door_cascade", 900_001L, Fixture.DOORS).cleanup(Cleanup.PERMANENT_DOOR_ONLY);
 		put(values, "organ_misread", 0xAA040AAL, Fixture.INVENTORY).misread(8, 8);
+		put(values, "temporal_drift", 0x505E505L, Fixture.HORIZON).overlays("sky_desynchronised");
 		put(values, "experience_gap", 0xBB050BBL, Fixture.SAFE_PATH).overlays("blackout").locks(true, true);
 		put(values, "local_rule_collapse", 0xDD070DDL, Fixture.WORLD_INVARIANTS)
 				.overlays("missing_texture_proxies", "missing_texture_proxies_rendered")
 				.completion(Completion.CLIENT_RESTORE_WITH_PERSISTENT_TRACE).cleanup(Cleanup.PERSISTENT_TRACE_ONLY);
+		put(values, "metric_drift", 0x606F606L, Fixture.EMPTY).overlays("readout_skewed");
 		put(values, "red_horizon", 0xEE080EEL, Fixture.HORIZON).overlays("red_horizon", "red_world_fog");
 		put(values, "window_pulse", 0x101A101L, Fixture.META_FALLBACK).overlays("window_fallback").metaDegraded();
 		put(values, "channel_override", 0x202B202L, Fixture.CHANNEL).overlays("channel_override").input(true);

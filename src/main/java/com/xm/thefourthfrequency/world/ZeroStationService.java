@@ -96,10 +96,9 @@ public final class ZeroStationService {
 		if (!player.addItem(terminal)) {
 			player.drop(terminal, false);
 		}
+		// One dispense is one moment; the empty rack was never a separate event worth its own line.
 		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
 				Component.translatable("message.thefourthfrequency.terminal.dispensed"));
-		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
-				Component.translatable("message.thefourthfrequency.terminal.stock_zero"));
 		return true;
 	}
 

@@ -98,14 +98,48 @@ public final class AmbientAnomalyService {
 					tag.putLong(TerminalData.NEXT_AMBIENT_ANOMALY_TICK, now + 60L * 20L));
 			return;
 		}
-		triggerSelected(player, record, Math.max(1, tier), now);
+		boolean signature = record.getBooleanOr(TerminalData.SIGNATURE_ANOMALY_PENDING, false);
+		int selectionTier = signature ? Math.max(Math.max(1, tier), ceiling) : Math.max(1, tier);
+		boolean started = triggerSelected(player, record, selectionTier, now, signature);
+		if (signature && started) {
+			data.updateTerminalRecord(player.getUUID(), tag ->
+					tag.putBoolean(TerminalData.SIGNATURE_ANOMALY_PENDING, false));
+		}
 		schedule(data, player, now, Math.max(1, tier), heat, false);
 	}
 
-	private static void triggerSelected(ServerPlayer player, CompoundTag record, int tier, long now) {
+	/**
+	 * Mainline beats (first Nether entry, first eye throw) pull the next anomaly forward and lift its
+	 * selection to the story ceiling so the player meets unseen high-stage content at the moment the
+	 * world "loses its vocabulary", instead of only after the slow stage ramp. The pending flag
+	 * survives a failed trigger: the next scheduled anomaly then carries the signature instead.
+	 */
+	public static void scheduleSignature(ServerPlayer player) {
+		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
+		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
+		if (record == null || !StoryState.read(record).bound()
+				|| record.getBooleanOr(TerminalData.SIGNATURE_ANOMALY_PENDING, false)) return;
+		long target = player.level().getGameTime() + AnomalyIntensity.SIGNATURE_LEAD_TICKS;
+		data.updateTerminalRecord(player.getUUID(), tag -> {
+			tag.putBoolean(TerminalData.SIGNATURE_ANOMALY_PENDING, true);
+			AnomalyState state = AnomalyState.read(tag);
+			if (state.nextAmbientTick() <= 0L || state.nextAmbientTick() > target) {
+				state.scheduled(target).writeTo(tag);
+			}
+		});
+	}
+
+	private static boolean triggerSelected(ServerPlayer player, CompoundTag record, int tier, long now,
+			boolean preferUnseen) {
 		boolean strongAllowed = now >= record.getLongOr(TerminalData.NEXT_STRONG_ANOMALY_TICK, 0L);
 		List<AnomalyDefinition> candidates = AnomalyCatalog.weightedPool(tier, recentIds(record), strongAllowed);
-		if (candidates.isEmpty()) return;
+		if (candidates.isEmpty()) return false;
+		if (preferUnseen) {
+			long seenMask = record.getLongOr(TerminalData.ANOMALY_SEEN_MASK, 0L);
+			List<AnomalyDefinition> unseen = candidates.stream()
+					.filter(value -> (seenMask & 1L << AnomalyCatalog.indexOf(value.id())) == 0L).toList();
+			if (!unseen.isEmpty()) candidates = unseen;
+		}
 		long baseSeed = record.getLongOr(TerminalData.PERSONALITY_SEED, 0L) ^ now
 				^ record.getIntOr(TerminalData.ANOMALY_LOG_SEQUENCE, 0);
 		int start = Math.floorMod((int) baseSeed, candidates.size());
@@ -120,8 +154,9 @@ public final class AmbientAnomalyService {
 						tag.putLong(TerminalData.NEXT_STRONG_ANOMALY_TICK,
 								now + AnomalyIntensity.strongCooldownTicks(tier, (int) (seed >>> 32))));
 			}
-			return;
+			return true;
 		}
+		return false;
 	}
 
 	public static boolean trigger(ServerPlayer player, String id, boolean maximum) {

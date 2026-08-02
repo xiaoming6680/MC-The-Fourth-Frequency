@@ -10,47 +10,56 @@ import net.minecraft.resources.Identifier;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 import static com.xm.thefourthfrequency.client_ui.FirstRunNoticePalette.AMBER;
-import static com.xm.thefourthfrequency.client_ui.FirstRunNoticePalette.CYAN;
 import static com.xm.thefourthfrequency.client_ui.FirstRunNoticePalette.DIM;
 import static com.xm.thefourthfrequency.client_ui.FirstRunNoticePalette.DISABLED_RAIL;
+import static com.xm.thefourthfrequency.client_ui.FirstRunNoticePalette.GLASS_BLACKOUT;
 import static com.xm.thefourthfrequency.client_ui.FirstRunNoticePalette.GREEN;
-import static com.xm.thefourthfrequency.client_ui.FirstRunNoticePalette.HOT;
+import static com.xm.thefourthfrequency.client_ui.FirstRunNoticePalette.PHOSPHOR_FLASH;
+import static com.xm.thefourthfrequency.client_ui.FirstRunNoticePalette.SHELL_BACKDROP;
 import static com.xm.thefourthfrequency.client_ui.FirstRunNoticePalette.withAlpha;
 
 /** Mandatory first-launch disclosure mounted inside a complete metal terminal shell. */
 public final class FirstRunNoticeScreen extends Screen {
+	/** The three strokes of a cathode tube coming up: strike, unfold, settle. */
 	public enum EntrancePhase {
-		NOISE_STARTUP,
-		SCAN_DESYNC,
-		SIGNAL_CONVERGENCE,
-		LOCKED
+		IGNITION,
+		UNFOLD,
+		BLOOM,
+		LIT
 	}
 
 	public enum PresentationPhase {
-		CALIBRATION,
+		POWER_ON,
 		NOTICE,
 		TRANSITION
 	}
 
 	private static final int MAX_PANEL_WIDTH = 394;
 	private static final int MAX_PANEL_HEIGHT = 236;
+	private static final int MIN_PANEL_WIDTH = 300;
+	private static final int MIN_PANEL_HEIGHT = 196;
+	private static final int PANEL_MARGIN_X = 16;
+	private static final int PANEL_MARGIN_Y = 4;
 	private static final int BUTTON_HEIGHT = 18;
 	private static final int NORMAL_LINE_HEIGHT = 9;
 	private static final int SECTION_GAP = 4;
 	private static final float[] BODY_SCALE_STEPS = {0.82F, 0.78F, 0.74F, 0.70F, 0.66F};
-	private static final int LOCK_TICK = 64;
-	private static final int CALIBRATION_END_TICK = 72;
+	private static final int IGNITION_TICKS = 4;
+	private static final int UNFOLD_TICKS = 6;
+	private static final int BLOOM_TICKS = 6;
+	private static final int TUBE_LIT_TICK = IGNITION_TICKS + UNFOLD_TICKS;
+	private static final int POWER_ON_END_TICK = TUBE_LIT_TICK + BLOOM_TICKS;
 	private static final int NOTICE_REVEAL_TICKS = 10;
-	private static final int NOTICE_READY_TICK = CALIBRATION_END_TICK + NOTICE_REVEAL_TICKS;
+	private static final int NOTICE_READY_TICK = POWER_ON_END_TICK + NOTICE_REVEAL_TICKS;
+	/** The tube is already lit when the copy arrives, so it emerges from a haze, not from black. */
+	private static final int NOTICE_REVEAL_VEIL = 170;
+	private static final int PHOSPHOR_FLOOR_ALPHA = 34;
+	private static final int PHOSPHOR_STRIKE_ALPHA = 210;
 	private static final int TEXT_FADE_TICKS = 4;
 	private static final int ZOOM_TICKS = 24;
 	private static final int TRANSITION_TICKS = TEXT_FADE_TICKS + ZOOM_TICKS;
-	private static final double MIN_FREQUENCY_MHZ = 87.5D;
-	private static final double MAX_FREQUENCY_MHZ = 108.0D;
-	private static final double TARGET_FREQUENCY_MHZ = 100.6D;
 	private static final String STATUS_PREFIX = "RX-04 //";
 	private static final int STATUS_GAP = 4;
 	private static final int LATIN_BASELINE_Y_OFFSET = 1;
@@ -68,6 +77,7 @@ public final class FirstRunNoticeScreen extends Screen {
 	private boolean transitionFinished;
 	private boolean openingSoundPlayed;
 	private boolean stableSoundPlayed;
+	private boolean acknowledgementFocused;
 	private final Screen returnScreen;
 	private NoticeButton acknowledgementButton;
 
@@ -78,6 +88,7 @@ public final class FirstRunNoticeScreen extends Screen {
 
 	@Override
 	protected void init() {
+		acknowledgementFocused = false;
 		NoticeLayout layout = layout();
 		NoticeGrid grid = NoticeGrid.from(layout);
 		acknowledgementButton = addRenderableWidget(new NoticeButton(
@@ -101,7 +112,7 @@ public final class FirstRunNoticeScreen extends Screen {
 			return;
 		}
 		age++;
-		if (age >= LOCK_TICK && !stableSoundPlayed) {
+		if (age >= TUBE_LIT_TICK && !stableSoundPlayed) {
 			stableSoundPlayed = true;
 			TerminalClientAudio.noticeStable();
 		}
@@ -113,13 +124,26 @@ public final class FirstRunNoticeScreen extends Screen {
 		boolean ready = presentationPhase() == PresentationPhase.NOTICE && age >= NOTICE_READY_TICK;
 		acknowledgementButton.visible = ready;
 		acknowledgementButton.active = ready;
+		// Escape and every other exit is blocked here, so the only way out must be reachable by keyboard.
+		if (ready && !acknowledgementFocused) {
+			acknowledgementFocused = true;
+			setInitialFocus(acknowledgementButton);
+		}
+	}
+
+	@Override
+	public void resize(int width, int height) {
+		super.resize(width, height);
+		// The zoom transition renders the title screen directly, but Minecraft only resizes the
+		// screen it currently owns, so an unforwarded resize would expose a stale menu layout.
+		returnScreen.resize(width, height);
 	}
 
 	@Override
 	public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
 		float renderAge = age + partialTick;
 		switch (presentationPhase()) {
-			case CALIBRATION -> renderBandCalibration(graphics, renderAge);
+			case POWER_ON -> renderPowerOn(graphics, renderAge);
 			case NOTICE -> renderNotice(graphics, renderAge, mouseX, mouseY, partialTick);
 			case TRANSITION -> renderTransition(graphics, mouseX, mouseY, partialTick);
 		}
@@ -129,39 +153,53 @@ public final class FirstRunNoticeScreen extends Screen {
 	public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
 		if (presentationPhase() == PresentationPhase.TRANSITION
 				&& transitionAge >= TEXT_FADE_TICKS) return;
-		graphics.fill(0, 0, width, height, 0xFF080D0A);
+		graphics.fill(0, 0, width, height, SHELL_BACKDROP);
 	}
 
-	private void renderBandCalibration(GuiGraphics graphics, float renderAge) {
+	/**
+	 * A cathode tube coming up: the beam strikes as a point and snaps out to a full-width line, the
+	 * raster unfolds vertically around it, then the over-bright phosphor decays to its resting floor.
+	 * No copy and no data — the screen is hardware waking up, which needs no translation.
+	 */
+	private void renderPowerOn(GuiGraphics graphics, float renderAge) {
 		NoticeLayout layout = layout();
 		renderGeneratedNoticeUi(graphics, layout);
 		GlassBounds glass = glassBounds(layout, 5);
 		graphics.enableScissor(glass.left(), glass.top(), glass.right(), glass.bottom());
-		graphics.fill(glass.left(), glass.top(), glass.right(), glass.bottom(), 0xFF020A06);
+		graphics.fill(glass.left(), glass.top(), glass.right(), glass.bottom(), GLASS_BLACKOUT);
 
-		float progress = calibrationProgress(renderAge);
 		int centerX = (glass.left() + glass.right()) / 2;
-		int innerLeft = glass.left() + Math.max(12, glass.width() / 18);
-		int innerRight = glass.right() - Math.max(12, glass.width() / 18);
-		int titleY = glass.top() + Math.max(10, glass.height() / 12);
-		int frequencyY = glass.top() + Math.max(30, glass.height() / 4);
-		int waveY = glass.top() + glass.height() / 2 + 5;
-		int railY = glass.bottom() - Math.max(32, glass.height() / 5);
+		int centerY = (glass.top() + glass.bottom()) / 2;
+		float ignition = easeOut(Math.clamp(renderAge / IGNITION_TICKS, 0.0F, 1.0F));
+		float unfold = easeOut(Math.clamp((renderAge - IGNITION_TICKS) / UNFOLD_TICKS, 0.0F, 1.0F));
+		float bloom = Math.clamp((renderAge - TUBE_LIT_TICK) / BLOOM_TICKS, 0.0F, 1.0F);
 
-		drawBaselineAlignedCenteredString(graphics,
-				Component.translatable("screen.thefourthfrequency.first_run_notice.calibration.title"),
-				centerX, titleY, DIM);
-		drawCenteredScaled(graphics, calibrationFrequency(renderAge), centerX, frequencyY,
-				1.55F, entrancePhase() == EntrancePhase.LOCKED ? GREEN : faultAccent());
-		drawCalibrationWave(graphics, innerLeft, innerRight, waveY, renderAge, progress);
-		drawCalibrationRail(graphics, innerLeft, innerRight, railY, renderAge);
-		drawBaselineAlignedCenteredString(graphics, calibrationStatus(), centerX,
-				glass.bottom() - 17, entrancePhase() == EntrancePhase.LOCKED ? GREEN : DIM);
+		int halfHeight = Math.round(glass.height() / 2.0F * unfold);
+		if (halfHeight > 0) {
+			int rasterTop = Math.max(glass.top(), centerY - halfHeight);
+			int rasterBottom = Math.min(glass.bottom(), centerY + halfHeight);
+			int interior = withAlpha(GREEN, Math.round(PHOSPHOR_STRIKE_ALPHA
+					+ (PHOSPHOR_FLOOR_ALPHA - PHOSPHOR_STRIKE_ALPHA) * bloom));
+			graphics.fill(glass.left(), rasterTop, glass.right(), rasterBottom, interior);
+			// The opening edges stay hottest until the raster has finished sweeping outwards.
+			int edge = withAlpha(PHOSPHOR_FLASH, Math.round(255.0F * (1.0F - bloom)));
+			graphics.fill(glass.left(), rasterTop, glass.right(), rasterTop + 1, edge);
+			graphics.fill(glass.left(), rasterBottom - 1, glass.right(), rasterBottom, edge);
+		}
 
-		float fade = Math.clamp((renderAge - LOCK_TICK)
-				/ (float) (CALIBRATION_END_TICK - LOCK_TICK), 0.0F, 1.0F);
-		if (fade > 0.0F) fillGlass(graphics, glass, withAlpha(0xFF020A06, Math.round(255.0F * fade)));
+		int halfWidth = Math.round(glass.width() / 2.0F * ignition);
+		int strikeAlpha = Math.round(255.0F * (1.0F - bloom) * (1.0F - 0.45F * unfold));
+		if (halfWidth > 0 && strikeAlpha > 0) {
+			graphics.fill(Math.max(glass.left(), centerX - halfWidth), centerY - 1,
+					Math.min(glass.right(), centerX + halfWidth), centerY + 1,
+					withAlpha(PHOSPHOR_FLASH, strikeAlpha));
+		}
 		graphics.disableScissor();
+	}
+
+	private static float easeOut(float progress) {
+		float inverted = 1.0F - progress;
+		return 1.0F - inverted * inverted;
 	}
 
 	private void renderNotice(GuiGraphics graphics, float renderAge, int mouseX, int mouseY,
@@ -169,10 +207,10 @@ public final class FirstRunNoticeScreen extends Screen {
 		NoticeLayout layout = layout();
 		renderGeneratedNoticeUi(graphics, layout);
 		renderNoticeText(graphics, layout);
-		float reveal = Math.clamp((renderAge - CALIBRATION_END_TICK) / NOTICE_REVEAL_TICKS,
+		float reveal = Math.clamp((renderAge - POWER_ON_END_TICK) / NOTICE_REVEAL_TICKS,
 				0.0F, 1.0F);
 		if (reveal < 1.0F) fillGlass(graphics, glassBounds(layout, 5),
-				withAlpha(0xFF020A06, Math.round(255.0F * (1.0F - reveal))));
+				withAlpha(GLASS_BLACKOUT, Math.round(NOTICE_REVEAL_VEIL * (1.0F - reveal))));
 		super.render(graphics, mouseX, mouseY, partialTick);
 	}
 
@@ -188,7 +226,7 @@ public final class FirstRunNoticeScreen extends Screen {
 			renderGeneratedNoticeUi(graphics, base);
 			renderNoticeText(graphics, base);
 			fillGlass(graphics, glassBounds(base, 5),
-					withAlpha(0xFF020A06, Math.round(255.0F * textFade)));
+					withAlpha(GLASS_BLACKOUT, Math.round(255.0F * textFade)));
 			return;
 		}
 
@@ -196,7 +234,7 @@ public final class FirstRunNoticeScreen extends Screen {
 		renderVanillaAnimationMask(graphics, mask, mouseX, mouseY, partialTick);
 		float maskReveal = Math.clamp(zoomProgress * 2.0F, 0.0F, 1.0F);
 		int veilAlpha = Math.round(255.0F * (1.0F - maskReveal));
-		if (veilAlpha > 0) fillGlass(graphics, mask, withAlpha(0xFF020A06, veilAlpha));
+		if (veilAlpha > 0) fillGlass(graphics, mask, withAlpha(GLASS_BLACKOUT, veilAlpha));
 		int terminalAlpha = Math.round(255.0F * (1.0F - zoomProgress));
 		if (terminalAlpha > 0) renderTransitionFrame(graphics, zoomed, terminalAlpha);
 	}
@@ -215,10 +253,10 @@ public final class FirstRunNoticeScreen extends Screen {
 		int bottom = Math.clamp(mask.bottom(), 0, height);
 		if (left >= right || top >= bottom) return;
 		returnScreen.render(graphics, mouseX, mouseY, partialTick);
-		if (top > 0) graphics.fill(0, 0, width, top, 0xFF080D0A);
-		if (bottom < height) graphics.fill(0, bottom, width, height, 0xFF080D0A);
-		if (left > 0) graphics.fill(0, top, left, bottom, 0xFF080D0A);
-		if (right < width) graphics.fill(right, top, width, bottom, 0xFF080D0A);
+		if (top > 0) graphics.fill(0, 0, width, top, SHELL_BACKDROP);
+		if (bottom < height) graphics.fill(0, bottom, width, height, SHELL_BACKDROP);
+		if (left > 0) graphics.fill(0, top, left, bottom, SHELL_BACKDROP);
+		if (right < width) graphics.fill(right, top, width, bottom, SHELL_BACKDROP);
 	}
 
 	private void renderTransitionFrame(GuiGraphics graphics, NoticeLayout layout, int alpha) {
@@ -250,86 +288,6 @@ public final class FirstRunNoticeScreen extends Screen {
 				layout.width(), bottomHeight, UI_TEXTURE_WIDTH,
 				UI_TEXTURE_HEIGHT - GLASS_SAFE_BOTTOM_ASSET, UI_TEXTURE_WIDTH, UI_TEXTURE_HEIGHT,
 				withAlpha(0xFFFFFFFF, alpha));
-	}
-
-	private void drawCalibrationWave(GuiGraphics graphics, int left, int right, int centerY,
-			float renderAge, float progress) {
-		int color = entrancePhase() == EntrancePhase.LOCKED ? GREEN : faultAccent();
-		int previousY = centerY;
-		for (int x = left; x < right; x += 2) {
-			double carrier = Math.sin((x - left + renderAge * 2.15F) * 0.18D)
-					* (4.0D + 6.0D * (1.0F - progress));
-			double noise = deterministicNoise(x - left, (int) renderAge)
-					* 13.0D * (1.0F - progress);
-			int nextY = centerY + (int) Math.round(carrier + noise);
-			graphics.fill(x, Math.min(previousY, nextY), x + 2,
-					Math.max(previousY, nextY) + 1, color);
-			previousY = nextY;
-		}
-		graphics.fill(left, centerY, right, centerY + 1, withAlpha(GREEN, 34));
-	}
-
-	private void drawCalibrationRail(GuiGraphics graphics, int left, int right, int y,
-			float renderAge) {
-		graphics.fill(left, y, right, y + 1, withAlpha(GREEN, 72));
-		for (int index = 0; index <= 10; index++) {
-			int x = left + Math.round((right - left) * index / 10.0F);
-			int tickHeight = index % 5 == 0 ? 6 : 3;
-			graphics.fill(x, y - tickHeight, x + 1, y + tickHeight + 1,
-					index % 5 == 0 ? AMBER : DIM);
-		}
-		int cursorX = left + Math.round((right - left) * calibrationBandPosition(renderAge));
-		graphics.fill(cursorX - 1, y - 9, cursorX + 2, y + 10,
-				entrancePhase() == EntrancePhase.LOCKED ? GREEN : faultAccent());
-		drawBaselineAlignedString(graphics, "87.5", left, y + 8, DIM, false);
-		String maximum = "108.0";
-		drawBaselineAlignedString(graphics, maximum, right - font.width(maximum), y + 8, DIM, false);
-	}
-
-	private void drawCenteredScaled(GuiGraphics graphics, String text, int centerX, int y,
-			float scale, int color) {
-		graphics.pose().pushMatrix();
-		graphics.pose().translate(centerX, y);
-		graphics.pose().scale(scale, scale);
-		drawBaselineAlignedString(graphics, text, -font.width(text) / 2, 0, color, false);
-		graphics.pose().popMatrix();
-	}
-
-	private String calibrationFrequency(float renderAge) {
-		double frequency = MIN_FREQUENCY_MHZ
-				+ (MAX_FREQUENCY_MHZ - MIN_FREQUENCY_MHZ) * calibrationBandPosition(renderAge);
-		return String.format(Locale.ROOT, "%05.1f MHz", frequency);
-	}
-
-	private Component calibrationStatus() {
-		String suffix = switch (entrancePhase()) {
-			case NOISE_STARTUP -> "noise";
-			case SCAN_DESYNC -> "sweep";
-			case SIGNAL_CONVERGENCE -> "converging";
-			case LOCKED -> "locked";
-		};
-		return Component.translatable(
-				"screen.thefourthfrequency.first_run_notice.calibration." + suffix);
-	}
-
-	private static float calibrationProgress(float renderAge) {
-		return Math.clamp(renderAge / LOCK_TICK, 0.0F, 1.0F);
-	}
-
-	private static float calibrationBandPosition(float renderAge) {
-		float target = (float) ((TARGET_FREQUENCY_MHZ - MIN_FREQUENCY_MHZ)
-				/ (MAX_FREQUENCY_MHZ - MIN_FREQUENCY_MHZ));
-		float settleStart = 44.0F;
-		if (renderAge >= LOCK_TICK) return target;
-		if (renderAge < settleStart) return triangleWave(renderAge / 18.0F);
-		float from = triangleWave(settleStart / 18.0F);
-		float progress = (renderAge - settleStart) / (LOCK_TICK - settleStart);
-		return from + (target - from) * Math.clamp(progress, 0.0F, 1.0F);
-	}
-
-	private static float triangleWave(float value) {
-		float wrapped = value - (float) Math.floor(value / 2.0F) * 2.0F;
-		return 1.0F - Math.abs(wrapped - 1.0F);
 	}
 
 	private static void fillGlass(GuiGraphics graphics, GlassBounds glass, int color) {
@@ -409,11 +367,6 @@ public final class FirstRunNoticeScreen extends Screen {
 	}
 
 	private void drawBaselineAlignedCenteredString(GuiGraphics graphics, Component text,
-			int centerX, int y, int color) {
-		drawBaselineAlignedString(graphics, text, centerX - font.width(text) / 2, y, color, false);
-	}
-
-	private void drawBaselineAlignedCenteredString(GuiGraphics graphics, String text,
 			int centerX, int y, int color) {
 		drawBaselineAlignedString(graphics, text, centerX - font.width(text) / 2, y, color, false);
 	}
@@ -554,8 +507,17 @@ public final class FirstRunNoticeScreen extends Screen {
 	}
 
 	private NoticeLayout layout() {
-		int panelWidth = Math.max(300, Math.min(MAX_PANEL_WIDTH, width - 16));
-		int panelHeight = Math.max(196, Math.min(MAX_PANEL_HEIGHT, height - 4));
+		int panelWidth = Math.max(MIN_PANEL_WIDTH,
+				Math.min(MAX_PANEL_WIDTH, Math.max(1, width - PANEL_MARGIN_X)));
+		int panelHeight = Math.max(MIN_PANEL_HEIGHT,
+				Math.min(MAX_PANEL_HEIGHT, Math.max(1, height - PANEL_MARGIN_Y)));
+		// The margins above are a preference, but the viewport is a hard limit: rather than let the
+		// minimum panel hang off screen and clip a disclosure the player must read, shrink the shell.
+		float shortfall = Math.min(width / (float) panelWidth, height / (float) panelHeight);
+		if (shortfall < 1.0F) {
+			panelWidth = Math.max(1, Math.round(panelWidth * shortfall));
+			panelHeight = Math.max(1, Math.round(panelHeight * shortfall));
+		}
 		int left = (width - panelWidth) / 2;
 		int top = (height - panelHeight) / 2;
 		return new NoticeLayout(left, top, panelWidth, panelHeight);
@@ -563,7 +525,7 @@ public final class FirstRunNoticeScreen extends Screen {
 
 	private PresentationPhase presentationPhase() {
 		if (transitionAge >= 0) return PresentationPhase.TRANSITION;
-		return age < CALIBRATION_END_TICK ? PresentationPhase.CALIBRATION : PresentationPhase.NOTICE;
+		return age < POWER_ON_END_TICK ? PresentationPhase.POWER_ON : PresentationPhase.NOTICE;
 	}
 
 	private NoticeLayout zoomedLayout(NoticeLayout base, float scale) {
@@ -593,36 +555,20 @@ public final class FirstRunNoticeScreen extends Screen {
 	}
 
 	private EntrancePhase entrancePhase() {
-		if (age <= 12) return EntrancePhase.NOISE_STARTUP;
-		if (age <= 36) return EntrancePhase.SCAN_DESYNC;
-		if (age < LOCK_TICK) return EntrancePhase.SIGNAL_CONVERGENCE;
-		return EntrancePhase.LOCKED;
+		if (age < IGNITION_TICKS) return EntrancePhase.IGNITION;
+		if (age < TUBE_LIT_TICK) return EntrancePhase.UNFOLD;
+		if (age < POWER_ON_END_TICK) return EntrancePhase.BLOOM;
+		return EntrancePhase.LIT;
 	}
 
 	private boolean isSignalLocked() {
-		return age >= LOCK_TICK;
+		return age >= TUBE_LIT_TICK;
 	}
 
 	private Component statusText() {
 		return Component.translatable(isSignalLocked()
 				? "screen.thefourthfrequency.first_run_notice.status.stable"
 				: "screen.thefourthfrequency.first_run_notice.status.checking");
-	}
-
-	private int faultAccent() {
-		return (age / 2 & 1) == 0 ? CYAN : HOT;
-	}
-
-	private static double deterministicNoise(int x, int tick) {
-		long value = scramble(0x4E4F544943455258L ^ (long) x * 0x9E3779B97F4A7C15L ^ tick * 0x632BE59BD9B4E019L);
-		return ((value >>> 20) & 0xFF) / 127.5D - 1.0D;
-	}
-
-	private static long scramble(long value) {
-		value ^= value << 13;
-		value ^= value >>> 7;
-		value ^= value << 17;
-		return value;
 	}
 
 	@Override public boolean shouldCloseOnEsc() { return false; }
@@ -657,7 +603,8 @@ public final class FirstRunNoticeScreen extends Screen {
 		NoticeLayout layout = layout();
 		NoticeGrid grid = NoticeGrid.from(layout);
 		NoticeCopyLayout copy = noticeCopyLayout(grid);
-		return layout.width() >= 300 && layout.height() >= 196
+		return layout.width() >= Math.min(MIN_PANEL_WIDTH, width)
+				&& layout.height() >= Math.min(MIN_PANEL_HEIGHT, height)
 				&& layout.left() >= 0 && layout.top() >= 0
 				&& layout.right() <= width && layout.bottom() <= height
 				&& copy.height() <= grid.contentHeight()

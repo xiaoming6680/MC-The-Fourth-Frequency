@@ -1,6 +1,6 @@
 # 《第四频段》世界观圣经
 
-本文描述 `0.2.1-beta` 的现行叙事边界。数值与测试以 [世界接口祭坛与终端指南](end-altar-and-terminal-guidance.md) 和 [测试与验收](testing.md) 为准。
+本文描述 `0.3.0-beta` 的现行叙事边界。数值与测试以 [世界接口祭坛与终端指南](end-altar-and-terminal-guidance.md) 和 [测试与验收](testing.md) 为准。
 
 ## 核心命题
 

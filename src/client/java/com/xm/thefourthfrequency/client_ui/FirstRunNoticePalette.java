@@ -8,6 +8,11 @@ final class FirstRunNoticePalette {
 	static final int AMBER = 0xFFD1A94D;
 	static final int HOT = 0xFFD15353;
 	static final int DISABLED_RAIL = 0xFF566554;
+	/** Letterbox behind the metal shell, and the unlit CRT glass the copy fades in and out of. */
+	static final int SHELL_BACKDROP = 0xFF080D0A;
+	static final int GLASS_BLACKOUT = 0xFF020A06;
+	/** Striking phosphor outruns every lit text colour, so power-on needs its own near-white. */
+	static final int PHOSPHOR_FLASH = 0xFFE8F4E4;
 
 	private FirstRunNoticePalette() {
 	}

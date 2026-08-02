@@ -21,8 +21,8 @@ public abstract class PlayerDropMixin {
 			return;
 		}
 		if ((Object) this instanceof ServerPlayer serverPlayer) {
-			com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(serverPlayer,
-					Component.translatable("message.thefourthfrequency.terminal.bound_no_drop"));
+			com.xm.thefourthfrequency.terminal.TerminalNoticeService.denied(serverPlayer,
+					"message.thefourthfrequency.terminal.bound_no_drop");
 		}
 		callback.setReturnValue(null);
 	}

@@ -21,6 +21,14 @@ public record TerminalToolSnapshotPayload(
 		int toolsDisabledTicks,
 		int selectedResource,
 		int mineralScanTicks,
+		int mineralProbeCharges,
+		int mineralRechargeTicks,
+		/** 0 none, 1 exact block, 2 bearing and distance band. */
+		int mineralReadingKind,
+		int mineralReadingDx,
+		int mineralReadingDz,
+		int mineralReadingMinDistance,
+		int mineralReadingMaxDistance,
 		boolean mineralSurveyNearby,
 		boolean navigationCompletionAvailable,
 		int navigationCompletionDirection,
@@ -57,7 +65,7 @@ public record TerminalToolSnapshotPayload(
 		int strongholdMinDistance,
 		int strongholdMaxDistance
 ) implements CustomPacketPayload {
-	public static final int CURRENT_PROTOCOL_VERSION = 5;
+	public static final int CURRENT_PROTOCOL_VERSION = 6;
 	public static final Type<TerminalToolSnapshotPayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(
 			TheFourthFrequency.MOD_ID, "terminal_tool_snapshot"));
 	public static final StreamCodec<RegistryFriendlyByteBuf, TerminalToolSnapshotPayload> CODEC = StreamCodec.of(
@@ -78,6 +86,13 @@ public record TerminalToolSnapshotPayload(
 		buf.writeVarInt(value.toolsDisabledTicks);
 		buf.writeVarInt(value.selectedResource);
 		buf.writeVarInt(value.mineralScanTicks);
+		buf.writeVarInt(value.mineralProbeCharges);
+		buf.writeVarInt(value.mineralRechargeTicks);
+		buf.writeVarInt(value.mineralReadingKind);
+		buf.writeVarInt(value.mineralReadingDx);
+		buf.writeVarInt(value.mineralReadingDz);
+		buf.writeVarInt(value.mineralReadingMinDistance);
+		buf.writeVarInt(value.mineralReadingMaxDistance);
 		buf.writeBoolean(value.mineralSurveyNearby);
 		buf.writeBoolean(value.navigationCompletionAvailable);
 		buf.writeVarInt(value.navigationCompletionDirection);
@@ -121,7 +136,10 @@ public record TerminalToolSnapshotPayload(
 				buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
 				buf.readVarInt(), buf.readBoolean(),
 				buf.readBoolean(), buf.readVarInt(), buf.readVarInt(),
-				buf.readVarInt(), buf.readBoolean(), buf.readBoolean(), buf.readVarInt(),
+				buf.readVarInt(),
+				buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
+				buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
+				buf.readBoolean(), buf.readBoolean(), buf.readVarInt(),
 				buf.readVarInt(), buf.readVarLong(), buf.readVarInt(), buf.readVarInt(),
 				buf.readBoolean(), buf.readBoolean(), buf.readBoolean(),
 				buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readUtf(128),

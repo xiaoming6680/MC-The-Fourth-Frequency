@@ -112,11 +112,7 @@ public final class ConfigManager {
 		}
 	}
 
-	private static Path configPath() {
+	public static Path configPath() {
 		return FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
-	}
-
-	public static Path configPathForTesting() {
-		return configPath();
 	}
 }

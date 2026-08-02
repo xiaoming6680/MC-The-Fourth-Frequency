@@ -129,8 +129,8 @@ public final class TerminalLifecycleService {
 			return true;
 		}
 		if (RECOVERY_NOTIFIED.add(player.getUUID())) {
-			com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
-					Component.translatable("message.thefourthfrequency.terminal.recovery_waiting"));
+			com.xm.thefourthfrequency.terminal.TerminalNoticeService.denied(player,
+					"message.thefourthfrequency.terminal.recovery_waiting");
 		}
 		return false;
 	}

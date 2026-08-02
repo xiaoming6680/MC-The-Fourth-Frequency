@@ -16,22 +16,41 @@ public final class PursuitSafetyPolicy {
 	}
 
 	public static boolean canBegin(ServerPlayer player, CompoundTag record, FrequencyWorldData data) {
+		if (!hardInvariantsMet(player, record)) return false;
 		float safeHealthFloor = Math.max(6.0F, player.getMaxHealth() * 0.4F);
-		if (!player.isAlive() || player.isSpectator() || player.isSleeping()
-				|| player.getAbilities().flying || player.isFallFlying() || player.isPassenger()
-				|| player.isOnFire() || player.isInLava() || player.fallDistance > 3.0F
-				|| player.getHealth() <= safeHealthFloor) return false;
-		if (PursuitDimensions.isMirror(player.level())
-				|| PursuitDimensions.sourceFamily(player.level().dimension()).isEmpty()) return false;
-		// The End mirror is registered for recovery symmetry; dragon/finale pursuit remains disabled in v1.
-		if (player.level().dimension().equals(Level.END)) return false;
+		if (player.isSleeping() || player.getAbilities().flying || player.isFallFlying()
+				|| player.isPassenger() || player.isOnFire() || player.isInLava()
+				|| player.fallDistance > 3.0F || player.getHealth() <= safeHealthFloor) return false;
 		if (!player.level().getEntitiesOfClass(Monster.class, player.getBoundingBox().inflate(12.0D),
 				monster -> monster.isAlive() && monster.getTarget() == player).isEmpty()) return false;
 		return FinaleRuntimePolicy.backgroundSystemsAllowed(data)
 				&& !FinaleRuntimePolicy.pressureActive(data)
 				&& !TerminalRuntimeService.isOpen(player)
-				&& AnomalyRuntimeService.active(player) == null
-				&& !EmptySegmentService.isActive(player)
+				&& AnomalyRuntimeService.active(player) == null;
+	}
+
+	/**
+	 * The gate the {@code pursuit_test} debug button uses.
+	 *
+	 * <p>Everything {@link #canBegin} adds on top of this is about not ambushing a player who is
+	 * busy, hurt, or mid-fall - protection an unannounced chase needs and a deliberately requested
+	 * test does not. Those conditions were rejecting the button constantly during testing, most
+	 * obviously creative flight, which is how anyone testing a chase gets to the place they want to
+	 * test it. What stays enforced is the set that would actually break the session: a chase cannot
+	 * start from a mirror, from a dimension with no mirror family, from the End, or on top of one
+	 * that is already running.</p>
+	 */
+	public static boolean canBeginForDebug(ServerPlayer player, CompoundTag record) {
+		return hardInvariantsMet(player, record);
+	}
+
+	private static boolean hardInvariantsMet(ServerPlayer player, CompoundTag record) {
+		if (!player.isAlive() || player.isSpectator()) return false;
+		if (PursuitDimensions.isMirror(player.level())
+				|| PursuitDimensions.sourceFamily(player.level().dimension()).isEmpty()) return false;
+		// The End mirror is registered for recovery symmetry; dragon/finale pursuit remains disabled in v1.
+		if (player.level().dimension().equals(Level.END)) return false;
+		return !EmptySegmentService.isActive(player)
 				&& !record.getBooleanOr(TerminalData.PURSUIT_ACTIVE, false)
 				&& !record.getBooleanOr(TerminalData.EMPTY_SEGMENT_ACTIVE, false);
 	}

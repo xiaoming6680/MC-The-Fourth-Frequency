@@ -309,14 +309,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				var player = server.getPlayerList().getPlayers().getFirst();
 				var data = FrequencyWorldData.get(server);
 				BlockPos orePosition = player.blockPosition().below(4);
-				data.updateTerminalRecord(player.getUUID(), record -> {
-					record.putInt(TerminalData.SELECTED_RESOURCE, TerminalResource.IRON.wireId());
-					record.putLong(TerminalData.MINERAL_SCAN_READY_GAME_TIME, player.level().getGameTime());
-					new NavigationState("iron", "minecraft:raw_iron", false, "", 0L, "",
-							player.level().getGameTime()).writeTo(record);
-				});
-				ResourceGuidanceService.restartScan(player, false);
-				ResourceGuidanceService.updatePlayer(player);
+				ResourceGuidanceService.probeForTesting(player);
 				com.xm.thefourthfrequency.terminal.TerminalToolService.startGuidance(
 						player, TerminalTool.MINERALS.slot());
 				if (!data.terminalRecord(player.getUUID()).orElseThrow()
@@ -979,11 +972,11 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			notice.onClose();
 			if (client.screen != notice || FirstRunNoticeController.acknowledgedForTesting())
 				throw new AssertionError("First-run notice was bypassed through its ordinary close path");
-			if (notice.presentationPhaseForTesting() != FirstRunNoticeScreen.PresentationPhase.CALIBRATION
+			if (notice.presentationPhaseForTesting() != FirstRunNoticeScreen.PresentationPhase.POWER_ON
 					|| notice.acknowledgementAvailableForTesting())
-				throw new AssertionError("First-run notice did not begin with a non-bypassable calibration screen");
+				throw new AssertionError("First-run notice did not begin with a non-bypassable power-on screen");
 		});
-		context.takeScreenshot("m1-first-run-band-calibration");
+		context.takeScreenshot("m1-first-run-crt-power-on");
 		switchFirstRunNoticeLanguage(context, "zh_cn");
 		context.runOnClient(client -> {
 			FirstRunNoticeScreen notice = (FirstRunNoticeScreen) client.screen;
@@ -1018,7 +1011,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 					|| notice.openingSoundPlayCountForTesting() != 1
 					|| notice.stableSoundPlayCountForTesting() != 1
 					|| TerminalClientAudio.lockPlaysForTesting() != 0)
-				throw new AssertionError("First-run notice did not appear after one complete band calibration");
+				throw new AssertionError("First-run notice did not appear after one complete tube power-on");
 			notice.reinitializeForTesting();
 			if (!notice.acknowledgementAvailableForTesting()
 					|| notice.openingSoundPlayCountForTesting() != 1
@@ -1054,7 +1047,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 		context.runOnClient(client -> {
 			if (client.level != null || client.player != null)
 				throw new AssertionError("Acknowledging the notice did not return to the pre-world title page");
-			if (!Files.isRegularFile(FirstRunNoticeController.configPathForTesting()))
+			if (!Files.isRegularFile(ConfigManager.configPath()))
 				throw new AssertionError("First-run acknowledgement was not persisted to the unified config");
 			FirstRunNoticeController.reloadFromDiskForTesting();
 			if (!FirstRunNoticeController.acknowledgedForTesting())
@@ -1465,7 +1458,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				throw new AssertionError("Initial world entry did not claim one client-lifetime corruption and Java icon");
 			}
 			if (!ConfigManager.loadClientState().alphaDowngradeComplete()
-					|| !Files.isRegularFile(ConfigManager.configPathForTesting())) {
+					|| !Files.isRegularFile(ConfigManager.configPath())) {
 				throw new AssertionError("Initial corruption did not atomically persist its Alpha downgrade marker");
 			}
 			if (AlphaLoadSessionController.javaIconAppliedAtScreenTickForTesting()

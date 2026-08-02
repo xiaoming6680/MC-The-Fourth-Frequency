@@ -33,12 +33,26 @@ final class AnomalyIntensityTest {
 	@Test
 	void stageCatchesUpOneStepOnlyAfterExposureAndTwoSuccesses() {
 		assertEquals(1, AnomalyIntensity.progressedStage(0, 5, 0L, 0));
-		assertEquals(1, AnomalyIntensity.progressedStage(1, 5,
+		assertEquals(4, AnomalyIntensity.progressedStage(4, 5,
 				AnomalyIntensity.MIN_STAGE_EXPOSURE_TICKS - 1, 2));
-		assertEquals(1, AnomalyIntensity.progressedStage(1, 5,
+		assertEquals(4, AnomalyIntensity.progressedStage(4, 5,
 				AnomalyIntensity.MIN_STAGE_EXPOSURE_TICKS, 1));
-		assertEquals(2, AnomalyIntensity.progressedStage(1, 5,
+		assertEquals(5, AnomalyIntensity.progressedStage(4, 5,
 				AnomalyIntensity.MIN_STAGE_EXPOSURE_TICKS, 2));
+	}
+
+	@Test
+	void laggingStageUsesCompressedExposureUntilItCatchesUp() {
+		assertEquals(AnomalyIntensity.MIN_STAGE_EXPOSURE_TICKS,
+				AnomalyIntensity.requiredExposureTicks(4, 5));
+		assertEquals(AnomalyIntensity.MIN_STAGE_EXPOSURE_TICKS / 2,
+				AnomalyIntensity.requiredExposureTicks(1, 3));
+		assertEquals(2, AnomalyIntensity.progressedStage(1, 5,
+				AnomalyIntensity.MIN_STAGE_EXPOSURE_TICKS / 2, 2));
+		assertEquals(1, AnomalyIntensity.progressedStage(1, 5,
+				AnomalyIntensity.MIN_STAGE_EXPOSURE_TICKS / 2 - 1, 2));
+		assertEquals(1, AnomalyIntensity.progressedStage(1, 2,
+				AnomalyIntensity.MIN_STAGE_EXPOSURE_TICKS / 2, 2));
 	}
 
 	@Test

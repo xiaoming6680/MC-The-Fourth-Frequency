@@ -4,6 +4,7 @@ import com.xm.thefourthfrequency.content.ModItems;
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.networking.TerminalControlPayload;
 import com.xm.thefourthfrequency.networking.TerminalNavigationPayload;
+import com.xm.thefourthfrequency.networking.TerminalToolSnapshotPayload;
 import com.xm.thefourthfrequency.state.NavigationState;
 import com.xm.thefourthfrequency.terminal.TerminalControlPolicy;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
@@ -15,6 +16,7 @@ import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import com.xm.thefourthfrequency.world.TerminalActivityTracker;
 import com.xm.thefourthfrequency.world.ZeroStationLayout;
 import com.xm.thefourthfrequency.world.ZeroStationService;
+import com.xm.thefourthfrequency.world.MineralSurveyPolicy;
 import com.xm.thefourthfrequency.world.ResourceGuidanceService;
 import com.xm.thefourthfrequency.world.StoryProgressService;
 import com.xm.thefourthfrequency.world.StructureNavigationService;
@@ -143,16 +145,17 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		ItemStack beforeBinding = findTerminal(player).copy();
 		var orePosition = player.blockPosition().below(2);
 		helper.getLevel().setBlockAndUpdate(orePosition, Blocks.IRON_ORE.defaultBlockState());
-		data.updateTerminalRecord(player.getUUID(), record -> {
-			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, SurvivalMilestone.MINED_LOGS.mask());
-			record.putInt(TerminalData.SELECTED_RESOURCE, TerminalResource.IRON.wireId());
-			record.putLong(TerminalData.MINERAL_SCAN_READY_GAME_TIME, player.level().getGameTime());
-			record.putString(TerminalData.TARGET_KIND, "iron");
-		});
-		ResourceGuidanceService.requestRescan(player);
-		ResourceGuidanceService.updatePlayer(player);
+		data.updateTerminalRecord(player.getUUID(), record ->
+				record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, SurvivalMilestone.MINED_LOGS.mask()));
+		// The probe is told nothing; it has to hear the iron that was just placed two blocks down.
+		helper.assertTrue(ResourceGuidanceService.probeForTesting(player),
+				"An unlocked mineral tool with charges must accept a probe");
 
 		var guided = data.terminalRecord(player.getUUID()).orElseThrow();
+		helper.assertValueEqual(guided.getIntOr(TerminalData.SELECTED_RESOURCE, -1),
+				TerminalResource.IRON.wireId(), "The probe must name what it actually heard");
+		helper.assertValueEqual(guided.getIntOr(TerminalData.MINERAL_PROBE_CHARGES, -1),
+				MineralSurveyPolicy.MAX_PROBE_CHARGES - 1, "A probe must cost exactly one charge");
 		helper.assertTrue(guided.getBooleanOr(TerminalData.TARGET_LOCATED, false),
 				"Optional guidance may locate a real resource before the fourth band is revealed");
 		helper.assertValueEqual(guided.getLongOr(TerminalData.TARGET_POSITION, 0L), orePosition.asLong(),
@@ -168,8 +171,8 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 				|| invalidated.getLongOr(TerminalData.TARGET_POSITION, 0L) != orePosition.asLong(),
 				"A removed ore block must invalidate the stale target");
 		helper.getLevel().setBlockAndUpdate(orePosition, Blocks.IRON_ORE.defaultBlockState());
-		ResourceGuidanceService.requestRescan(player);
-		ResourceGuidanceService.updatePlayer(player);
+		helper.assertTrue(ResourceGuidanceService.probeForTesting(player),
+				"A second charge must still be available for the re-probe");
 		helper.assertTrue(TerminalToolService.startGuidance(player, TerminalTool.MINERALS.slot()),
 				"The explicit mineral navigation toggle must accept the located iron target");
 		var navigation = TerminalRuntimeService.navigationSnapshot(player);
@@ -284,9 +287,10 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		var refreshed = data.terminalRecord(miner.getUUID()).orElseThrow();
 		TerminalResource selected = TerminalResource.fromWire(
 				refreshed.getIntOr(TerminalData.SELECTED_RESOURCE, TerminalResource.NONE.wireId()));
-		helper.assertTrue(Set.of(TerminalResource.IRON, TerminalResource.COAL,
-				TerminalResource.GOLD, TerminalResource.DIAMOND).contains(selected),
-				"Refresh must select one of the four published weighted categories");
+		// The category is no longer drawn up front and then hunted for. The probe reports whatever it
+		// actually finds, so a refresh must leave the category unresolved until the scan commits.
+		helper.assertValueEqual(selected, TerminalResource.NONE,
+				"Refresh must leave the mineral category unresolved until the probe commits");
 		helper.assertValueEqual(refreshed.getLongOr(TerminalData.MINERAL_SCAN_READY_GAME_TIME, 0L)
 				- miner.level().getGameTime(), 60L, "Refresh must create an exact three-second probe window");
 		helper.assertFalse(refreshed.getBooleanOr(TerminalData.TARGET_LOCATED, false),
@@ -349,7 +353,8 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		helper.assertTrue(surveyed.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false),
 				"A deterministic successful thirty-percent roll must publish the prompt");
 		var snapshot = TerminalToolService.snapshot(player, TerminalToolService.NO_TOOL);
-		helper.assertValueEqual(snapshot.protocolVersion(), 5, "Nearby mineral tool snapshot protocol");
+		helper.assertValueEqual(snapshot.protocolVersion(),
+				TerminalToolSnapshotPayload.CURRENT_PROTOCOL_VERSION, "Nearby mineral tool snapshot protocol");
 		helper.assertTrue(snapshot.mineralSurveyNearby(), "Tool snapshot must expose the nearby mineral state");
 		helper.assertValueEqual(snapshot.recommendedPrimaryTool(), TerminalTool.MINERALS.slot(),
 				"The nearby mineral state must promote the mineral shortcut");
@@ -458,7 +463,8 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 			record.putString(TerminalData.STRONGHOLD_DIMENSION, dimension);
 		});
 		var snapshot = TerminalToolService.snapshot(player, TerminalTool.HOME.slot());
-		helper.assertValueEqual(snapshot.protocolVersion(), 5, "Independent tool snapshot protocol");
+		helper.assertValueEqual(snapshot.protocolVersion(),
+				TerminalToolSnapshotPayload.CURRENT_PROTOCOL_VERSION, "Independent tool snapshot protocol");
 		helper.assertFalse(snapshot.homeKnown(),
 				"Legacy manual home coordinates must not replace the player's real respawn point");
 		helper.assertTrue(snapshot.portalKnown() && snapshot.portalSameDimension(), "Portal arrival must be real and local");

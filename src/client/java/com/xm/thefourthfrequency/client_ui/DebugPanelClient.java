@@ -13,6 +13,7 @@ public final class DebugPanelClient {
 	private static KeyMapping openKey;
 	private static String pendingAnomalyId;
 	private static boolean pendingPursuitResponse;
+	private static boolean pendingBossResponse;
 	private static boolean initialized;
 	private DebugPanelClient() { }
 
@@ -40,10 +41,13 @@ public final class DebugPanelClient {
 		if (!payload.allowed()) {
 			boolean anomalyResponse = pendingAnomalyId != null;
 			boolean pursuitResponse = pendingPursuitResponse;
+			boolean bossResponse = pendingBossResponse;
 			pendingAnomalyId = null;
 			pendingPursuitResponse = false;
+			pendingBossResponse = false;
 			if (client.player != null) client.player.displayClientMessage(Component.literal(
-					(anomalyResponse ? "[异象触发失败] " : pursuitResponse ? "[追逐测试失败] " : "")
+					(anomalyResponse ? "[异象触发失败] " : pursuitResponse ? "[追逐测试失败] "
+							: bossResponse ? "[BOSS 战测试失败] " : "")
 							+ payload.message()), false);
 			if (client.screen instanceof DebugPanelScreen) client.setScreen(null);
 			return;
@@ -51,6 +55,17 @@ public final class DebugPanelClient {
 		boolean pursuitResponse = pendingPursuitResponse && !payload.message().isEmpty();
 		if (pursuitResponse) pendingPursuitResponse = false;
 		if (pursuitResponse && payload.message().startsWith("追逐测试已启动")) {
+			if (client.screen instanceof DebugPanelScreen) client.setScreen(null);
+			return;
+		}
+		// The boss test moves the player into the End arena, so the panel has to get out of the way
+		// whichever way the sacrifice landed - started, or waiting on the rest of the roster.
+		boolean bossResponse = pendingBossResponse && !payload.message().isEmpty();
+		if (bossResponse) {
+			pendingBossResponse = false;
+			if (client.player != null) {
+				client.player.displayClientMessage(Component.literal("[BOSS 战测试] " + payload.message()), false);
+			}
 			if (client.screen instanceof DebugPanelScreen) client.setScreen(null);
 			return;
 		}
@@ -76,5 +91,9 @@ public final class DebugPanelClient {
 
 	static void expectPursuitResponse() {
 		pendingPursuitResponse = true;
+	}
+
+	static void expectBossResponse() {
+		pendingBossResponse = true;
 	}
 }

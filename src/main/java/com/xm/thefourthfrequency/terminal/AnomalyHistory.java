@@ -21,6 +21,10 @@ public final class AnomalyHistory {
 				record.getLongOr(TerminalData.ANOMALY_SEEN_MASK, 0L) | 1L << index);
 		record.putInt(TerminalData.ANOMALY_STAGE_SUCCESSES,
 				Math.max(0, record.getIntOr(TerminalData.ANOMALY_STAGE_SUCCESSES, 0)) + 1);
+		// Unlike the stage counter above, this one survives every stage advance: it is what lets
+		// world decay accumulate across the whole save instead of resetting with the pacing.
+		record.putInt(TerminalData.ANOMALY_RESIDUE_COUNT, WorldDecayResiduePolicy.accumulate(
+				record.getIntOr(TerminalData.ANOMALY_RESIDUE_COUNT, 0)));
 
 		ListTag previous = record.getListOrEmpty(TerminalData.ANOMALY_RECENT_IDS);
 		ListTag recent = new ListTag();

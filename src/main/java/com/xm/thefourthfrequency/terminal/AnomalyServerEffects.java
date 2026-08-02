@@ -54,7 +54,7 @@ public final class AnomalyServerEffects {
 		return switch (definition.id()) {
 			case "watcher_alignment" -> alignment(player, durationTicks);
 			case "dark_watcher" -> watcher(player, durationTicks);
-			case "light_dropout" -> lightDropout(player);
+			case "light_dropout" -> lightDropout(player, durationTicks);
 			case "door_cascade" -> doors(player, seed);
 			case "experience_gap" -> movement(player, durationTicks);
 			default -> new EffectLease(() -> { });
@@ -72,8 +72,8 @@ public final class AnomalyServerEffects {
 		return watcher == null ? null : new EffectLease(() -> { if (watcher.isAlive()) watcher.discard(); });
 	}
 
-	private static EffectLease lightDropout(ServerPlayer player) {
-		LightDropoutTask task = LightDropoutTask.create(player);
+	private static EffectLease lightDropout(ServerPlayer player, int durationTicks) {
+		LightDropoutTask task = LightDropoutTask.create(player, durationTicks);
 		if (task == null) return null;
 		LIGHT_DROPOUTS.put(player, task);
 		return new EffectLease(() -> {
@@ -104,6 +104,7 @@ public final class AnomalyServerEffects {
 
 	private static void tick(MinecraftServer server) {
 		for (AlignmentTask task : List.copyOf(ALIGNMENTS.values())) task.tick(server);
+		for (LightDropoutTask task : List.copyOf(LIGHT_DROPOUTS.values())) task.tick();
 		for (DoorCascadeTask task : List.copyOf(DOORS.values())) task.tick();
 		for (MovementTask task : List.copyOf(MOVEMENTS.values())) task.tick(server);
 	}
@@ -124,40 +125,98 @@ public final class AnomalyServerEffects {
 		}
 	}
 
+	/**
+	 * The dark closing in from the outside, and letting go from the inside.
+	 *
+	 * <p>Pacing and ordering live in {@link LightDropoutSequence}; this only applies them. The
+	 * task holds no schedule of its own - every tick it asks how many lights should be out and
+	 * how many back by now, then works the difference - so a lagging server catches up rather
+	 * than silently skipping one and leaving it lit.</p>
+	 */
 	private static final class LightDropoutTask {
 		private static final int HORIZONTAL_RADIUS = 16;
 		private static final int VERTICAL_RADIUS = 8;
 		private final ServerLevel level;
-		private final Map<BlockPos, LightSnapshot> changed;
+		private final ServerPlayer player;
+		private final List<LightSnapshot> ordered;
+		private final int durationTicks;
+		/** Null until that light is actually out, and null again once it is back. */
+		private final BlockState[] applied;
+		private int age;
+		private int extinguished;
+		private int restored;
 
-		private LightDropoutTask(ServerLevel level, Map<BlockPos, LightSnapshot> changed) {
+		private LightDropoutTask(ServerLevel level, ServerPlayer player, List<LightSnapshot> ordered,
+				int durationTicks) {
 			this.level = level;
-			this.changed = changed;
+			this.player = player;
+			this.ordered = ordered;
+			this.durationTicks = durationTicks;
+			this.applied = new BlockState[ordered.size()];
 		}
 
-		private static LightDropoutTask create(ServerPlayer player) {
+		private static LightDropoutTask create(ServerPlayer player, int durationTicks) {
 			if (!(player.level() instanceof ServerLevel level)) return null;
-			Map<BlockPos, LightSnapshot> changed = new HashMap<>();
-			forEachNearbyLight(level, player.blockPosition(), (pos, original, extinguished) -> {
-				if (level.setBlock(pos, extinguished, Block.UPDATE_CLIENTS)) {
-					changed.put(pos.immutable(), new LightSnapshot(original, extinguished));
-				}
-			});
-			return changed.isEmpty() ? null : new LightDropoutTask(level, Map.copyOf(changed));
+			BlockPos origin = player.blockPosition();
+			List<LightSnapshot> candidates = new ArrayList<>();
+			forEachNearbyLight(level, origin, (pos, original, extinguished) ->
+					candidates.add(new LightSnapshot(pos.immutable(), original, extinguished)));
+			if (candidates.isEmpty()) return null;
+			// Farthest first. The order is the whole effect: the same set of blocks going out
+			// from the edge inward is the dark arriving, while going out all at once is a switch.
+			candidates.sort(Comparator.comparingDouble((LightSnapshot value) ->
+					value.position().distSqr(origin)).reversed());
+			return new LightDropoutTask(level, player, List.copyOf(candidates), durationTicks);
 		}
 
-		private void restore() {
-			for (Map.Entry<BlockPos, LightSnapshot> entry : changed.entrySet()) {
-				BlockPos pos = entry.getKey();
-				LightSnapshot snapshot = entry.getValue();
-				if (level.hasChunkAt(pos) && level.getBlockState(pos).equals(snapshot.extinguished())) {
-					level.setBlock(pos, snapshot.original(), Block.UPDATE_CLIENTS);
-				}
+		private void tick() {
+			if (player.isRemoved()) return;
+			age++;
+			int count = ordered.size();
+			int wantOut = LightDropoutSequence.extinguishedBy(age, count, durationTicks);
+			while (extinguished < wantOut) extinguishNext();
+			int wantBack = LightDropoutSequence.restoredBy(age, count, durationTicks);
+			while (restored < wantBack) restoreNext();
+		}
+
+		private void extinguishNext() {
+			int index = extinguished++;
+			LightSnapshot snapshot = ordered.get(index);
+			BlockPos pos = snapshot.position();
+			if (!level.hasChunkAt(pos) || !level.getBlockState(pos).equals(snapshot.original())) return;
+			if (!level.setBlock(pos, snapshot.extinguished(), Block.UPDATE_CLIENTS)) return;
+			applied[index] = snapshot.extinguished();
+			// A light that goes out silently is a rendering change. A light that goes out with the
+			// sound of one going out is an event happening at a place, which is what lets the
+			// player turn and look at the wrong part of their own base.
+			level.playSound(null, pos, SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS,
+					0.55F, 0.86F + Math.floorMod(pos.hashCode(), 17) * 0.01F);
+		}
+
+		private void restoreNext() {
+			restoreAt(LightDropoutSequence.restoreIndex(restored++, ordered.size()));
+		}
+
+		/** Silent on purpose: the dark announced itself, and its leaving does not get to. */
+		private void restoreAt(int index) {
+			BlockState extinguishedState = applied[index];
+			if (extinguishedState == null) return;
+			applied[index] = null;
+			LightSnapshot snapshot = ordered.get(index);
+			BlockPos pos = snapshot.position();
+			if (level.hasChunkAt(pos) && level.getBlockState(pos).equals(extinguishedState)) {
+				level.setBlock(pos, snapshot.original(), Block.UPDATE_CLIENTS);
 			}
+		}
+
+		/** The lease closing. Whatever the sequence has not handed back yet returns at once. */
+		private void restore() {
+			for (int step = 0; step < ordered.size(); step++)
+				restoreAt(LightDropoutSequence.restoreIndex(step, ordered.size()));
 		}
 	}
 
-	private record LightSnapshot(BlockState original, BlockState extinguished) {
+	private record LightSnapshot(BlockPos position, BlockState original, BlockState extinguished) {
 	}
 
 	@FunctionalInterface

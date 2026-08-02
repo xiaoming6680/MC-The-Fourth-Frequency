@@ -16,20 +16,21 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.util.Locale;
-
 @Mixin(TitleScreen.class)
 public abstract class TitleScreenErosionMixin {
 	private static final int VANILLA_SPLASH_YELLOW = 0xFFFF00;
+	private static final String REALMS_BUTTON_KEY = "menu.online";
 	@Shadow private SplashRenderer splash;
 
 	@Inject(method = "init", at = @At("TAIL"))
 	private void thefourthfrequency$applyPersistentMenuIdentity(CallbackInfo callback) {
-		// Every title-screen instance, including one recreated after leaving a world, keeps the same session slogan.
-		splash = new SplashRenderer(Component.literal(MenuErosionState.sessionSplash())
+		// Every title-screen instance, including one recreated after leaving a world, keeps the same
+		// session slogan until the server reports a new erosion stage.
+		splash = new SplashRenderer(Component.translatable(MenuErosionState.sessionSplashKey())
 				.withColor(VANILLA_SPLASH_YELLOW));
 		for (var element : Screens.getButtons((TitleScreen) (Object) this)) {
-			if (FailureMenuLockState.locked() && thefourthfrequency$isGameEntry(element.getMessage())) {
+			String key = thefourthfrequency$translationKey(element.getMessage());
+			if (FailureMenuLockState.locked() && thefourthfrequency$isGameEntry(key)) {
 				element.active = false;
 				element.setTooltip(Tooltip.create(Component.translatable(
 						FailureMenuLockState.outcome() == com.xm.thefourthfrequency.networking.WorldInterfaceProtocol.Outcome.SUCCESS
@@ -37,15 +38,18 @@ public abstract class TitleScreenErosionMixin {
 								: "screen.thefourthfrequency.ending_menu_lock.failure")));
 				continue;
 			}
-			String label = element.getMessage().getString().toLowerCase(Locale.ROOT);
-			if (label.contains("realms")) element.active = false;
+			// Keyed rather than label-matched, so Realms stays disabled in every language.
+			if (REALMS_BUTTON_KEY.equals(key)) element.active = false;
 		}
 	}
 
-	private static boolean thefourthfrequency$isGameEntry(Component message) {
-		if (!(message.getContents() instanceof TranslatableContents translated)) return false;
-		return switch (translated.getKey()) {
-			case "menu.singleplayer", "menu.multiplayer", "menu.online" -> true;
+	private static String thefourthfrequency$translationKey(Component message) {
+		return message.getContents() instanceof TranslatableContents translated ? translated.getKey() : "";
+	}
+
+	private static boolean thefourthfrequency$isGameEntry(String translationKey) {
+		return switch (translationKey) {
+			case "menu.singleplayer", "menu.multiplayer", REALMS_BUTTON_KEY -> true;
 			default -> false;
 		};
 	}
