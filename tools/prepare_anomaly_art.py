@@ -9,7 +9,6 @@ from pathlib import Path
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 
-PALETTE = [(8, 4, 13), (18, 7, 27), (41, 12, 59), (73, 18, 98), (112, 31, 139)]
 
 
 def cover(image: Image.Image, size: tuple[int, int]) -> Image.Image:
@@ -79,27 +78,6 @@ def save_hand_asset(master: Image.Image, root: Path) -> None:
     texture.save(gui / "peripheral_hand.png", optimize=True)
 
 
-def save_purple_assets(root: Path) -> None:
-    gui = root / "textures" / "gui" / "anomaly"
-    block = root / "textures" / "block"
-    gui.mkdir(parents=True, exist_ok=True)
-    block.mkdir(parents=True, exist_ok=True)
-    trace = Image.new("RGB", (16, 16))
-    title = Image.new("RGB", (256, 128))
-    for image in (trace, title):
-        pixels = image.load()
-        for y in range(image.height):
-            for x in range(image.width):
-                seed = (x * 1103515245 + y * 12345 + (x ^ y) * 97) & 0x7FFFFFFF
-                index = 0 if seed % 11 < 6 else 1 if seed % 7 < 4 else 2 if seed % 5 < 4 else 3
-                if ((x // 5) ^ (y // 5)) % 13 == 0:
-                    index = 4
-                pixels[x, y] = PALETTE[index]
-    trace.save(block / "purple_trace.png", optimize=True)
-    title = title.filter(ImageFilter.GaussianBlur(0.35))
-    title.save(gui / "title_corruption.png", optimize=True)
-
-
 def save_missing_texture(root: Path) -> None:
     block = root / "textures" / "block"
     block.mkdir(parents=True, exist_ok=True)
@@ -120,7 +98,6 @@ def main() -> None:
     args = parser.parse_args()
     save_eye_assets(Image.open(args.eye_master).convert("RGBA"), args.resources)
     save_hand_asset(Image.open(args.hands_master).convert("RGBA"), args.resources)
-    save_purple_assets(args.resources)
     save_missing_texture(args.resources)
 
 

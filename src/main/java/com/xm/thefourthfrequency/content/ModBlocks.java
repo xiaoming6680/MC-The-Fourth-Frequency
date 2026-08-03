@@ -12,19 +12,20 @@ import net.minecraft.world.level.block.state.BlockBehaviour;
 
 import java.util.function.Function;
 
+/**
+ * The encounter owns three blocks and no decoration.
+ *
+ * <p>It used to own two more: a cage ringing every stability anchor and a core for each of the
+ * twenty warp gates. The gate structures stopped being built long before this, and the cage was a
+ * bright band of custom texture wrapped around the one thing in the arena a player is supposed to
+ * look at. Both are gone rather than retextured, and the blocks that remain borrow vanilla
+ * surfaces instead of shipping their own.</p>
+ */
 public final class ModBlocks {
 	public static final ResonanceCoreBlock RESONANCE_CORE = registerCustom("resonance_core",
 			BlockBehaviour.Properties.ofFullCopy(Blocks.CRYING_OBSIDIAN)
 					.strength(Block.INDESTRUCTIBLE, 3_600_000.0F).noLootTable().lightLevel(state -> 12),
 			ResonanceCoreBlock::new);
-	public static final StabilityAnchorCageBlock STABILITY_ANCHOR_CAGE = registerCustom("stability_anchor_cage",
-			BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BARS)
-					.strength(Block.INDESTRUCTIBLE, 3_600_000.0F).noLootTable().lightLevel(state -> 7),
-			StabilityAnchorCageBlock::new);
-	public static final WarpGateCoreBlock WARP_GATE_CORE = registerCustom("warp_gate_core",
-			BlockBehaviour.Properties.ofFullCopy(Blocks.END_GATEWAY)
-					.strength(Block.INDESTRUCTIBLE, 3_600_000.0F).noLootTable(),
-			WarpGateCoreBlock::new);
 	public static final WorldInterfaceExitPortalBlock WORLD_INTERFACE_EXIT_PORTAL = registerCustom(
 			"world_interface_exit_portal", BlockBehaviour.Properties.ofFullCopy(Blocks.END_PORTAL)
 					.strength(Block.INDESTRUCTIBLE, 3_600_000.0F).noLootTable().lightLevel(state -> 15),

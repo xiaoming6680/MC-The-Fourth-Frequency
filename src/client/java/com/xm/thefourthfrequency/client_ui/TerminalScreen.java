@@ -31,9 +31,11 @@ import net.minecraft.util.FormattedCharSequence;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.ALERT_BACKGROUND;
 import static com.xm.thefourthfrequency.client_ui.TerminalVisualTheme.AMBER;
@@ -65,6 +67,8 @@ public final class TerminalScreen extends Screen {
 	private static final long WAVE_COLOR_MILLIS = 180L;
 	private static final long FILE_UNLOCK_FADE_MILLIS = 1_000L;
 	private static final int ROW_HEIGHT = 10;
+	/** Distance from the dial centre to the middle of a cardinal label, clear of the bezel. */
+	private static final int COMPASS_LABEL_RADIUS = 19;
 	private static final int FILE_TEXT_INSET = 8;
 	private static final int FILE_SCROLLBAR_GUTTER = 7;
 	private static final float FILE_TITLE_SCALE = 0.90F;
@@ -133,6 +137,8 @@ public final class TerminalScreen extends Screen {
 	private List<String> signalCardKeys = List.of();
 	private final List<SignalHit> signalHits = new ArrayList<>();
 	private final List<NavigationHit> navigationHits = new ArrayList<>();
+	/** Click regions for the shortcut that turns an optional-investigation record into an action. */
+	private final List<TerminalUiLayout.Bounds> recordNavigationHits = new ArrayList<>();
 
 	public TerminalScreen(TerminalSnapshotPayload payload) {
 		super(Component.translatable("screen.thefourthfrequency.terminal"));
@@ -216,8 +222,7 @@ public final class TerminalScreen extends Screen {
 		boolean gameplayBefore = receiverGameplayActive();
 		tools = new TerminalToolSnapshot(payload);
 		TerminalTool activeGuidance = tools.guidanceTool();
-		if (tools.navigationCompletionAvailable()) homeLiveTool = TerminalTool.NAVIGATION;
-		else if (activeGuidance != null) homeLiveTool = activeGuidance;
+		if (activeGuidance != null) homeLiveTool = activeGuidance;
 		else if (homeLiveTool != TerminalTool.WEATHER) homeLiveTool = null;
 		localNavigationTargetChosen = tools.selectedNavigationTarget() != TerminalStructureTarget.NONE;
 		if (selectedTool != null && !tools.available(selectedTool)) clearSelectedTool(false);
@@ -569,6 +574,10 @@ public final class TerminalScreen extends Screen {
 		switch (tool) {
 			case HOME -> lines.add(tools.homeLine());
 			case MINERALS -> {
+				// The charge bank goes above the reading, not below it. The compact home card shows
+				// the last line of this list as the tool's status, and a player who pinned the
+				// mineral tool while walking to an ore wants the bearing there, not the cost.
+				if (!tools.mineralScanning()) lines.add(tools.mineralProbeLine());
 				if (tools.mineralScanning()) {
 					lines.add(mineralScanningLine());
 				} else if (mineralTargetLocated()) {
@@ -582,15 +591,11 @@ public final class TerminalScreen extends Screen {
 				} else {
 					lines.add(Component.translatable("terminal.thefourthfrequency.tool.minerals.waiting"));
 				}
-				// The charge bank sits under the reading rather than on the button, so a player
-				// deciding whether to spend one can see the cost next to what the last one bought.
-				if (!tools.mineralScanning()) lines.add(tools.mineralProbeLine());
 			}
 			case PORTAL -> lines.add(tools.portalLine());
 			case WEATHER -> lines.add(tools.weatherLine());
 			case NAVIGATION -> {
-				if (tools.navigationCompletionAvailable()) lines.add(tools.navigationCompletionLine());
-				else if (navigation.targetKind() != 0) lines.add(snapshot.navigationLine(navigation, tools.playerY()));
+				if (navigation.targetKind() != 0) lines.add(snapshot.navigationLine(navigation, tools.playerY()));
 			}
 			case STRONGHOLD -> lines.add(tools.strongholdLine());
 		}
@@ -713,10 +718,19 @@ public final class TerminalScreen extends Screen {
 	private void drawRecords(GuiGraphics graphics) {
 		var body = TerminalUiLayout.RECORDS_BODY;
 		graphics.fill(body.left(), body.top(), body.right(), body.bottom(), GLASS);
+		recordNavigationHits.clear();
+		boolean navigator = tools.available(TerminalTool.NAVIGATION);
 		List<StyledRow> rows = new ArrayList<>();
+		Set<Integer> shortcutRows = new HashSet<>();
 		for (TerminalLogEntryPayload entry : snapshot.recordEntries()) {
+			boolean investigation = entry.type().startsWith("fragment_candidate_");
+			// An optional investigation the player has no navigator for is not a lead, it is a line
+			// of text they cannot do anything with, so it stays out of the log until the tool that
+			// can act on it exists.
+			if (investigation && !navigator) continue;
 			Component line = Component.literal("[" + snapshot.signalTime(entry) + "] ").append(snapshot.signalEvent(entry));
 			rows.addAll(styledRows(List.of(line), body.width() - 16, entry.unread() ? AMBER : GREEN, 6, entry.unread()));
+			if (investigation) shortcutRows.add(rows.size() - 1);
 		}
 		if (rows.isEmpty()) rows.addAll(styledRows(List.of(Component.translatable(
 				"terminal.thefourthfrequency.records.empty")), body.width() - 16, DIM, 6, false));
@@ -728,8 +742,36 @@ public final class TerminalScreen extends Screen {
 			StyledRow row = rows.get(index);
 			if (row.marker()) graphics.fill(body.left() + 4, y + 2, body.left() + 6, y + 7, row.color());
 			if (row.text() != null) graphics.drawString(font, row.text(), body.left() + row.indent(), y, row.color(), false);
+			if (shortcutRows.contains(index)) drawRecordNavigationShortcut(graphics, body, row, y);
 			y += ROW_HEIGHT;
 		}
+	}
+
+	/**
+	 * The shortcut that follows an optional-investigation line, in the bright green this terminal
+	 * already reserves for "there is something you can act on here".
+	 */
+	private void drawRecordNavigationShortcut(GuiGraphics graphics, TerminalUiLayout.Bounds body,
+			StyledRow row, int y) {
+		Component label = Component.translatable("terminal.thefourthfrequency.records.open_navigation");
+		int width = font.width(label);
+		int textEnd = body.left() + row.indent() + (row.text() == null ? 0 : font.width(row.text()));
+		int left = textEnd + 5;
+		// A wrapped line can leave no room; the record still reads fine without the shortcut, and a
+		// button drawn over the panel edge would not.
+		if (left + width > body.right() - 5) return;
+		graphics.drawString(font, label, left, y, CLAIMABLE, false);
+		recordNavigationHits.add(new TerminalUiLayout.Bounds(left - 2, y - 1, left + width + 2, y + 9));
+	}
+
+	private boolean handleRecordNavigationClick(double x, double y) {
+		for (TerminalUiLayout.Bounds hit : recordNavigationHits) {
+			if (hit.contains(x, y)) {
+				openTool(TerminalTool.NAVIGATION);
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void drawCard(GuiGraphics graphics, TerminalUiLayout.Bounds bounds, int outline) {
@@ -1123,14 +1165,17 @@ public final class TerminalScreen extends Screen {
 		var compass = TerminalUiLayout.COMPASS;
 		int cx = (compass.left() + compass.right()) / 2;
 		int cy = (compass.top() + compass.bottom()) / 2;
-		drawPixelCircle(graphics, cx, cy, 20, 0xFF716B43);
-		drawPixelCircle(graphics, cx, cy, 18, 0xFF17180F);
-		drawPixelCircle(graphics, cx, cy, 16, 0xFF080D09);
-
-		graphics.fill(cx, cy - 16, cx + 1, cy - 13, DIM);
-		graphics.fill(cx + 14, cy, cx + 17, cy + 1, DIM);
-		graphics.fill(cx, cy + 14, cx + 1, cy + 17, DIM);
-		graphics.fill(cx - 16, cy, cx - 13, cy + 1, DIM);
+		// The dial is drawn a few pixels tighter than the bezel it used to fill, because the cardinal
+		// labels have to live somewhere and the panel leaves only five or six pixels of clearance
+		// above and below the compass. Pulling the rings in buys that room without moving anything
+		// else on the hardware side.
+		drawPixelCircle(graphics, cx, cy, 16, 0xFF716B43);
+		drawPixelCircle(graphics, cx, cy, 14, 0xFF17180F);
+		drawPixelCircle(graphics, cx, cy, 12, 0xFF080D09);
+		drawCompassLabel(graphics, cx, cy - COMPASS_LABEL_RADIUS, "north", HOT);
+		drawCompassLabel(graphics, cx + COMPASS_LABEL_RADIUS, cy, "east", DIM);
+		drawCompassLabel(graphics, cx, cy + COMPASS_LABEL_RADIUS, "south", DIM);
+		drawCompassLabel(graphics, cx - COMPASS_LABEL_RADIUS, cy, "west", DIM);
 
 		double flashAge = renderAge - navigationNeedleFlashStartedAt;
 		if (targetNeedleVisible(tools.guidanceTool() != null, navigation.navigable(), flashAge)) {
@@ -1139,6 +1184,15 @@ public final class TerminalScreen extends Screen {
 		drawNorthNeedle(graphics, cx, cy, northNeedle);
 		graphics.fill(cx - 2, cy - 2, cx + 3, cy + 3, 0xFF17180F);
 		graphics.fill(cx - 1, cy - 1, cx + 2, cy + 2, AMBER);
+	}
+
+	/**
+	 * One cardinal label on the dial. North is drawn in the needle's own red so the two read as the
+	 * same statement; the other three stay dim, because they are a scale rather than a reading.
+	 */
+	private void drawCompassLabel(GuiGraphics graphics, int x, int y, String direction, int color) {
+		String label = Component.translatable("terminal.thefourthfrequency.compass." + direction).getString();
+		graphics.drawString(font, label, x - font.width(label) / 2, y - font.lineHeight / 2, color, false);
 	}
 
 	private void drawReceiverSlider(GuiGraphics graphics) {
@@ -1335,6 +1389,7 @@ public final class TerminalScreen extends Screen {
 				}
 			} else if (handleToolAction(local[0], local[1])) return true;
 		}
+		if (page == TerminalPage.RECORDS && handleRecordNavigationClick(local[0], local[1])) return true;
 		if (page == TerminalPage.FILES && handleLogClick(local[0], local[1])) return true;
 		return super.mouseClicked(event, doubled);
 	}
@@ -1417,8 +1472,6 @@ public final class TerminalScreen extends Screen {
 
 	private void closeHomeLiveTool() {
 		if (tools.guidanceTool() != null) send(TerminalControlPayload.STOP_GUIDANCE, 0);
-		else if (homeLiveTool == TerminalTool.NAVIGATION && tools.navigationCompletionAvailable())
-			send(TerminalControlPayload.DISMISS_NAVIGATION_COMPLETION, 0);
 		homeLiveTool = null;
 		TerminalClientAudio.click();
 	}
@@ -1908,7 +1961,7 @@ public final class TerminalScreen extends Screen {
 		int widthY = (int) Math.round(Math.sin(radians));
 		int endX = cx;
 		int endY = cy;
-		for (int step = 2; step <= 9; step++) {
+		for (int step = 2; step <= 8; step++) {
 			endX = cx + (int) Math.round(Math.sin(radians) * step);
 			endY = cy - (int) Math.round(Math.cos(radians) * step);
 			graphics.fill(endX, endY, endX + 1, endY + 1, AMBER);
@@ -1925,7 +1978,9 @@ public final class TerminalScreen extends Screen {
 		double radians = Math.toRadians(degrees);
 		int endX = cx;
 		int endY = cy;
-		for (int step = 2; step <= 12; step++) {
+		// Stops one pixel inside the tightened face rather than the old twelve, so the needle never
+		// crosses the bezel the cardinal labels now sit outside of.
+		for (int step = 2; step <= 10; step++) {
 			endX = cx + (int) Math.round(Math.sin(radians) * step);
 			endY = cy - (int) Math.round(Math.cos(radians) * step);
 			graphics.fill(endX, endY, endX + 1, endY + 1, HOT);

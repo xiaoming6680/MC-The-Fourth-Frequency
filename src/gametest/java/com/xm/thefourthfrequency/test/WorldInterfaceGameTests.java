@@ -4,6 +4,7 @@ import com.mojang.authlib.GameProfile;
 import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.content.ModEntities;
 import com.xm.thefourthfrequency.content.TerminalData;
+import com.xm.thefourthfrequency.ending.ConfiscationService;
 import com.xm.thefourthfrequency.ending.EndBossArenaService;
 import com.xm.thefourthfrequency.ending.EndBossEncounterService;
 import com.xm.thefourthfrequency.ending.FriendlyDragonService;
@@ -16,15 +17,18 @@ import com.xm.thefourthfrequency.ending.WorldInterfaceState;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEnergyOrbEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfacePartEntity;
+import com.xm.thefourthfrequency.networking.WorldInterfaceProtocol;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import io.netty.channel.embedded.EmbeddedChannel;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.PacketFlow;
+import net.minecraft.network.protocol.game.ServerboundPlayerLoadedPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -34,6 +38,7 @@ import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
 import net.minecraft.world.entity.boss.enderdragon.EnderDragon;
+import net.minecraft.world.entity.boss.enderdragon.phases.EnderDragonPhase;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
 import net.minecraft.world.entity.projectile.arrow.Arrow;
@@ -87,15 +92,24 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 
 		Set<BlockPos> protectedPositions = EndBossArenaService.protectedPositions(arena);
 		for (BlockPos gateway : arena.gatewayCorePositions()) {
-			helper.assertTrue(end.getBlockState(gateway).is(ModBlocks.WARP_GATE_CORE),
-					"Every inert gateway must use the custom warp core");
-			helper.assertTrue(protectedPositions.contains(gateway)
-					&& !EndBossArenaService.canDestroy(end, gateway, end.getBlockState(gateway)),
-					"Gateway cores must be protected from encounter terrain edits");
+			// The warp gate structure was removed outright, block included. The slot positions
+			// survive because the encounter snapshot still addresses its deposit particles by them,
+			// but preparation must leave the world empty there - including for an older save.
+			helper.assertTrue(!end.getBlockState(gateway.above(2)).is(Blocks.BEDROCK)
+					&& !end.getBlockState(gateway.below(2)).is(Blocks.BEDROCK),
+					"Preparation must clear the bedrock outline left by an older save");
+			helper.assertTrue(protectedPositions.contains(gateway),
+					"Gateway slots stay protected from encounter terrain edits even while empty");
 		}
 		for (EndBossArenaService.AnchorSlot anchor : arena.anchors()) {
-			helper.assertTrue(end.getBlockState(anchor.position().below()).is(ModBlocks.STABILITY_ANCHOR_CAGE),
-					"Every anchor slot must have a stability cage");
+			// The cage is gone: the anchor stands bare on the spike, and the only thing preparation
+			// still owes it is something solid to stand on.
+			helper.assertTrue(!end.getBlockState(anchor.position().below()).isAir(),
+					"Every anchor must keep a solid footing under it");
+			for (Direction side : Direction.Plane.HORIZONTAL) {
+				helper.assertTrue(end.getBlockState(anchor.position().relative(side)).isAir(),
+						"No cage may be rebuilt around an anchor");
+			}
 			EndCrystal crystal = EndBossArenaService.findAuthoritativeAnchor(end, anchor.crystalUuid()).orElse(null);
 			helper.assertTrue(crystal != null
 						&& EndBossArenaService.isAuthoritativeAnchor(crystal, anchor.index())
@@ -110,24 +124,31 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 		Set<UUID> existingItems = end.getEntitiesOfClass(ItemEntity.class,
 				new AABB(firstBase).inflate(24.0D)).stream().map(Entity::getUUID).collect(
 						java.util.stream.Collectors.toUnmodifiableSet());
-		List<BlockPos> firstBatch = placeEditableLine(end, firstBase, 16);
-		helper.assertValueEqual(EndBossArenaService.queueTerrainScar(end, firstBatch, 16, 0x51A2L), 16,
+		// Deliberately larger than one tick's allowance: the point of this case is that the queue
+		// still paces itself across ticks, not that the allowance happens to be any given number.
+		List<BlockPos> firstBatch = placeEditableLine(end, firstBase, 40);
+		helper.assertValueEqual(EndBossArenaService.queueTerrainScar(end, firstBatch, 40, 0x51A2L), 40,
 				"All eligible scar candidates should enter the bounded queue");
-		helper.assertValueEqual(EndBossArenaService.tickTerrainScars(end), 8,
-				"A server tick may commit at most eight permanent terrain edits");
-		helper.assertValueEqual(EndBossArenaService.permanentTerrainEdits(end), 8,
+		helper.assertValueEqual(EndBossArenaService.tickTerrainScars(end),
+				EndBossArenaService.MAX_EDITS_PER_TICK,
+				"A server tick may commit at most one tick's worth of permanent terrain edits");
+		helper.assertValueEqual(EndBossArenaService.permanentTerrainEdits(end),
+				EndBossArenaService.MAX_EDITS_PER_TICK,
 				"Only successfully committed changes consume the permanent budget");
+		helper.assertValueEqual(EndBossArenaService.tickTerrainScars(end),
+				40 - EndBossArenaService.MAX_EDITS_PER_TICK,
+				"The remainder must settle on the following tick rather than all at once");
 		helper.assertTrue(end.getEntitiesOfClass(ItemEntity.class, new AABB(firstBase).inflate(24.0D)).stream()
 				.allMatch(item -> existingItems.contains(item.getUUID())),
 				"World-interface terrain scars must not create item drops");
 
-		EndBossArenaService.restoreTerrainEditCount(end, 2_045);
+		EndBossArenaService.restoreTerrainEditCount(end, 8_189);
 		List<BlockPos> finalBatch = placeEditableLine(end, firstBase.offset(0, 0, 4), 8);
 		EndBossArenaService.queueTerrainScar(end, finalBatch, 8, 0x51A3L);
 		helper.assertValueEqual(EndBossArenaService.tickTerrainScars(end), 3,
-				"The final tick must stop exactly at the 2048-edit lifetime cap");
-		helper.assertValueEqual(EndBossArenaService.permanentTerrainEdits(end), 2_048,
-				"The lifetime terrain budget must be exactly 2048");
+				"The final tick must stop exactly at the lifetime cap");
+		helper.assertValueEqual(EndBossArenaService.permanentTerrainEdits(end), 8_192,
+				"The lifetime terrain budget must be exactly 8192");
 		helper.assertValueEqual(EndBossArenaService.tickTerrainScars(end), 0,
 				"No queued scar may settle after the lifetime cap is exhausted");
 		EndBossArenaService.restoreTerrainEditCount(end, 0);
@@ -438,7 +459,7 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 		WorldInterfaceState.Snapshot combat = committedCombat(server, encounterId, stateLayout(arena));
 		try {
 			combat = requireApplied(WorldInterfaceState.mutate(server, encounterId, combat.revision(), state -> {
-				state.setClock(100L, end.getGameTime(), 0);
+				state.setClock(100L, end.getGameTime());
 				state.setActionSchedule(5L, 1, 500L);
 				state.putControlCooldown(controlledPlayer, 700L);
 				state.setCurrentAttack(new WorldInterfaceState.AttackEnvelope(1, 4L, 100L, 145L,
@@ -481,8 +502,17 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 		try {
 			helper.assertTrue(dragon.getUUID().equals(dragonId) && FriendlyDragonService.isFriendly(dragon),
 					"The successful ending dragon must use its persisted identity tag");
-			helper.assertTrue(dragon.isInvulnerable() && dragon.isNoAi() && dragon.getTarget() == null,
+			helper.assertTrue(dragon.isInvulnerable() && dragon.getTarget() == null,
 					"The successful ending dragon must remain non-hostile and player-immune");
+			// Harmlessness is expressed by invulnerability, no target, no fight registration and a
+			// phase that only holds station - never by freezing the entity. EnderDragon#aiStep gates
+			// the wing beat, the body-segment history and the part positioning behind isNoAi(), so a
+			// dragon with no AI is a rigid model, which is exactly what the ending used to show.
+			helper.assertFalse(dragon.isNoAi(),
+					"The ending dragon must keep its AI, or it has no animation at all");
+			helper.assertTrue(dragon.getPhaseManager().getCurrentPhase().getPhase()
+							== EnderDragonPhase.HOVERING,
+					"The ending dragon must be pinned to the phase that only holds station");
 			helper.assertTrue(FriendlyDragonService.recover(end, dragonId).orElse(null) == dragon,
 					"Recovery must resolve the same persistent friendly dragon instead of duplicating it");
 		} finally {
@@ -492,7 +522,7 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest(setupTicks = 82, maxTicks = 80)
-	public void allNineWorldInterfaceActionsExposeTheirServerContracts(GameTestHelper helper) {
+	public void everyWorldInterfaceActionExposesItsServerContract(GameTestHelper helper) {
 		MinecraftServer server = helper.getLevel().getServer();
 		ServerLevel end = requireEnd(helper);
 		EndBossArenaService.PreparedArena arena = EndBossArenaService.prepare(end);
@@ -506,15 +536,24 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 			WorldInterfaceEntity activeBoss = boss;
 			ServerPlayer target = attackTarget(helper, end, arena.safeSpawn());
 
-			// 1: laser -- exact direct damage after the 45-tick warning.
+			// 1: laser -- nothing lands during the lock, and the sweep burns a stationary target.
 			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.LASER_SWEEP,
 					List.of(target), 1L);
 			float before = target.getHealth();
+			WorldInterfaceAttackService.tick(end, boss, snapshot, 20L);
+			helper.assertTrue(Math.abs(before - target.getHealth()) < 0.001F,
+					"The laser lock window must not damage anyone; the warning is the whole point of it");
+			// The aim trail is fed one tick at a time, exactly as the encounter drives it, or the
+			// sweep has no history to trail behind.
+			for (long tick = 21L; tick < 90L; tick++) {
+				WorldInterfaceAttackService.tick(end, boss, snapshot, tick);
+			}
+			before = target.getHealth();
 			WorldInterfaceAttackService.AttackTick laserTick = WorldInterfaceAttackService.tick(
-					end, boss, snapshot, 45L);
+					end, boss, snapshot, 90L);
 			float observedLaserDamage = before - target.getHealth();
-			helper.assertTrue(Math.abs(observedLaserDamage - 12.0F) < 0.001F,
-					"Laser direct damage must be exactly twelve points after forty-five ticks; observed="
+			helper.assertTrue(Math.abs(observedLaserDamage - 3.0F) < 0.001F,
+					"A standing target must take exactly one burn tick as the sweep opens; observed="
 							+ observedLaserDamage + ", health=" + before + "->" + target.getHealth()
 							+ ", mode=" + target.gameMode.getGameModeForPlayer()
 							+ ", abilityInvulnerable=" + target.getAbilities().invulnerable
@@ -525,47 +564,43 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 									.map(WorldInterfaceState.AttackEnvelope::damageApplied).orElse(false));
 			snapshot = cancelAndClearAttack(server, encounterId);
 
-			// 2: energy orb -- a dedicated transient entity is spawned and cancellation removes it.
+			// 2: energy orb -- the core charges first, then a dedicated transient entity is spawned,
+			// and cancellation removes it.
 			resetAttackTarget(target, end, arena.safeSpawn());
 			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.ENERGY_ORB,
 					List.of(target), 2L);
+			helper.assertTrue(end.getEntitiesOfClass(WorldInterfaceEnergyOrbEntity.class,
+					new AABB(arena.center()).inflate(96.0D), Entity::isAlive).isEmpty(),
+					"The breath weapon must charge before it fires; no bolt may exist during the warning");
+			WorldInterfaceAttackService.tick(end, boss, snapshot,
+					WorldInterfaceProtocol.ORB_WARNING_TICKS);
 			helper.assertValueEqual(end.getEntitiesOfClass(WorldInterfaceEnergyOrbEntity.class,
 					new AABB(arena.center()).inflate(96.0D), Entity::isAlive).size(), 1,
-					"Energy-orb action must spawn exactly one dedicated orb");
+					"A completed charge must spawn exactly one dedicated orb");
 			WorldInterfaceEnergyOrbEntity orb = end.getEntitiesOfClass(WorldInterfaceEnergyOrbEntity.class,
 					new AABB(arena.center()).inflate(96.0D), Entity::isAlive).getFirst();
 			before = target.getHealth();
 			orb.setPos(target.position());
-			orb.detonate(end, true);
-			helper.assertTrue(Math.abs((before - target.getHealth()) - 14.0F) < 0.001F,
-					"Energy-orb impact must deal exactly fourteen damage");
+			orb.detonate(end, target.position(), true);
+			helper.assertTrue(Math.abs((before - target.getHealth()) - 12.0F) < 0.001F,
+					"Energy-bolt impact must deal exactly twelve damage");
 			WorldInterfaceAttackService.tick(end, boss, snapshot, 0L);
 			snapshot = cancelAndClearAttack(server, encounterId);
 			helper.assertTrue(end.getEntitiesOfClass(WorldInterfaceEnergyOrbEntity.class,
 					new AABB(arena.center()).inflate(96.0D), Entity::isAlive).isEmpty(),
 					"Cancelling the orb action must remove its transient entity");
 
-			// 3: grab slam -- control begins at 30 and is released with twelve damage at 70.
+			// 4: sky lance -- the lock and charge do nothing; the strike lands at tick forty.
 			resetAttackTarget(target, end, arena.safeSpawn());
-			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.GRAB_SLAM,
-					List.of(target), 3L);
-			WorldInterfaceAttackService.tick(end, boss, snapshot, 30L);
-			helper.assertTrue(target.isNoGravity(), "Grab slam must take authoritative control at tick thirty");
-			before = target.getHealth();
-			WorldInterfaceAttackService.tick(end, boss, snapshot, 70L);
-			helper.assertFalse(target.isNoGravity(), "Grab slam must restore the original gravity state");
-			helper.assertTrue(Math.abs((before - target.getHealth()) - 12.0F) < 0.001F,
-					"Grab slam must deal exactly twelve direct damage");
-			snapshot = cancelAndClearAttack(server, encounterId);
-
-			// 4: mental assault -- damage begins after the 40-tick gaze warning.
-			resetAttackTarget(target, end, arena.safeSpawn());
-			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.MENTAL_ASSAULT,
+			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.SKY_LANCE,
 					List.of(target), 4L);
 			before = target.getHealth();
-			WorldInterfaceAttackService.tick(end, boss, snapshot, 40L);
-			helper.assertTrue(Math.abs((before - target.getHealth()) - 4.0F) < 0.001F,
-					"Mental assault must deal exactly four damage");
+			WorldInterfaceAttackService.tick(end, boss, snapshot, 89L);
+			helper.assertTrue(Math.abs(before - target.getHealth()) < 0.001F,
+					"Nothing may land before the lance falls; the charge is the window to leave the mark");
+			WorldInterfaceAttackService.tick(end, boss, snapshot, 90L);
+			helper.assertTrue(Math.abs((before - target.getHealth()) - 15.0F) < 0.001F,
+					"A target still standing on the mark must take the full lance");
 			snapshot = cancelAndClearAttack(server, encounterId);
 
 			// 5: weapon theft -- the exact selected weapon enters custody and cancellation restores it.
@@ -575,27 +610,38 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 			target.getInventory().setItem(0, Items.DIAMOND_SWORD.getDefaultInstance());
 			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.CHARGE_WEAPON_STEAL,
 					List.of(target), 5L);
-			WorldInterfaceAttackService.tick(end, boss, snapshot, 35L);
-			helper.assertTrue(target.getInventory().getItem(0).isEmpty(),
-					"Weapon theft must remove the selected valid weapon after thirty-five ticks");
+			WorldInterfaceAttackService.tick(end, boss, snapshot, 55L);
+			helper.assertTrue(ConfiscationService.isPlaceholder(target.getInventory().getItem(0)),
+					"Weapon custody must leave a placeholder in the slot rather than an empty hole");
 			snapshot = cancelAndClearAttack(server, encounterId);
 			helper.assertValueEqual(countInventoryItem(target, Items.DIAMOND_SWORD), 1,
 					"Cancelling weapon custody must restore the exact sword once");
+			helper.assertValueEqual(ConfiscationService.clearPlaceholders(target), 0,
+					"Returning the weapon must consume its placeholder");
 
-			// 6: grab throw -- a bounded ten-tick arc releases control and deals at most ten damage.
+			// 6: grab throw -- lift and wind-up interpolate, then the victim is hurled upward and freed.
 			resetAttackTarget(target, end, arena.safeSpawn());
 			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.GRAB_THROW,
 					List.of(target), 6L);
-			WorldInterfaceAttackService.tick(end, boss, snapshot, 30L);
-			helper.assertTrue(target.isNoGravity(), "Grab throw must take control after its warning");
+			// Warning 50, lift 14, then a 16-tick wind-up that swings the victim out past the rim of
+			// the body before the release; the launch itself lands on tick 80.
 			WorldInterfaceAttackService.tick(end, boss, snapshot, 50L);
+			helper.assertTrue(target.isNoGravity(), "Grab throw must take control after its warning");
+			WorldInterfaceAttackService.tick(end, boss, snapshot, 64L);
 			before = target.getHealth();
-			WorldInterfaceAttackService.tick(end, boss, snapshot, 60L);
-			helper.assertFalse(target.isNoGravity(), "Grab throw must release control at the safe landing");
+			WorldInterfaceAttackService.tick(end, boss, snapshot, 79L);
+			helper.assertTrue(target.isNoGravity(),
+					"The wind-up must still hold the victim; the swing out is part of the throw");
+			WorldInterfaceAttackService.tick(end, boss, snapshot, 80L);
+			helper.assertFalse(target.isNoGravity(),
+					"The launch must hand gravity back; the fall is the player's to answer");
 			helper.assertTrue(Math.abs((before - target.getHealth()) - 10.0F) < 0.001F,
-					"Grab throw must deal exactly ten direct collision damage");
+					"Grab throw must deal exactly ten direct damage as it lets go");
+			helper.assertTrue(target.getDeltaMovement().y > 1.5D,
+					"The victim must leave the interface travelling upward, not toward a scripted landing");
 			helper.assertTrue(horizontalDistanceSquared(target.position(), arena.center().getCenter())
-					<= 130.0D * 130.0D, "Grab throw landing must remain inside the safe combat radius");
+					<= 130.0D * 130.0D, "The launch must not push anyone outside the safe combat radius");
+			WorldInterfaceAttackService.tick(end, boss, snapshot, 96L);
 			snapshot = clearCurrentAttack(server, encounterId);
 
 			// 7: gaze hotbar clear -- one whole slot becomes a protected world item at tick 48.
@@ -604,35 +650,45 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 			target.getInventory().setItem(0, new ItemStack(Items.COBBLESTONE, 8));
 			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.GAZE_HOTBAR_CLEAR,
 					List.of(target), 7L);
-			WorldInterfaceAttackService.tick(end, boss, snapshot, 48L);
+			WorldInterfaceAttackService.tick(end, boss, snapshot, 68L);
 			helper.assertTrue(target.getInventory().getItem(0).isEmpty(),
-					"Hotbar clear must remove the first complete slot at tick forty-eight");
+					"Hotbar clear must remove the first complete slot one step after its warning");
 			helper.assertTrue(end.getEntitiesOfClass(ItemEntity.class,
 					new AABB(target.blockPosition()).inflate(8.0D), item -> item.getItem().is(Items.COBBLESTONE))
-					.stream().anyMatch(ItemEntity::isInvulnerable),
-					"The removed hotbar stack must exist as an invulnerable world item");
+					.stream().noneMatch(ItemEntity::isInvulnerable),
+					"Purged stacks are ordinary drops now - anyone at the table may pick them up");
 			snapshot = cancelAndClearAttack(server, encounterId);
 
-			// 8: arrow reflection -- a captured player arrow becomes one twenty-arrow boss volley.
+			// 8: tendril lash -- nothing during the rear-up, then one strike per interval.
 			resetAttackTarget(target, end, arena.safeSpawn());
-			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.ARROW_REFLECTION,
+			target.teleportTo(activeBoss.getX(), target.getY(), activeBoss.getZ());
+			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.TENDRIL_LASH,
 					List.of(target), 8L);
-			Arrow captured = EntityType.ARROW.create(end, EntitySpawnReason.EVENT);
-			if (captured == null) throw new AssertionError("Unable to create captured-arrow fixture");
-			captured.setOwner(target);
-			captured.setPos(boss.getX(), boss.getEyeY(), boss.getZ());
-			helper.assertTrue(end.addFreshEntity(captured), "Captured-arrow fixture must enter the End");
-			helper.assertTrue(WorldInterfaceAttackService.captureArrow(end, boss, captured)
-					&& captured.noPhysics && captured.isNoGravity(),
-					"Player arrows touching a boss part must be frozen into custody");
-			WorldInterfaceAttackService.tick(end, boss, snapshot, 40L);
-			helper.assertValueEqual(end.getEntitiesOfClass(AbstractArrow.class,
-					new AABB(boss.blockPosition()).inflate(96.0D), arrow -> arrow.getOwner() == activeBoss).size(), 20,
-					"One reflection volley must contain exactly twenty boss-owned arrows");
+			// Derived rather than written out: the telegraph is the dodge window and gets retuned,
+			// and a test that pinned the tick it used to land on would fail for the tuning rather
+			// than for the contract. What is asserted is the shape - nothing during the rear-up,
+			// nothing before the telegraph is over, one hit per interval after.
+			long rearUp = WorldInterfaceProtocol.TENDRIL_WARNING_TICKS;
+			long telegraph = WorldInterfaceProtocol.TENDRIL_STRIKE_TELEGRAPH_TICKS;
+			long interval = WorldInterfaceProtocol.TENDRIL_STRIKE_INTERVAL_TICKS;
+			long firstImpact = rearUp + telegraph;
+			before = target.getHealth();
+			WorldInterfaceAttackService.tick(end, boss, snapshot, rearUp - 1L);
+			helper.assertTrue(Math.abs(before - target.getHealth()) < 0.001F,
+					"The tendrils must not reach anyone while they are still rearing up");
+			// The rear-up ends by marking the first lash; nothing lands until the telegraph has run.
+			WorldInterfaceAttackService.tick(end, boss, snapshot, rearUp);
+			WorldInterfaceAttackService.tick(end, boss, snapshot, firstImpact - 1L);
+			helper.assertTrue(Math.abs(before - target.getHealth()) < 0.001F,
+					"A marked lash must not land before its telegraph is over - that is the dodge");
+			WorldInterfaceAttackService.tick(end, boss, snapshot, firstImpact);
+			helper.assertTrue(Math.abs((before - target.getHealth()) - 8.0F) < 0.001F,
+					"The first lash must land exactly eight damage on the spot it marked");
+			before = target.getHealth();
+			WorldInterfaceAttackService.tick(end, boss, snapshot, firstImpact + interval);
+			helper.assertTrue(Math.abs((before - target.getHealth()) - 8.0F) < 0.001F,
+					"Each successive lash must land on its own interval rather than as one long hit");
 			snapshot = cancelAndClearAttack(server, encounterId);
-			helper.assertTrue(end.getEntitiesOfClass(AbstractArrow.class,
-					new AABB(boss.blockPosition()).inflate(96.0D), arrow -> arrow.getOwner() == activeBoss).isEmpty(),
-					"Cancelling reflection must remove every leased reflected arrow");
 
 			// 9: forced eviction -- warning completion closes the selected non-host connection.
 			ServerPlayer evicted = attackTarget(helper, end, arena.safeSpawn());
@@ -672,32 +728,40 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 			target.getInventory().setItem(0, Items.DIAMOND_AXE.getDefaultInstance());
 			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.CHARGE_WEAPON_STEAL,
 					List.of(target), 101L);
-			WorldInterfaceAttackService.tick(end, boss, snapshot, 35L);
-			helper.assertTrue(target.getInventory().getItem(0).isEmpty(), "Weapon fixture must enter custody");
+			WorldInterfaceAttackService.tick(end, boss, snapshot, 55L);
+			helper.assertTrue(ConfiscationService.isPlaceholder(target.getInventory().getItem(0)),
+					"Weapon fixture must enter custody behind its placeholder");
 			WorldInterfaceAttackService.onDisconnect(target, encounterId);
 			helper.assertValueEqual(countInventoryItem(target, Items.DIAMOND_AXE), 1,
 					"Disconnect recovery must return the entrusted weapon exactly once");
+			helper.assertValueEqual(ConfiscationService.clearPlaceholders(target), 0,
+					"Returning the weapon must consume its placeholder");
 			snapshot = cancelAndClearAttack(server, encounterId);
 
-			// Restart cancellation discards the protected drop and restores its exact stack.
+			// The purge keeps no ledger: what it throws is an ordinary drop and stays one.
 			resetAttackTarget(target, end, arena.safeSpawn());
 			target.getInventory().clearContent();
 			target.getInventory().setItem(0, new ItemStack(Items.AMETHYST_SHARD, 7));
 			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.GAZE_HOTBAR_CLEAR,
 					List.of(target), 102L);
-			WorldInterfaceAttackService.tick(end, boss, snapshot, 48L);
+			WorldInterfaceAttackService.tick(end, boss, snapshot, 68L);
 			helper.assertTrue(target.getInventory().getItem(0).isEmpty(), "Hotbar fixture must become a world drop");
+			helper.assertTrue(end.getEntitiesOfClass(ItemEntity.class,
+					new AABB(target.blockPosition()).inflate(8.0D),
+					item -> item.getItem().is(Items.AMETHYST_SHARD) && item.getItem().getCount() == 7)
+					.stream().anyMatch(item -> !item.isInvulnerable()),
+					"The purged stack must exist as an ordinary, freely reachable drop");
 			WorldInterfaceAttackService.onRestart(server, encounterId);
-			helper.assertValueEqual(countInventoryItem(target, Items.AMETHYST_SHARD), 7,
-					"Restart recovery must restore the complete hotbar stack without duplication");
+			helper.assertValueEqual(countInventoryItem(target, Items.AMETHYST_SHARD), 0,
+					"A restart must not conjure purged stacks back into the owner's inventory");
 			snapshot = clearCurrentAttack(server, encounterId);
 
 			// Disconnect releases a grab and restores its pre-control position.
 			resetAttackTarget(target, end, arena.safeSpawn());
 			Vec3 original = target.position();
-			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.GRAB_SLAM,
+			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.GRAB_THROW,
 					List.of(target), 103L);
-			WorldInterfaceAttackService.tick(end, boss, snapshot, 30L);
+			WorldInterfaceAttackService.tick(end, boss, snapshot, 50L);
 			helper.assertTrue(target.isNoGravity(), "Disconnect grab fixture must be controlled");
 			WorldInterfaceAttackService.onDisconnect(target, encounterId);
 			helper.assertFalse(target.isNoGravity(), "Disconnect must restore the original gravity flag");
@@ -710,7 +774,7 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 			original = target.position();
 			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.GRAB_THROW,
 					List.of(target), 104L);
-			WorldInterfaceAttackService.tick(end, boss, snapshot, 30L);
+			WorldInterfaceAttackService.tick(end, boss, snapshot, 50L);
 			helper.assertTrue(target.isNoGravity(), "Restart grab fixture must be controlled");
 			WorldInterfaceAttackService.onRestart(server, encounterId);
 			helper.assertFalse(target.isNoGravity(), "Restart cancellation must restore gravity");
@@ -829,6 +893,11 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 		Connection connection = new Connection(PacketFlow.SERVERBOUND);
 		new EmbeddedChannel(connection);
 		server.getPlayerList().placeNewPlayer(connection, player, cookie);
+		// A player whose client has not reported itself loaded is invulnerable to everything, which
+		// is correct in production -- nobody should be killed on their loading screen -- and wrong
+		// here, because this one has no client and would therefore never become vulnerable at all.
+		// Combat tests would then pass against a target that cannot be hurt.
+		player.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
 		return player;
 	}
 

@@ -41,7 +41,7 @@ class WorldInterfaceActionSchedulerTest {
 	void phaseIntervalsStayInsideTheirExactInclusiveRanges() {
 		assertIntervals(WorldInterfaceStage.PHASE_1, 140, 180);
 		assertIntervals(WorldInterfaceStage.PHASE_2, 100, 140);
-		assertIntervals(WorldInterfaceStage.PHASE_3, 70, 110);
+		assertIntervals(WorldInterfaceStage.PHASE_3, 35, 60);
 
 		int base = WorldInterfaceActionScheduler.baseIntervalTicks(WorldInterfaceStage.PHASE_2, 91L, 4L);
 		assertEquals(Math.round(base * 1.50D),
@@ -53,9 +53,9 @@ class WorldInterfaceActionSchedulerTest {
 	@Test
 	void exclusiveControlsShareOneLaneAndRespectSixHundredTickTargetImmunity() {
 		assertFalse(WorldInterfaceActionScheduler.canStartExclusiveControl(
-				WorldInterfaceAction.GRAB_THROW, WorldInterfaceAction.GRAB_SLAM));
+				WorldInterfaceAction.GRAB_THROW, WorldInterfaceAction.CHARGE_WEAPON_STEAL));
 		assertTrue(WorldInterfaceActionScheduler.canStartExclusiveControl(
-				WorldInterfaceAction.LASER_SWEEP, WorldInterfaceAction.GRAB_SLAM));
+				WorldInterfaceAction.LASER_SWEEP, WorldInterfaceAction.CHARGE_WEAPON_STEAL));
 		assertTrue(WorldInterfaceActionScheduler.canStartAction(
 				WorldInterfaceAction.GRAB_THROW, null, 999L, -1L));
 		assertFalse(WorldInterfaceActionScheduler.canStartAction(
@@ -63,7 +63,7 @@ class WorldInterfaceActionSchedulerTest {
 		assertTrue(WorldInterfaceActionScheduler.canStartAction(
 				WorldInterfaceAction.GRAB_THROW, null, 1_600L, 1_000L));
 		assertTrue(WorldInterfaceActionScheduler.isStrongControlTargetEligible(
-				WorldInterfaceAction.MENTAL_ASSAULT, 1L, 1L));
+				WorldInterfaceAction.SKY_LANCE, 1L, 1L));
 	}
 
 	@Test

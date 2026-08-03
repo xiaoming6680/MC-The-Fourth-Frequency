@@ -1,6 +1,7 @@
 package com.xm.thefourthfrequency.pursuit;
 
 import com.xm.thefourthfrequency.content.TerminalData;
+import com.xm.thefourthfrequency.ending.FinaleRuntimePolicy;
 import com.xm.thefourthfrequency.terminal.AnomalyIntensity;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
@@ -54,6 +55,17 @@ public final class PursuitDirector {
 		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
 		if (record == null || !record.getBooleanOr(TerminalData.BOUND, false)
 				|| record.getBooleanOr(TerminalData.PURSUIT_ACTIVE, false)) return;
+		// Past the finale there is no more mainline to escalate, so a pursuit left pending by an
+		// earlier story gate is retired rather than kept waiting for the player to walk back into a
+		// dimension it can start in. Without this the exit portal delivered them into one.
+		if (FinaleRuntimePolicy.concluded(data)) {
+			if (record.getBooleanOr(TerminalData.PURSUIT_PENDING, false)) {
+				data.updateTerminalRecord(player.getUUID(), tag ->
+						tag.putBoolean(TerminalData.PURSUIT_PENDING, false));
+				TerminalRuntimeService.synchronizeAttentionProjection(player, data);
+			}
+			return;
+		}
 		long now = player.level().getGameTime();
 		boolean early = PursuitProgressPolicy.earlyFormEligible(true,
 				record.getLongOr(TerminalData.ANOMALY_SEEN_MASK, 0L) == 0L ? 0 : 1,

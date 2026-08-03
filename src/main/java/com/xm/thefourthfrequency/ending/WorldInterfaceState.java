@@ -35,7 +35,7 @@ public final class WorldInterfaceState {
 	public static final int MAX_ROSTER_SIZE = 8;
 	public static final int MAX_ATTACK_TARGETS = 8;
 	public static final int MAX_RECOVERY_ENTRIES = 64;
-	public static final int MAX_TERRAIN_EDITS = 2_048;
+	public static final int MAX_TERRAIN_EDITS = 8_192;
 
 	private WorldInterfaceState() {
 	}
@@ -212,8 +212,6 @@ public final class WorldInterfaceState {
 		long activeTicks = nonNegative(tag.getLongOr("active_ticks", 0L), "active_ticks");
 		long runningSince = tag.getLongOr("running_since_game_time", -1L);
 		if (runningSince < -1L) throw invalid("running_since_game_time");
-		int anchorPenalty = boundedInt(tag.getIntOr("anchor_penalty_ticks", 0), 0, 6_000,
-				"anchor_penalty_ticks");
 		long seed = tag.getLongOr("deterministic_seed", 0L);
 		Optional<AttackEnvelope> attack = decodeAttack(tag.getCompoundOrEmpty("current_attack"));
 		long stageStarted = nonNegative(tag.getLongOr("stage_started_active_tick", 0L), "stage_started_active_tick");
@@ -243,7 +241,7 @@ public final class WorldInterfaceState {
 		Snapshot snapshot = new Snapshot(true, true, Optional.of(encounterId), revision, stage, outcome,
 				arenaVersion, dimension, arenaCenter, altarCenter, safeSpawn, arenaBuildCursor,
 				gates, anchors, roster, transactions, sacrificeCommitted, bossUuid, maxHealth, health,
-				activeTicks, runningSince, anchorPenalty, seed, attack, stageStarted, actionSequence,
+				activeTicks, runningSince, seed, attack, stageStarted, actionSequence,
 				lastAction, nextAction, lastEviction, controlCooldowns, recoveryGrace, terrainUsed,
 				respawns, poem, recovery, dragonId, exitPosition, exitOpen, resolutionStep, resolutionTick);
 		validate(snapshot, false);
@@ -274,7 +272,6 @@ public final class WorldInterfaceState {
 		tag.putDouble("virtual_health", state.virtualHealth());
 		tag.putLong("active_ticks", state.activeTicks());
 		tag.putLong("running_since_game_time", state.runningSinceGameTime());
-		tag.putInt("anchor_penalty_ticks", state.anchorPenaltyTicks());
 		tag.putLong("deterministic_seed", state.deterministicSeed());
 		state.currentAttack().ifPresent(value -> tag.put("current_attack", encodeAttack(value)));
 		tag.putLong("stage_started_active_tick", state.stageStartedActiveTick());
@@ -312,7 +309,6 @@ public final class WorldInterfaceState {
 				|| state.maxVirtualHealth() < 0.0D || state.virtualHealth() < 0.0D
 				|| state.virtualHealth() > state.maxVirtualHealth()) throw invalid("virtual_health");
 		if (state.activeTicks() < 0L || state.runningSinceGameTime() < -1L
-				|| state.anchorPenaltyTicks() < 0 || state.anchorPenaltyTicks() > 6_000
 				|| state.recoveryGraceTicks() < 0 || state.recoveryGraceTicks() > 40
 				|| state.terrainEditsUsed() < 0 || state.terrainEditsUsed() > MAX_TERRAIN_EDITS) throw invalid("combat_limits");
 		if (state.respawnLedger().size() > MAX_ROSTER_SIZE || state.poemLedger().size() > MAX_ROSTER_SIZE
@@ -328,9 +324,6 @@ public final class WorldInterfaceState {
 		}
 		if (state.resolutionStep() < 0 || state.resolutionStep() > 64 || state.resolutionTick() < -1L) {
 			throw invalid("resolution_state");
-		}
-		if (state.anchorPenaltyTicks() != state.destroyedAnchorCount() * 600) {
-			throw invalid("anchor_penalty_mismatch");
 		}
 		boolean hasCommittedTransaction = state.terminalTransactions().values().stream()
 				.anyMatch(value -> value.state() == TerminalTransactionState.COMMITTED);
@@ -821,7 +814,7 @@ public final class WorldInterfaceState {
 			List<Gate> gates, List<Anchor> anchors, Set<UUID> frozenRoster,
 			Map<UUID, TerminalTransaction> terminalTransactions, boolean sacrificeCommitted, Optional<UUID> bossUuid,
 			double maxVirtualHealth, double virtualHealth, long activeTicks, long runningSinceGameTime,
-			int anchorPenaltyTicks, long deterministicSeed, Optional<AttackEnvelope> currentAttack,
+			long deterministicSeed, Optional<AttackEnvelope> currentAttack,
 			long stageStartedActiveTick, long actionSequence, int lastActionWireId, long nextActionActiveTick,
 			long lastForcedEvictionTick, Map<UUID, Long> controlCooldowns,
 			int recoveryGraceTicks, int terrainEditsUsed, Map<UUID, RespawnLedgerEntry> respawnLedger,
@@ -881,7 +874,7 @@ public final class WorldInterfaceState {
 			return new Snapshot(present, valid, Optional.empty(), 0L, WorldInterfaceStage.UNPREPARED,
 					Outcome.NONE, 0, "", BlockPos.ZERO, BlockPos.ZERO, BlockPos.ZERO, 0,
 					List.of(), List.of(), Set.of(), Map.of(), false, Optional.empty(),
-					0.0D, 0.0D, 0L, -1L, 0, 0L, Optional.empty(),
+					0.0D, 0.0D, 0L, -1L, 0L, Optional.empty(),
 					0L, 0L, 0, 0L, -1L, Map.of(), 0, 0, Map.of(), Map.of(), List.of(),
 					Optional.empty(), BlockPos.ZERO, false, 0, -1L);
 		}
@@ -908,7 +901,6 @@ public final class WorldInterfaceState {
 		private double virtualHealth;
 		private long activeTicks;
 		private long runningSinceGameTime;
-		private int anchorPenaltyTicks;
 		private long deterministicSeed;
 		private AttackEnvelope currentAttack;
 		private long stageStartedActiveTick;
@@ -949,7 +941,6 @@ public final class WorldInterfaceState {
 			this.virtualHealth = source.virtualHealth();
 			this.activeTicks = source.activeTicks();
 			this.runningSinceGameTime = source.runningSinceGameTime();
-			this.anchorPenaltyTicks = source.anchorPenaltyTicks();
 			this.deterministicSeed = source.deterministicSeed();
 			this.currentAttack = source.currentAttack().orElse(null);
 			this.stageStartedActiveTick = source.stageStartedActiveTick();
@@ -975,7 +966,7 @@ public final class WorldInterfaceState {
 					WorldInterfaceStage.ARENA_READY, Outcome.NONE, arena.version(), arena.dimension(),
 					arena.arenaCenter(), arena.altarCenter(), arena.safeSpawn(), 0,
 					arena.gates(), arena.anchors(), Set.of(), Map.of(), false, Optional.empty(),
-					0.0D, 0.0D, 0L, -1L, 0, seed, Optional.empty(),
+					0.0D, 0.0D, 0L, -1L, seed, Optional.empty(),
 					0L, 0L, 0, 0L, -1L, Map.of(), 0, 0,
 					Map.of(), Map.of(), List.of(), Optional.empty(), arena.altarCenter(), false, 0, -1L);
 			return new MutableState(seedState);
@@ -1001,7 +992,6 @@ public final class WorldInterfaceState {
 		public double virtualHealth() { return virtualHealth; }
 		public long activeTicks() { return activeTicks; }
 		public long runningSinceGameTime() { return runningSinceGameTime; }
-		public int anchorPenaltyTicks() { return anchorPenaltyTicks; }
 		public long deterministicSeed() { return deterministicSeed; }
 		public Optional<AttackEnvelope> currentAttack() { return Optional.ofNullable(currentAttack); }
 		public long stageStartedActiveTick() { return stageStartedActiveTick; }
@@ -1055,7 +1045,6 @@ public final class WorldInterfaceState {
 			Anchor anchor = anchorAt(index);
 			if (anchor.destroyed()) return false;
 			anchors.set(index, new Anchor(index, anchor.position(), anchor.crystalUuid(), true));
-			anchorPenaltyTicks = Math.clamp(anchorPenaltyTicks + 600, 0, 6_000);
 			return true;
 		}
 
@@ -1112,11 +1101,10 @@ public final class WorldInterfaceState {
 		public void setBossUuid(UUID value) { bossUuid = Objects.requireNonNull(value, "value"); }
 		public void clearBossUuid() { bossUuid = null; }
 
-		public void setClock(long elapsed, long runningSince, int penaltyTicks) {
+		public void setClock(long elapsed, long runningSince) {
 			activeTicks = nonNegative(elapsed, "elapsed");
 			if (runningSince < -1L) throw invalid("runningSince");
 			runningSinceGameTime = runningSince;
-			anchorPenaltyTicks = Math.clamp(penaltyTicks, 0, 6_000);
 		}
 
 		public void setCurrentAttack(AttackEnvelope value) { currentAttack = value; }
@@ -1163,7 +1151,7 @@ public final class WorldInterfaceState {
 					List.copyOf(gates), List.copyOf(anchors), Set.copyOf(frozenRoster),
 					Map.copyOf(terminalTransactions), sacrificeCommitted, Optional.ofNullable(bossUuid),
 					maxVirtualHealth, virtualHealth,
-					activeTicks, runningSinceGameTime, anchorPenaltyTicks, deterministicSeed,
+					activeTicks, runningSinceGameTime, deterministicSeed,
 					Optional.ofNullable(currentAttack), stageStartedActiveTick, actionSequence, lastActionWireId,
 					nextActionActiveTick, lastForcedEvictionTick, Map.copyOf(controlCooldowns),
 					recoveryGraceTicks, terrainEditsUsed,

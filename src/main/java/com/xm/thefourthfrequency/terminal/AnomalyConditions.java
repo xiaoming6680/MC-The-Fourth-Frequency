@@ -15,7 +15,8 @@ public final class AnomalyConditions {
 		if (!(player.level() instanceof ServerLevel level)) return null;
 		return switch (definition.id()) {
 			case "phantom_echo" -> caveLike(level, player.blockPosition()) ? Prepared.NONE : null;
-			case "light_dropout" -> AnomalyServerEffects.hasExtinguishableLight(level, player.blockPosition())
+			case "light_dropout" -> nightLike(level)
+					&& AnomalyServerEffects.hasExtinguishableLight(level, player.blockPosition())
 					? Prepared.NONE : null;
 			case "surface_fracture" -> {
 				BlockPos target = surfaceTarget(level, player);
@@ -24,6 +25,15 @@ public final class AnomalyConditions {
 			case "action_echo" -> player.tickCount >= 60 ? Prepared.NONE : null;
 			default -> Prepared.NONE;
 		};
+	}
+
+	/**
+	 * Lights going out is only a loss while the sun is not there to replace them, so the dropout is a
+	 * night event. Dimensions without a day-night cycle never get that replacement in the first place
+	 * and are never excluded - the shared overworld clock says nothing about the Nether or the End.
+	 */
+	public static boolean nightLike(ServerLevel level) {
+		return level.dimensionType().hasFixedTime() || AnomalySelectionRules.night(level.getDayTime());
 	}
 
 	public static boolean caveLike(ServerLevel level, BlockPos origin) {

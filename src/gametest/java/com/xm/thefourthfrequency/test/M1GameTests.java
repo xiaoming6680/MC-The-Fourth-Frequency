@@ -7,6 +7,7 @@ import com.xm.thefourthfrequency.networking.TerminalNavigationPayload;
 import com.xm.thefourthfrequency.networking.TerminalToolSnapshotPayload;
 import com.xm.thefourthfrequency.state.NavigationState;
 import com.xm.thefourthfrequency.terminal.TerminalControlPolicy;
+import com.xm.thefourthfrequency.terminal.TerminalPage;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
 import com.xm.thefourthfrequency.terminal.TerminalResource;
 import com.xm.thefourthfrequency.terminal.TerminalStructureTarget;
@@ -26,18 +27,38 @@ import com.xm.thefourthfrequency.world.TerminalLifecycleService;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
+import net.minecraft.core.Registry;
+import net.minecraft.core.SectionPos;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.StructureManager;
+import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.chunk.ChunkGenerator;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
+import net.minecraft.world.level.levelgen.structure.Structure;
+import net.minecraft.world.level.levelgen.structure.StructurePiece;
+import net.minecraft.world.level.levelgen.structure.StructureStart;
+import net.minecraft.world.level.levelgen.structure.pieces.PiecesContainer;
+import net.minecraft.world.level.levelgen.structure.pieces.StructurePieceSerializationContext;
+import net.minecraft.world.level.levelgen.structure.pieces.StructurePieceType;
 
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.Set;
 
 public final class M1GameTests implements CustomTestMethodInvoker {
@@ -46,9 +67,29 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
 		var station = data.stationPosition().orElseThrow(() ->
 				new AssertionError("Relay Station Zero was not allocated"));
+		// The shape contract itself lives in ZeroStationLayoutTest, which does not need a world.
+		// What only a live world can prove is that the allocated centre still yields a plan that
+		// fits the tick budget the build service pays out of.
 		int placements = ZeroStationLayout.create(station).size();
-		helper.assertTrue(placements > 32, "Station must require multiple bounded tick batches");
-		helper.assertTrue(placements < 1_000, "Station plan must remain compact");
+		helper.assertTrue(placements > 512, "Station must require multiple bounded tick batches");
+		helper.assertTrue(placements < 4_096, "Station plan must remain compact");
+
+		// Regression guard: siting once read surface heights without requesting the chunk first, and
+		// an unloaded column answers with the world floor rather than failing. That scored bedrock as
+		// perfectly level ground and buried the whole station in solid rock. The station's own mast
+		// tops out eight above the centre, so anything solid at twelve means it is not on a surface.
+		// An absolute Y bound cannot express this: a flat test world sits four blocks off the floor.
+		ServerLevel level = helper.getLevel();
+		for (int dx = -ZeroStationLayout.HALF_WIDTH; dx <= ZeroStationLayout.HALF_WIDTH;
+				dx += ZeroStationLayout.HALF_WIDTH) {
+			for (int dz = -ZeroStationLayout.HALF_DEPTH; dz <= ZeroStationLayout.HALF_DEPTH;
+					dz += ZeroStationLayout.HALF_DEPTH) {
+				BlockPos overhead = station.offset(dx, 12, dz);
+				helper.assertTrue(level.getBlockState(overhead).isAir(),
+						"Relay Station Zero was sited underground: " + station + " is roofed by "
+								+ level.getBlockState(overhead) + " at " + overhead);
+			}
+		}
 		helper.succeed();
 	}
 
@@ -113,9 +154,11 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		helper.assertTrue(TerminalRuntimeService.isOpen(first), "First valid terminal view must open");
 		helper.assertTrue(TerminalRuntimeService.isOpen(second), "Second valid terminal view must open independently");
 
+		TerminalRuntimeService.control(first, TerminalControlPayload.VISIT_PAGE, TerminalPage.FILES.ordinal());
 		TerminalRuntimeService.control(first, TerminalControlPayload.MODE,
 				TerminalControlPolicy.Mode.FILES.ordinal());
 		TerminalRuntimeService.control(first, TerminalControlPayload.TUNE, 65);
+		TerminalRuntimeService.control(second, TerminalControlPayload.VISIT_PAGE, TerminalPage.TOOLS.ordinal());
 		TerminalRuntimeService.control(second, TerminalControlPayload.MODE,
 				TerminalControlPolicy.Mode.SIGNAL.ordinal());
 		TerminalRuntimeService.control(second, TerminalControlPayload.TUNE, 44);
@@ -125,15 +168,23 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 		helper.assertFalse(TerminalRuntimeService.isOpen(first), "Close must clear the first transient view");
 		helper.assertValueEqual(TerminalRuntimeService.rememberedMode(first.getUUID()),
 				TerminalControlPolicy.Mode.FILES.ordinal(), "First remembered page");
+		helper.assertValueEqual(TerminalRuntimeService.rememberedPage(first.getUUID()),
+				TerminalPage.FILES.ordinal(), "First remembered tab");
 		helper.assertValueEqual(TerminalRuntimeService.rememberedTuning(first.getUUID()),
 				TerminalControlPolicy.DEFAULT_TUNING, "A non-signal page cannot alter the receiver");
 		helper.assertValueEqual(TerminalRuntimeService.rememberedMode(second.getUUID()),
 				TerminalControlPolicy.Mode.SIGNAL.ordinal(), "Second remembered page");
+		// The wire mode collapses home, tools and records into one value, so only the page memory can
+		// tell the reopened terminal that this player left the tools grid rather than the home card.
+		helper.assertValueEqual(TerminalRuntimeService.rememberedPage(second.getUUID()),
+				TerminalPage.TOOLS.ordinal(), "Second remembered tab");
 		helper.assertValueEqual(TerminalRuntimeService.rememberedTuning(second.getUUID()),
 				TerminalControlPolicy.DEFAULT_TUNING, "The tools grid cannot alter the receiver");
 
 		TerminalRuntimeService.open(first, 0);
 		helper.assertTrue(TerminalRuntimeService.isOpen(first), "Reopening must restore the remembered view");
+		helper.assertValueEqual(TerminalRuntimeService.rememberedPage(first.getUUID()),
+				TerminalPage.FILES.ordinal(), "Reopening must land on the remembered tab");
 		TerminalRuntimeService.control(first, TerminalControlPayload.CLOSE, 0);
 		helper.succeed();
 	}
@@ -308,98 +359,249 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest
-	public void automaticMineralSurveyWaitsForAClosedTerminalAndClearsAfterLeaving(GameTestHelper helper) {
+	public void automaticSurveyReportsOnlyHighValueOreAndItsReadingOutlivesTheEpisode(GameTestHelper helper) {
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
 		ServerPlayer player = helper.makeMockServerPlayerInLevel();
-		BlockPos ore = player.blockPosition().below(2);
-		BlockPos fartherOre = player.blockPosition().offset(-8, 0, 0);
-		helper.getLevel().setBlockAndUpdate(ore, Blocks.IRON_ORE.defaultBlockState());
-		helper.getLevel().setBlockAndUpdate(fartherOre, Blocks.DIAMOND_ORE.defaultBlockState());
+		BlockPos common = player.blockPosition().below(2);
+		BlockPos valuable = player.blockPosition().below(3);
+		// Every mock player spawns on the world origin, so the blocks the survey will sweep are
+		// shared with the rest of the batch. Clearing them is what makes "nothing worth reporting"
+		// a real starting state instead of whatever the previous test happened to leave behind.
+		clearSurveyRange(helper.getLevel(), player.blockPosition());
+		helper.getLevel().setBlockAndUpdate(common, Blocks.IRON_ORE.defaultBlockState());
 		data.updateTerminalRecord(player.getUUID(), record -> record.putInt(
 				TerminalData.SURVIVAL_MILESTONE_MASK, SurvivalMilestone.MINED_LOGS.mask()));
 		player.setItemInHand(InteractionHand.MAIN_HAND, findTerminal(player));
 
 		TerminalRuntimeService.open(player, 0);
 		helper.assertTrue(TerminalRuntimeService.isOpen(player), "Fixture terminal must be open");
-		ResourceGuidanceService.updatePlayerForTesting(player, 0);
-		var whileOpen = data.terminalRecord(player.getUUID()).orElseThrow();
-		helper.assertFalse(whileOpen.getBooleanOr(TerminalData.MINERAL_SURVEY_PROXIMITY, false),
-				"An open terminal must pause automatic mineral scanning");
-		helper.assertFalse(whileOpen.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false),
-				"An open terminal must never roll or publish a nearby mineral prompt");
-
-		TerminalRuntimeService.control(player, TerminalControlPayload.CLOSE, 0);
-		ResourceGuidanceService.updatePlayerForTesting(player, 30);
-		var missed = data.terminalRecord(player.getUUID()).orElseThrow();
-		helper.assertTrue(missed.getBooleanOr(TerminalData.MINERAL_SURVEY_PROXIMITY, false),
-				"A real ore inside five blocks must create one proximity episode");
-		helper.assertFalse(missed.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false),
-				"A failed thirty-percent roll must stay silent");
-		ResourceGuidanceService.updatePlayerForTesting(player, 0);
-		helper.assertFalse(data.terminalRecord(player.getUUID()).orElseThrow()
-						.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false),
-				"Standing beside the same ore must not repeatedly reroll until success");
-
-		helper.assertTrue(player.teleportTo(helper.getLevel(), ore.getX() + 6.5, ore.getY() + 2.0,
-				ore.getZ() + 0.5, Set.of(), 0.0F, 0.0F, true), "Leave the failed proximity episode");
-		ResourceGuidanceService.updatePlayerForTesting(player, 0);
+		ResourceGuidanceService.updatePlayer(player);
 		helper.assertFalse(data.terminalRecord(player.getUUID()).orElseThrow()
 						.getBooleanOr(TerminalData.MINERAL_SURVEY_PROXIMITY, false),
-				"Leaving the survey range must allow a future independent episode");
-		helper.assertTrue(player.teleportTo(helper.getLevel(), ore.getX() + 0.5, ore.getY() + 2.0,
-				ore.getZ() + 0.5, Set.of(), 0.0F, 0.0F, true), "Return for a new proximity episode");
-		ResourceGuidanceService.updatePlayerForTesting(player, 0);
+				"An open terminal must pause automatic mineral scanning");
+		TerminalRuntimeService.control(player, TerminalControlPayload.CLOSE, 0);
+
+		ResourceGuidanceService.updatePlayer(player);
+		var ordinary = data.terminalRecord(player.getUUID()).orElseThrow();
+		BlockPos reported = BlockPos.of(ordinary.getLongOr(TerminalData.MINERAL_SURVEY_POSITION, 0L));
+		helper.assertFalse(ordinary.getBooleanOr(TerminalData.MINERAL_SURVEY_PROXIMITY, false),
+				"Iron beneath the player's feet is not worth a survey and must not open an episode;"
+						+ " the survey instead reported " + helper.getLevel().getBlockState(reported)
+						+ " at " + reported + " while the player stood at " + player.blockPosition());
+		helper.assertValueEqual(ordinary.getIntOr(TerminalData.MINERAL_READING_KIND,
+				ResourceGuidanceService.READING_NONE), ResourceGuidanceService.READING_NONE,
+				"Ordinary ore must leave the mineral tool empty");
+
+		helper.getLevel().setBlockAndUpdate(valuable, Blocks.DIAMOND_ORE.defaultBlockState());
+		// The sweep that just found nothing parks itself for five seconds; a single-tick test has to
+		// stand in for that wait.
+		ResourceGuidanceService.forgetAutoScanForTesting(player);
+		ResourceGuidanceService.updatePlayer(player);
 		var surveyed = data.terminalRecord(player.getUUID()).orElseThrow();
 		helper.assertTrue(surveyed.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false),
-				"A deterministic successful thirty-percent roll must publish the prompt");
+				"Diamond inside the survey range must be reported without any roll");
+		helper.assertValueEqual(surveyed.getIntOr(TerminalData.MINERAL_READING_KIND, -1),
+				ResourceGuidanceService.READING_EXACT, "A survey hit must become an exact reading");
+		var located = NavigationState.read(surveyed);
+		helper.assertTrue(located.located(), "A survey hit must be immediately navigable");
+		helper.assertValueEqual(located.position(), valuable.asLong(), "Surveyed ore position");
+		helper.assertValueEqual(located.kind(), TerminalResource.DIAMOND.id(), "Surveyed ore kind");
 		var snapshot = TerminalToolService.snapshot(player, TerminalToolService.NO_TOOL);
 		helper.assertValueEqual(snapshot.protocolVersion(),
 				TerminalToolSnapshotPayload.CURRENT_PROTOCOL_VERSION, "Nearby mineral tool snapshot protocol");
-		helper.assertTrue(snapshot.mineralSurveyNearby(), "Tool snapshot must expose the nearby mineral state");
 		helper.assertValueEqual(snapshot.recommendedPrimaryTool(), TerminalTool.MINERALS.slot(),
 				"The nearby mineral state must promote the mineral shortcut");
+
+		// The regression this guards: the reveal used to live only while the player stood inside
+		// the five-block episode, so walking on - which takes about a second - emptied the tool
+		// before they could open it and act on what they had just been told about.
+		helper.assertTrue(player.teleportTo(helper.getLevel(), valuable.getX() + 12.5,
+				valuable.getY() + 2.0, valuable.getZ() + 0.5, Set.of(), 0.0F, 0.0F, true),
+				"Walk out of the survey episode");
+		ResourceGuidanceService.updatePlayer(player);
+		var afterLeaving = data.terminalRecord(player.getUUID()).orElseThrow();
+		helper.assertFalse(afterLeaving.getBooleanOr(TerminalData.MINERAL_SURVEY_PROXIMITY, false),
+				"Leaving the range must end the episode so a later ore can be reported");
+		helper.assertValueEqual(afterLeaving.getIntOr(TerminalData.MINERAL_READING_KIND, -1),
+				ResourceGuidanceService.READING_EXACT, "The reading itself must survive leaving the episode");
+		// The needle only describes a target while the tool is open or already guiding, so the
+		// preview is read the way a player reaches it: open the terminal on the mineral page.
 		TerminalRuntimeService.open(player, 0);
 		TerminalRuntimeService.control(player, TerminalControlPayload.SELECT_TOOL, TerminalTool.MINERALS.slot());
 		var preview = TerminalRuntimeService.navigationSnapshot(player);
-		helper.assertValueEqual(preview.targetKind(), TerminalNavigationPayload.IRON,
-				"Automatic surveying must describe the nearest mineral, not a farther ore");
+		helper.assertValueEqual(preview.targetKind(), TerminalNavigationPayload.DIAMOND,
+				"The surveyed mineral must still describe itself after the episode ended");
 		helper.assertTrue(preview.located() && preview.navigable(),
-				"The mineral detail preview must expose a concrete navigable target");
+				"The surveyed target must still be navigable after the episode ended");
 		helper.assertTrue(TerminalToolService.startGuidance(player, TerminalTool.MINERALS.slot()),
-				"The detail-page navigation button must accept an automatic survey target");
-		var promoted = NavigationState.read(data.terminalRecord(player.getUUID()).orElseThrow());
-		helper.assertValueEqual(promoted.kind(), TerminalResource.IRON.id(),
-				"Starting navigation must preserve the automatically surveyed mineral kind");
-		helper.assertValueEqual(promoted.position(), ore.asLong(),
-				"Starting navigation must promote the nearest concrete ore block");
+				"Guidance must accept a survey reading taken before the player walked on");
 		TerminalRuntimeService.control(player, TerminalControlPayload.CLOSE, 0);
 
-		helper.assertTrue(player.teleportTo(helper.getLevel(), ore.getX() + 6.5, ore.getY() + 2.0,
-				ore.getZ() + 0.5, Set.of(), 0.0F, 0.0F, true), "Move outside the five-block survey range");
-		ResourceGuidanceService.updatePlayerForTesting(player, 0);
-		var cleared = data.terminalRecord(player.getUUID()).orElseThrow();
-		helper.assertFalse(cleared.getBooleanOr(TerminalData.MINERAL_SURVEY_PROXIMITY, false),
-				"Leaving the survey range must reset the proximity episode");
-		helper.assertFalse(cleared.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false),
-				"Leaving the survey range must clear the visible prompt");
-		helper.assertFalse(TerminalToolService.snapshot(player, TerminalToolService.NO_TOOL).mineralSurveyNearby(),
-				"The cleared prompt must disappear from tools and shortcuts");
+		helper.getLevel().setBlockAndUpdate(valuable, Blocks.AIR.defaultBlockState());
+		ResourceGuidanceService.updatePlayer(player);
+		helper.assertValueEqual(data.terminalRecord(player.getUUID()).orElseThrow()
+						.getIntOr(TerminalData.MINERAL_READING_KIND, -1),
+				ResourceGuidanceService.READING_NONE, "Mining the surveyed ore out must clear the reading");
 		helper.succeed();
 	}
 
+	/**
+	 * Pins the three layers of structure arrival against a real, registered structure.
+	 *
+	 * <p>The located target cannot carry height - vanilla reports every structure at y=0 - so the
+	 * vertical half of the test has to come from the generated structure instead. That is not
+	 * something a pure policy test can reach, hence a GameTest: it plants a genuine
+	 * {@code StructureStart} in the world and then drives the same {@code StructureManager} calls
+	 * production uses.</p>
+	 */
 	@GameTest
-	public void structureNavigationCompletesWithinFiftyBlocksAndBecomesAPersistentPrompt(GameTestHelper helper) {
+	public void structureArrivalUsesTheRealVerticalExtentWhenTheWorldCanSupplyIt(GameTestHelper helper) {
+		ServerLevel level = helper.getLevel();
+		// Arrival is a pure function of two positions, so this drives it with synthetic ones rather
+		// than a mock player: every mock player spawns on the world origin, which the other tests in
+		// the batch share, and the test world's floor leaves no room to bury anything beneath one.
+		BlockPos anchor = helper.absolutePos(BlockPos.ZERO);
+		// Built the way selectTarget builds it: true horizontal position, placeholder height.
+		BlockPos target = new BlockPos(anchor.getX() + 8, 0, anchor.getZ() + 8);
+		int boxBottom = level.getMinY() + 10;
+		int boxTop = boxBottom + 20;
+		BlockPos surface = new BlockPos(anchor.getX(), boxTop + 60, anchor.getZ());
+
+		helper.assertTrue(StructureNavigationService.arrived(level, surface, target,
+						TerminalStructureTarget.FORTRESS),
+				"With nothing generated to measure, the horizontal radius must still decide alone");
+
+		int reachEast = 60;
+		plantStructure(level, target, TerminalStructureTarget.FORTRESS, boxBottom, boxTop, reachEast);
+		// A miss is StructureStart.INVALID_START rather than null, so validity is the real test.
+		helper.assertFalse(level.structureManager().getStructureWithPieceAt(surface,
+						TerminalStructureTarget.FORTRESS.structureTag()).isValid(),
+				"Fixture failed: the surface position already sits inside a structure of this tag");
+		helper.assertTrue(level.structureManager().getStructureWithPieceAt(
+						new BlockPos(target.getX(), (boxBottom + boxTop) / 2, target.getZ()),
+						TerminalStructureTarget.FORTRESS.structureTag()).isValid(),
+				"Fixture failed: the planted structure is not visible to StructureManager at all");
+		helper.assertTrue(!level.structureManager()
+						.startsForStructure(new ChunkPos(target), candidate -> true).isEmpty(),
+				"Fixture failed: no structure start is reachable from the target chunk at all");
+		helper.assertTrue(!level.structureManager()
+						.startsForStructure(new ChunkPos(target), taggedStructures(level,
+								TerminalStructureTarget.FORTRESS)::contains).isEmpty(),
+				"Fixture failed: the planted start is not matched by the target's own structure tag");
+
+		helper.assertFalse(StructureNavigationService.arrived(level, surface, target,
+						TerminalStructureTarget.FORTRESS),
+				"A structure " + (surface.getY() - boxTop) + " blocks down must not count as reached from"
+						+ " the surface above it");
+		helper.assertTrue(StructureNavigationService.arrived(level,
+						new BlockPos(target.getX(), boxTop + StructureNavigationService.VERTICAL_ARRIVAL_TOLERANCE,
+								target.getZ()), target, TerminalStructureTarget.FORTRESS),
+				"The tolerance band directly above the structure still counts as reaching it");
+		helper.assertFalse(StructureNavigationService.arrived(level,
+						new BlockPos(target.getX(), boxTop + StructureNavigationService.VERTICAL_ARRIVAL_TOLERANCE + 1,
+								target.getZ()), target, TerminalStructureTarget.FORTRESS),
+				"One block past the tolerance band must not count");
+
+		// Far outside the horizontal radius but inside a corridor: the piece test has to win, or a
+		// player standing in the mineshaft would be told they had not found it yet.
+		BlockPos deepInside = new BlockPos(target.getX() + reachEast - 2,
+				(boxBottom + boxTop) / 2, target.getZ());
+		helper.assertTrue(deepInside.getX() - target.getX() > TerminalStructureTarget.FORTRESS.arrivalRadius(),
+				"Fixture must place the player beyond the horizontal radius");
+		helper.assertTrue(StructureNavigationService.arrived(level, deepInside, target,
+						TerminalStructureTarget.FORTRESS),
+				"Standing inside one of the structure's own pieces is arrival outright");
+		helper.succeed();
+	}
+
+	/** Empties the passive survey's whole sweep radius so a test starts from "nothing to report". */
+	private static void clearSurveyRange(ServerLevel level, BlockPos centre) {
+		int reach = MineralSurveyPolicy.RANGE + 1;
+		for (BlockPos position : BlockPos.betweenClosed(centre.offset(-reach, -reach, -reach),
+				centre.offset(reach, reach, reach))) {
+			if (!level.isOutsideBuildHeight(position)) {
+				level.setBlockAndUpdate(position, Blocks.AIR.defaultBlockState());
+			}
+		}
+	}
+
+	private static Set<Structure> taggedStructures(ServerLevel level, TerminalStructureTarget which) {
+		Registry<Structure> registry = level.registryAccess().lookupOrThrow(Registries.STRUCTURE);
+		Set<Structure> tagged = new java.util.HashSet<>();
+		for (Holder<Structure> holder : registry.getTagOrEmpty(which.structureTag())) tagged.add(holder.value());
+		return tagged;
+	}
+
+	/** Registers a real StructureStart with a known box so arrival has genuine geometry to read. */
+	private static void plantStructure(ServerLevel level, BlockPos target, TerminalStructureTarget which,
+			int minY, int maxY, int reachEast) {
+		Structure structure = null;
+		for (Structure candidate : taggedStructures(level, which)) {
+			structure = candidate;
+			break;
+		}
+		if (structure == null) throw new AssertionError("No structure is registered under " + which.id());
+		BoundingBox box = new BoundingBox(target.getX() - 4, minY, target.getZ() - 4,
+				target.getX() + reachEast, maxY, target.getZ() + 4);
+		ChunkPos startChunk = new ChunkPos(target);
+		StructureStart start = new StructureStart(structure, startChunk, 0,
+				new PiecesContainer(List.of(new StubPiece(box))));
+		StructureManager manager = level.structureManager();
+		ChunkAccess startChunkAccess = level.getChunk(startChunk.x, startChunk.z);
+		manager.setStartForStructure(SectionPos.bottomOf(startChunkAccess), structure, start, startChunkAccess);
+		// References are what getAllStructuresAt reads, so every chunk the box spans needs one.
+		for (int chunkX = box.minX() >> 4; chunkX <= box.maxX() >> 4; chunkX++) {
+			for (int chunkZ = box.minZ() >> 4; chunkZ <= box.maxZ() >> 4; chunkZ++) {
+				ChunkAccess chunk = level.getChunk(chunkX, chunkZ);
+				manager.addReferenceForStructure(SectionPos.bottomOf(chunk), structure,
+						startChunk.toLong(), chunk);
+			}
+		}
+	}
+
+	/** A piece that exists only to carry a bounding box; it is never generated or serialized. */
+	private static final class StubPiece extends StructurePiece {
+		private StubPiece(BoundingBox box) {
+			super(StructurePieceType.MINE_SHAFT_CORRIDOR, 0, box);
+		}
+
+		@Override
+		protected void addAdditionalSaveData(StructurePieceSerializationContext context, CompoundTag tag) {
+		}
+
+		@Override
+		public void postProcess(WorldGenLevel level, net.minecraft.world.level.StructureManager manager,
+				ChunkGenerator generator, RandomSource random, BoundingBox box, ChunkPos chunkPos,
+				BlockPos origin) {
+		}
+	}
+
+	@GameTest
+	public void structureNavigationCompletesInsideThePerStructureRadiusAndBecomesAPersistentPrompt(
+			GameTestHelper helper) {
 		ServerPlayer player = helper.makeMockServerPlayerInLevel();
 		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
-		BlockPos destination = player.blockPosition().offset(30, 200, 40);
 		String dimension = player.level().dimension().identifier().toString();
+		// Fifty blocks out: inside the single radius every structure used to share, outside the one a
+		// village now gets. Nothing is generated up here, so the horizontal test decides alone.
+		BlockPos tooFar = player.blockPosition().offset(30, 200, 40);
+		BlockPos destination = player.blockPosition().offset(28, 200, 36);
 		data.updateTerminalRecord(player.getUUID(), record -> {
 			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, SurvivalMilestone.MINED_LOGS.mask());
 			record.putInt(TerminalData.ACTIVE_GUIDANCE_TOOL, TerminalTool.NAVIGATION.slot());
 			new NavigationState(TerminalStructureTarget.VILLAGE.id(), "", true,
-					TerminalStructureTarget.VILLAGE.id(), destination.asLong(), dimension,
+					TerminalStructureTarget.VILLAGE.id(), tooFar.asLong(), dimension,
 					player.level().getGameTime()).writeTo(record);
 		});
+		StructureNavigationService.updatePlayer(player);
+		helper.assertValueEqual(data.terminalRecord(player.getUUID()).orElseThrow()
+						.getIntOr(TerminalData.ACTIVE_GUIDANCE_TOOL, -1), TerminalTool.NAVIGATION.slot(),
+				"Fifty blocks is past a village's own arrival radius and must not complete");
+
+		data.updateTerminalRecord(player.getUUID(), record ->
+				new NavigationState(TerminalStructureTarget.VILLAGE.id(), "", true,
+						TerminalStructureTarget.VILLAGE.id(), destination.asLong(), dimension,
+						player.level().getGameTime()).writeTo(record));
 
 		StructureNavigationService.updatePlayer(player);
 		var completed = data.terminalRecord(player.getUUID()).orElseThrow();
@@ -407,22 +609,21 @@ public final class M1GameTests implements CustomTestMethodInvoker {
 				TerminalToolService.NO_TOOL, "Arrival must stop structure guidance");
 		helper.assertFalse(NavigationState.read(completed).located(),
 				"The completed destination must leave the active navigation state");
-		helper.assertTrue(completed.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_ACTIVE, false),
-				"Arrival must leave a persistent completion card");
-		helper.assertTrue(completed.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_UNREAD, false),
-				"The carried terminal must enter its prompt style until opened");
+		// Arrival is announced once through the notice stack and leaves nothing to dismiss; a card
+		// waiting to be closed by hand made a finished event look like an outstanding one.
+		helper.assertFalse(completed.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_ACTIVE, false),
+				"Arrival must not leave a card the player has to close");
+		helper.assertFalse(completed.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_UNREAD, false),
+				"Arrival must not put the carried terminal into its unread prompt style");
 		helper.assertTrue((completed.getIntOr(TerminalData.COMPLETED_STRUCTURE_TARGETS_MASK, 0)
 				& TerminalStructureTarget.bit(TerminalStructureTarget.VILLAGE)) != 0,
 				"The arrived structure type must be persisted as completed");
 		helper.assertTrue((StructureNavigationService.availableTargetsMask(player, completed)
 				& TerminalStructureTarget.bit(TerminalStructureTarget.VILLAGE)) == 0,
 				"A completed destination must not reappear in navigation candidates");
-		var snapshot = TerminalToolService.snapshot(player, TerminalTool.NAVIGATION.slot());
-		helper.assertTrue(snapshot.navigationCompletionAvailable(),
-				"The home toolbar snapshot must keep the completion card available");
-		helper.assertTrue(snapshot.navigationCompletionDirection() >= 0
-				&& snapshot.navigationCompletionDirection() <= 3,
-				"The completion prompt must use one of the four player-relative sides");
+		helper.assertFalse(TerminalToolService.snapshot(player, TerminalTool.NAVIGATION.slot())
+						.navigationCompletionAvailable(),
+				"The retired completion card must never be advertised to the client again");
 		var nether = helper.getLevel().getServer().getLevel(Level.NETHER);
 		helper.assertTrue(nether != null, "Nether level must exist for dimension-specific targets");
 		helper.assertTrue(player.teleportTo(nether, 0.5, 64.0, 0.5, Set.of(), 0.0F, 0.0F, true),

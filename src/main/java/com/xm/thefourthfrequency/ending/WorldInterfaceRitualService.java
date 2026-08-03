@@ -6,13 +6,17 @@ import com.xm.thefourthfrequency.ending.WorldInterfaceState.MutationResult;
 import com.xm.thefourthfrequency.ending.WorldInterfaceState.Snapshot;
 import com.xm.thefourthfrequency.ending.WorldInterfaceState.TerminalTransaction;
 import com.xm.thefourthfrequency.ending.WorldInterfaceState.TerminalTransactionState;
+import com.xm.thefourthfrequency.networking.WorldInterfaceProtocol;
+import com.xm.thefourthfrequency.terminal.TerminalNoticeService;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import com.xm.thefourthfrequency.world.TerminalLifecycleService;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
@@ -28,6 +32,11 @@ import java.util.UUID;
 /** Server-side journal and recovery loop for terminal sacrifice at the resonance core. */
 public final class WorldInterfaceRitualService {
 	private static final double MAX_INTERACTION_DISTANCE_SQUARED = 8.0D * 8.0D;
+	/** How close a player has to be to the core before it speaks to them. */
+	private static final double REMINDER_RADIUS_SQUARED = 14.0D * 14.0D;
+	private static final int REMINDER_SCAN_INTERVAL_TICKS = 20;
+	private static final int REMINDER_COOLDOWN_TICKS = 400;
+	private static final Map<UUID, Long> REMINDED_AT = new java.util.concurrent.ConcurrentHashMap<>();
 	private static AltarOpenHandler altarOpenHandler = (player, position) -> false;
 
 	private WorldInterfaceRitualService() {
@@ -52,6 +61,32 @@ public final class WorldInterfaceRitualService {
 		if (!actionContextValid(player, snapshot, snapshot.encounterId().orElse(null), snapshot.revision(),
 				corePosition, false)) return false;
 		return altarOpenHandler.open(player, corePosition);
+	}
+
+	/**
+	 * The held-terminal path, driven by right-clicking the core rather than by a screen button.
+	 *
+	 * <p>Reads the encounter's own revision instead of taking one from the caller: a block
+	 * interaction has no screen behind it holding a revision to check against, and the deposit
+	 * below still rejects anything that has moved on underneath it.</p>
+	 *
+	 * @return whether the interaction was consumed, so a terminal that is simply not part of this
+	 *         ritual falls through to whatever else right-clicking would have done
+	 */
+	public static boolean insertHeldTerminal(ServerPlayer player, BlockPos corePosition) {
+		MinecraftServer server = player.level().getServer();
+		Snapshot snapshot = WorldInterfaceState.snapshot(server);
+		if (!actionContextValid(player, snapshot, snapshot.encounterId().orElse(null), snapshot.revision(),
+				corePosition, false)) return false;
+		RitualResult result = deposit(player, snapshot.encounterId().orElse(null), snapshot.revision());
+		// Without a screen open there is nothing to show the outcome, so the result is spoken on the
+		// notice stack - a refusal has to say why, or right-clicking an altar that rejects you is
+		// indistinguishable from right-clicking a block that does nothing.
+		Component message = Component.translatable(
+				WorldInterfaceProtocol.AltarStatus.fromReason(result.reason()).translationKey());
+		if (result.applied()) TerminalNoticeService.encounter(player, message);
+		else TerminalNoticeService.denied(player, message);
+		return true;
 	}
 
 	public static RitualResult deposit(ServerPlayer player, UUID encounterId, long expectedRevision) {
@@ -193,6 +228,7 @@ public final class WorldInterfaceRitualService {
 			return;
 		}
 		if (snapshot.stage() != WorldInterfaceStage.WAITING_TERMINALS) return;
+		remindNearbyPlayers(server, snapshot);
 		if (snapshot.terminalTransactions().values().stream()
 				.anyMatch(value -> value.state() == TerminalTransactionState.RETURN_PENDING)) {
 			processReturns(server);
@@ -275,6 +311,39 @@ public final class WorldInterfaceRitualService {
 				});
 		return pending.applied() ? RitualResult.applied(pending.snapshot(), reason)
 				: reject(pending.snapshot(), pending.reason());
+	}
+
+	/**
+	 * Tells anyone standing at a waiting altar what it wants from them.
+	 *
+	 * <p>Insertion is a held-item interaction at a block, which is a thing a player has to be told
+	 * about once: an altar that is silently waiting for a specific item in a specific hand is
+	 * indistinguishable from scenery. The reminder is addressed to the individual rather than
+	 * broadcast, names the actual next step, and changes with what they are holding - someone
+	 * already gripping their terminal is told to right-click, not told to go find it.</p>
+	 *
+	 * <p>Rate-limited per player rather than per tick, and never sent to someone who has already
+	 * inserted: a prompt that repeats at something already done is noise, and noise here trains
+	 * players to ignore the one channel the encounter speaks through.</p>
+	 */
+	private static void remindNearbyPlayers(MinecraftServer server, Snapshot snapshot) {
+		if (server.getTickCount() % REMINDER_SCAN_INTERVAL_TICKS != 0) return;
+		BlockPos core = AltarShape.corePosition(snapshot.altarCenter());
+		long now = server.getTickCount();
+		FrequencyWorldData data = FrequencyWorldData.get(server);
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (player.isSpectator() || player.level().dimension() != Level.END) continue;
+			if (player.distanceToSqr(core.getCenter()) > REMINDER_RADIUS_SQUARED) continue;
+			TerminalTransaction existing = snapshot.terminalTransactions().get(player.getUUID());
+			if (existing != null && existing.state() != TerminalTransactionState.RETURN_PENDING) continue;
+			Long last = REMINDED_AT.get(player.getUUID());
+			if (last != null && now - last < REMINDER_COOLDOWN_TICKS) continue;
+			REMINDED_AT.put(player.getUUID(), now);
+			boolean holding = findValidBoundTerminal(player, data) != null;
+			TerminalNoticeService.encounter(player, Component.translatable(holding
+					? "message.thefourthfrequency.world_interface.altar_insert_now"
+					: "message.thefourthfrequency.world_interface.altar_take_terminal"));
+		}
 	}
 
 	private static void processReturns(MinecraftServer server) {
@@ -361,14 +430,34 @@ public final class WorldInterfaceRitualService {
 		return player.gameMode.getGameModeForPlayer() == GameType.SPECTATOR;
 	}
 
+	/**
+	 * The terminal the player is actually holding, and only that one.
+	 *
+	 * <p>This used to sweep the whole inventory, which meant the sacrifice was a button that
+	 * quietly reached into your bag and took the thing the entire mod is about. Requiring it in
+	 * hand makes the surrender an act rather than a confirmation: you take out the terminal you
+	 * have been carrying since the first night, and you put it into the altar.</p>
+	 */
 	private static LocatedTerminal findValidBoundTerminal(ServerPlayer player, FrequencyWorldData data) {
 		if (!data.terminalRecord(player.getUUID())
 				.map(record -> record.getBooleanOr(TerminalData.BOUND, false)).orElse(false)) return null;
-		for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
-			ItemStack stack = player.getInventory().getItem(slot);
-			if (data.isValidTerminal(stack, player.getUUID()) && TerminalData.isBound(stack)) {
-				return new LocatedTerminal(slot, stack);
+		for (InteractionHand hand : InteractionHand.values()) {
+			ItemStack stack = player.getItemInHand(hand);
+			if (!data.isValidTerminal(stack, player.getUUID()) || !TerminalData.isBound(stack)) continue;
+			int slot = hand == InteractionHand.MAIN_HAND
+					? player.getInventory().getSelectedSlot()
+					: player.getInventory().getContainerSize() - 1;
+			// The offhand is addressed by its own index rather than by a scan, so the removal below
+			// targets the exact stack that was held.
+			if (hand == InteractionHand.OFF_HAND) {
+				for (int index = 0; index < player.getInventory().getContainerSize(); index++) {
+					if (player.getInventory().getItem(index) == stack) {
+						slot = index;
+						break;
+					}
+				}
 			}
+			return new LocatedTerminal(slot, stack);
 		}
 		return null;
 	}

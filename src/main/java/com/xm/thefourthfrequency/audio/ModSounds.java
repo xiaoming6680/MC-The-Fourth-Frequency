@@ -72,7 +72,17 @@ public final class ModSounds {
 	public static final SoundEvent WORLD_INTERFACE_AMBIENT_2 = register("world_interface_ambient_2");
 	public static final SoundEvent WORLD_INTERFACE_AMBIENT_3 = register("world_interface_ambient_3");
 	public static final SoundEvent WORLD_INTERFACE_MORPH = register("world_interface_morph", ARENA_RANGE);
+	// The boss was silent under fire, which read as hits not landing at all. Both cues carry to the
+	// arena edge, because a fight this size is fought from further out than 16 blocks.
+	public static final SoundEvent WORLD_INTERFACE_HURT = register("world_interface_hurt", ARENA_RANGE);
+	/** Heard by whoever was hit, so it is deliberately near-field rather than arena-wide. */
+	public static final SoundEvent WORLD_INTERFACE_IMPACT = register("world_interface_impact", TELEGRAPH_RANGE);
+	public static final SoundEvent WORLD_INTERFACE_FORM_SHIFT = register("world_interface_form_shift", ARENA_RANGE);
+	public static final SoundEvent WORLD_INTERFACE_DEATH = register("world_interface_death", RESOLUTION_RANGE);
 	public static final SoundEvent WORLD_INTERFACE_LASER = register("world_interface_laser", TELEGRAPH_RANGE);
+	/** The discharge, not the charge. Reusing the telegraph sample made firing sound like aiming. */
+	public static final SoundEvent WORLD_INTERFACE_LASER_FIRE =
+			register("world_interface_laser_fire", ARENA_RANGE);
 	public static final SoundEvent WORLD_INTERFACE_ORB = register("world_interface_orb", TELEGRAPH_RANGE);
 	public static final SoundEvent WORLD_INTERFACE_GRAB = register("world_interface_grab");
 	public static final SoundEvent WORLD_INTERFACE_MENTAL = register("world_interface_mental");
@@ -88,7 +98,14 @@ public final class ModSounds {
 	// the playlist as a single continuous piece of music while the sound system shuffles the files.
 	public static final SoundEvent MUSIC_MENU = register("music_menu");
 	public static final SoundEvent MUSIC_GAME = register("music_game");
+	public static final SoundEvent MUSIC_PURSUIT = register("music_pursuit");
+	// The encounter is scored in two pieces rather than one, because the third body is a different
+	// fight: separate events are what lets the music manager cut from one to the other on the morph
+	// instead of waiting for the first to end.
+	public static final SoundEvent MUSIC_ENCOUNTER = register("music_encounter");
+	public static final SoundEvent MUSIC_ENCOUNTER_FINAL = register("music_encounter_final");
 	public static final SoundEvent MUSIC_ENDING = register("music_ending");
+	public static final SoundEvent MUSIC_ENDING_FAILURE = register("music_ending_failure");
 
 	private ModSounds() {
 	}

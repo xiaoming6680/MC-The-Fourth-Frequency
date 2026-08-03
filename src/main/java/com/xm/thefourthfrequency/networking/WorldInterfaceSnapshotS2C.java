@@ -25,7 +25,6 @@ public record WorldInterfaceSnapshotS2C(
 		float currentHealth,
 		int anchorAliveMask,
 		long elapsedTicks,
-		long penaltyTicks,
 		boolean timerPaused,
 		long serverTick,
 		int gatewayStateId,
@@ -54,7 +53,7 @@ public record WorldInterfaceSnapshotS2C(
 		if ((anchorAliveMask & ~WorldInterfaceProtocol.ANCHOR_MASK) != 0) {
 			throw new IllegalArgumentException("Anchor mask contains bits outside the ten authoritative anchors");
 		}
-		if (elapsedTicks < 0L || penaltyTicks < 0L || serverTick < 0L) {
+		if (elapsedTicks < 0L || serverTick < 0L) {
 			throw new IllegalArgumentException("Encounter clocks must be non-negative");
 		}
 		WorldInterfaceProtocol.GatewayState.fromWireId(gatewayStateId);
@@ -85,7 +84,6 @@ public record WorldInterfaceSnapshotS2C(
 		buffer.writeFloat(value.currentHealth);
 		buffer.writeVarInt(value.anchorAliveMask);
 		buffer.writeVarLong(value.elapsedTicks);
-		buffer.writeVarLong(value.penaltyTicks);
 		buffer.writeBoolean(value.timerPaused);
 		buffer.writeVarLong(value.serverTick);
 		buffer.writeVarInt(value.gatewayStateId);
@@ -107,7 +105,6 @@ public record WorldInterfaceSnapshotS2C(
 		float currentHealth = buffer.readFloat();
 		int anchorAliveMask = buffer.readVarInt();
 		long elapsedTicks = buffer.readVarLong();
-		long penaltyTicks = buffer.readVarLong();
 		boolean timerPaused = buffer.readBoolean();
 		long serverTick = buffer.readVarLong();
 		int gatewayStateId = buffer.readVarInt();
@@ -116,7 +113,7 @@ public record WorldInterfaceSnapshotS2C(
 		List<BlockPos> gatewayPositions = new ArrayList<>(gatewayCount);
 		for (int index = 0; index < gatewayCount; index++) gatewayPositions.add(buffer.readBlockPos());
 		return new WorldInterfaceSnapshotS2C(protocolVersion, encounterId, sequence, stageId, formId,
-				bossId, center, maxHealth, currentHealth, anchorAliveMask, elapsedTicks, penaltyTicks,
+				bossId, center, maxHealth, currentHealth, anchorAliveMask, elapsedTicks,
 				timerPaused, serverTick, gatewayStateId, gatewayPositions, buffer.readVarInt(), buffer.readFloat());
 	}
 

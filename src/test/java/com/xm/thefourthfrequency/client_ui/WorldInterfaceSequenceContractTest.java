@@ -40,7 +40,7 @@ final class WorldInterfaceSequenceContractTest {
 				WorldInterfaceProtocol.Stage.PHASE_1.wireId(),
 				WorldInterfaceProtocol.Form.LISTENING_EMBRYO.wireId(), UUID.fromString(
 						"de91b49b-a83f-47bc-8632-8f8dbe172254"), BlockPos.ZERO,
-				600.0F, 600.0F, WorldInterfaceProtocol.ANCHOR_MASK, 0L, 0L, true, 0L,
+				600.0F, 600.0F, WorldInterfaceProtocol.ANCHOR_MASK, 0L, true, 0L,
 				WorldInterfaceProtocol.GatewayState.PURPLE.wireId(), List.of(),
 				WorldInterfaceProtocol.Outcome.NONE.wireId(), 0.0F);
 	}

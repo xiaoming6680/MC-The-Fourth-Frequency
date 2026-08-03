@@ -46,17 +46,23 @@ public final class FirstRunNoticeScreen extends Screen {
 	private static final int NORMAL_LINE_HEIGHT = 9;
 	private static final int SECTION_GAP = 4;
 	private static final float[] BODY_SCALE_STEPS = {0.82F, 0.78F, 0.74F, 0.70F, 0.66F};
-	private static final int IGNITION_TICKS = 4;
-	private static final int UNFOLD_TICKS = 6;
-	private static final int BLOOM_TICKS = 6;
+	private static final int IGNITION_TICKS = 6;
+	private static final int UNFOLD_TICKS = 12;
+	private static final int BLOOM_TICKS = 11;
+	/** Soft bloom, mid band, hot core: one hard bar read as a drawn line, not as something lit. */
+	private static final int FILAMENT_PASSES = 3;
+	private static final int FILAMENT_SEGMENTS = 14;
+	/** Phosphor keeps glowing behind the sweep instead of switching off the moment it passes. */
+	private static final int EDGE_TRAIL_BANDS = 5;
+	private static final int WASH_BANDS = 10;
 	private static final int TUBE_LIT_TICK = IGNITION_TICKS + UNFOLD_TICKS;
 	private static final int POWER_ON_END_TICK = TUBE_LIT_TICK + BLOOM_TICKS;
-	private static final int NOTICE_REVEAL_TICKS = 10;
-	private static final int NOTICE_READY_TICK = POWER_ON_END_TICK + NOTICE_REVEAL_TICKS;
-	/** The tube is already lit when the copy arrives, so it emerges from a haze, not from black. */
-	private static final int NOTICE_REVEAL_VEIL = 170;
-	private static final int PHOSPHOR_FLOOR_ALPHA = 34;
+	/** The raster sweep is the reveal, so the copy is finished the moment the tube settles. */
+	private static final int NOTICE_READY_TICK = POWER_ON_END_TICK;
+	private static final int PHOSPHOR_FLOOR_ALPHA = 14;
 	private static final int PHOSPHOR_STRIKE_ALPHA = 210;
+	private static final int SCANLINE_PITCH = 2;
+	private static final int SCANLINE_ALPHA = 26;
 	private static final int TEXT_FADE_TICKS = 4;
 	private static final int ZOOM_TICKS = 24;
 	private static final int TRANSITION_TICKS = TEXT_FADE_TICKS + ZOOM_TICKS;
@@ -69,6 +75,16 @@ public final class FirstRunNoticeScreen extends Screen {
 	private static final int GLASS_SAFE_RIGHT_ASSET = 1488;
 	private static final int GLASS_SAFE_TOP_ASSET = 120;
 	private static final int GLASS_SAFE_BOTTOM_ASSET = 870;
+	/**
+	 * The lit opening in the shell art, measured off the texture itself. The safe rect above is
+	 * where copy is allowed to sit and is inset well inside this; painting the tube surface to the
+	 * safe rect instead left a hard-edged rectangle of slightly different green in the middle of
+	 * the glass, because the wash simply stopped some fifty asset pixels short of the bezel.
+	 */
+	private static final int GLASS_OPENING_LEFT_ASSET = 84;
+	private static final int GLASS_OPENING_RIGHT_ASSET = 1535;
+	private static final int GLASS_OPENING_TOP_ASSET = 84;
+	private static final int GLASS_OPENING_BOTTOM_ASSET = 890;
 	private static final Identifier NOTICE_UI = Identifier.fromNamespaceAndPath(
 			TheFourthFrequency.MOD_ID, "textures/gui/notice/first_run_notice_terminal_shell.png");
 
@@ -103,6 +119,9 @@ public final class FirstRunNoticeScreen extends Screen {
 
 	@Override
 	public void tick() {
+		// A resource reload can drop a loading overlay over an already-open notice. Minecraft keeps
+		// ticking underneath it, so hold the clock rather than run the entrance out of sight.
+		if (minecraft != null && minecraft.getOverlay() != null) return;
 		if (transitionAge >= 0) {
 			transitionAge++;
 			if (transitionAge >= TRANSITION_TICKS && !transitionFinished) {
@@ -144,7 +163,7 @@ public final class FirstRunNoticeScreen extends Screen {
 		float renderAge = age + partialTick;
 		switch (presentationPhase()) {
 			case POWER_ON -> renderPowerOn(graphics, renderAge);
-			case NOTICE -> renderNotice(graphics, renderAge, mouseX, mouseY, partialTick);
+			case NOTICE -> renderNotice(graphics, mouseX, mouseY, partialTick);
 			case TRANSITION -> renderTransition(graphics, mouseX, mouseY, partialTick);
 		}
 	}
@@ -164,53 +183,154 @@ public final class FirstRunNoticeScreen extends Screen {
 	private void renderPowerOn(GuiGraphics graphics, float renderAge) {
 		NoticeLayout layout = layout();
 		renderGeneratedNoticeUi(graphics, layout);
-		GlassBounds glass = glassBounds(layout, 5);
+		GlassBounds glass = glassOpening(layout);
 		graphics.enableScissor(glass.left(), glass.top(), glass.right(), glass.bottom());
-		graphics.fill(glass.left(), glass.top(), glass.right(), glass.bottom(), GLASS_BLACKOUT);
 
 		int centerX = (glass.left() + glass.right()) / 2;
 		int centerY = (glass.top() + glass.bottom()) / 2;
-		float ignition = easeOut(Math.clamp(renderAge / IGNITION_TICKS, 0.0F, 1.0F));
-		float unfold = easeOut(Math.clamp((renderAge - IGNITION_TICKS) / UNFOLD_TICKS, 0.0F, 1.0F));
+		// A tube does not ease into anything: the beam is simply there, and the raster is thrown
+		// open. Both curves front-load almost all of their travel and spend the remainder settling,
+		// because the part worth watching is the arrival, not the approach.
+		float ignition = snap(Math.clamp(renderAge / IGNITION_TICKS, 0.0F, 1.0F));
+		float unfold = slamOpen(Math.clamp((renderAge - IGNITION_TICKS) / UNFOLD_TICKS, 0.0F, 1.0F));
+		// Squared, so full brightness holds for a beat before falling away to the phosphor floor.
 		float bloom = Math.clamp((renderAge - TUBE_LIT_TICK) / BLOOM_TICKS, 0.0F, 1.0F);
+		float decay = bloom * bloom;
 
 		int halfHeight = Math.round(glass.height() / 2.0F * unfold);
+		int rasterTop = Math.max(glass.top(), centerY - halfHeight);
+		int rasterBottom = Math.min(glass.bottom(), centerY + halfHeight);
 		if (halfHeight > 0) {
-			int rasterTop = Math.max(glass.top(), centerY - halfHeight);
-			int rasterBottom = Math.min(glass.bottom(), centerY + halfHeight);
-			int interior = withAlpha(GREEN, Math.round(PHOSPHOR_STRIKE_ALPHA
-					+ (PHOSPHOR_FLOOR_ALPHA - PHOSPHOR_STRIKE_ALPHA) * bloom));
-			graphics.fill(glass.left(), rasterTop, glass.right(), rasterBottom, interior);
-			// The opening edges stay hottest until the raster has finished sweeping outwards.
-			int edge = withAlpha(PHOSPHOR_FLASH, Math.round(255.0F * (1.0F - bloom)));
-			graphics.fill(glass.left(), rasterTop, glass.right(), rasterTop + 1, edge);
-			graphics.fill(glass.left(), rasterBottom - 1, glass.right(), rasterBottom, edge);
+			// The sweep paints the copy in as it opens: whatever the raster has already reached is
+			// simply there, so the tube never lights an empty screen and waits for a separate fade.
+			graphics.enableScissor(glass.left(), rasterTop, glass.right(), rasterBottom);
+			renderNoticeText(graphics, layout);
+			drawGlassSurface(graphics, glass);
+			graphics.disableScissor();
+			drawRasterWash(graphics, glass, rasterTop, rasterBottom, centerY, decay);
+			drawSweepEdges(graphics, glass, rasterTop, rasterBottom, decay);
 		}
-
-		int halfWidth = Math.round(glass.width() / 2.0F * ignition);
-		int strikeAlpha = Math.round(255.0F * (1.0F - bloom) * (1.0F - 0.45F * unfold));
-		if (halfWidth > 0 && strikeAlpha > 0) {
-			graphics.fill(Math.max(glass.left(), centerX - halfWidth), centerY - 1,
-					Math.min(glass.right(), centerX + halfWidth), centerY + 1,
-					withAlpha(PHOSPHOR_FLASH, strikeAlpha));
+		// Whatever the raster has not reached yet is still unlit tube.
+		if (rasterTop > glass.top()) {
+			graphics.fill(glass.left(), glass.top(), glass.right(), rasterTop, GLASS_BLACKOUT);
 		}
+		if (rasterBottom < glass.bottom()) {
+			graphics.fill(glass.left(), rasterBottom, glass.right(), glass.bottom(), GLASS_BLACKOUT);
+		}
+		drawFilament(graphics, glass, centerX, centerY, ignition,
+				(1.0F - decay) * (1.0F - 0.45F * unfold));
 		graphics.disableScissor();
 	}
 
-	private static float easeOut(float progress) {
+	/**
+	 * The lit area is not one flat colour. Phosphor is hottest where the beam has just been, so the
+	 * wash is banded: brightest against the two sweeping edges, coolest across the settled middle.
+	 */
+	private void drawRasterWash(GuiGraphics graphics, GlassBounds glass, int rasterTop,
+			int rasterBottom, int centerY, float decay) {
+		float peak = PHOSPHOR_STRIKE_ALPHA * (1.0F - decay);
+		if (peak <= 1.0F) return;
+		int span = rasterBottom - rasterTop;
+		if (span <= 0) return;
+		for (int band = 0; band < WASH_BANDS; band++) {
+			int top = rasterTop + span * band / WASH_BANDS;
+			int bottom = rasterTop + span * (band + 1) / WASH_BANDS;
+			if (bottom <= top) continue;
+			// Distance from the middle of the band to the centre line, normalised to the half-span.
+			float offset = Math.abs((top + bottom) / 2.0F - centerY) / Math.max(1.0F, span / 2.0F);
+			int alpha = Math.round(peak * (0.62F + 0.38F * offset * offset));
+			if (alpha > 0) {
+				graphics.fill(glass.left(), top, glass.right(), bottom, withAlpha(GREEN, alpha));
+			}
+		}
+	}
+
+	/** Each opening edge drags a short persistence trail inwards behind it. */
+	private void drawSweepEdges(GuiGraphics graphics, GlassBounds glass, int rasterTop,
+			int rasterBottom, float decay) {
+		float heat = 1.0F - decay;
+		if (heat <= 0.0F) return;
+		for (int band = EDGE_TRAIL_BANDS; band >= 1; band--) {
+			float falloff = 1.0F - band / (float) (EDGE_TRAIL_BANDS + 1);
+			int alpha = Math.round(255.0F * heat * falloff * falloff * 0.5F);
+			if (alpha <= 0) continue;
+			int colour = withAlpha(PHOSPHOR_FLASH, alpha);
+			graphics.fill(glass.left(), rasterTop + band, glass.right(), rasterTop + band + 1, colour);
+			graphics.fill(glass.left(), rasterBottom - band - 1, glass.right(), rasterBottom - band, colour);
+		}
+		int core = withAlpha(PHOSPHOR_FLASH, Math.round(255.0F * heat));
+		graphics.fill(glass.left(), rasterTop, glass.right(), rasterTop + 1, core);
+		graphics.fill(glass.left(), rasterBottom - 1, glass.right(), rasterBottom, core);
+	}
+
+	/**
+	 * The struck filament: three widening passes so it glows outwards rather than ending on a hard
+	 * edge, and segmented along its length so it is hottest at the strike point and cools toward
+	 * the tips it is still reaching for.
+	 */
+	private void drawFilament(GuiGraphics graphics, GlassBounds glass, int centerX, int centerY,
+			float ignition, float alpha) {
+		int halfWidth = Math.round(glass.width() / 2.0F * ignition);
+		if (halfWidth <= 0 || alpha <= 0.0F) return;
+		for (int pass = FILAMENT_PASSES - 1; pass >= 0; pass--) {
+			int halfThickness = 1 + pass * 2 + Math.round(2.0F * (1.0F - ignition));
+			float weight = alpha * (float) Math.pow(0.36D, pass);
+			for (int segment = 0; segment < FILAMENT_SEGMENTS; segment++) {
+				int left = centerX - halfWidth + 2 * halfWidth * segment / FILAMENT_SEGMENTS;
+				int right = centerX - halfWidth + 2 * halfWidth * (segment + 1) / FILAMENT_SEGMENTS;
+				left = Math.max(glass.left(), left);
+				right = Math.min(glass.right(), right);
+				if (right <= left) continue;
+				float reach = Math.abs((left + right) / 2.0F - centerX) / Math.max(1.0F, halfWidth);
+				int value = Math.round(255.0F * weight * (1.0F - 0.55F * reach * reach));
+				if (value > 0) {
+					graphics.fill(left, centerY - halfThickness, right, centerY + halfThickness,
+							withAlpha(PHOSPHOR_FLASH, value));
+				}
+			}
+		}
+	}
+
+	/** Quartic ease-out: four fifths of the travel is over in the first third of the time. */
+	private static float snap(float progress) {
 		float inverted = 1.0F - progress;
+		inverted *= inverted;
 		return 1.0F - inverted * inverted;
 	}
 
-	private void renderNotice(GuiGraphics graphics, float renderAge, int mouseX, int mouseY,
-			float partialTick) {
+	/**
+	 * Back ease-out. The raster overshoots the bezel and settles into it, which is the overscan
+	 * bounce a tube actually makes; the scissor clips the overshoot, so what reads on screen is
+	 * the raster slamming to full and holding there rather than creeping the last few pixels.
+	 */
+	private static float slamOpen(float progress) {
+		float shifted = progress - 1.0F;
+		return 1.0F + shifted * shifted * (2.70158F * shifted + 1.70158F);
+	}
+
+	/**
+	 * The tube surface itself: a faint phosphor floor and scan lines. The bezel around it is a
+	 * detailed painted texture, so leaving the glass as one flat fill is what made the panel read
+	 * as cheap - the frame looked built and the screen looked filled in.
+	 */
+	private void drawGlassSurface(GuiGraphics graphics, GlassBounds glass) {
+		graphics.fill(glass.left(), glass.top(), glass.right(), glass.bottom(),
+				withAlpha(GREEN, PHOSPHOR_FLOOR_ALPHA));
+		for (int y = glass.top(); y < glass.bottom(); y += SCANLINE_PITCH) {
+			graphics.fill(glass.left(), y, glass.right(), y + 1, withAlpha(0, SCANLINE_ALPHA));
+		}
+	}
+
+	private void renderNotice(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
 		NoticeLayout layout = layout();
 		renderGeneratedNoticeUi(graphics, layout);
 		renderNoticeText(graphics, layout);
-		float reveal = Math.clamp((renderAge - POWER_ON_END_TICK) / NOTICE_REVEAL_TICKS,
-				0.0F, 1.0F);
-		if (reveal < 1.0F) fillGlass(graphics, glassBounds(layout, 5),
-				withAlpha(GLASS_BLACKOUT, Math.round(NOTICE_REVEAL_VEIL * (1.0F - reveal))));
+		GlassBounds glass = glassOpening(layout);
+		graphics.enableScissor(glass.left(), glass.top(), glass.right(), glass.bottom());
+		drawGlassSurface(graphics, glass);
+		graphics.disableScissor();
+		// Widgets stay above the tube surface; the acknowledgement is the one control that has to
+		// stay crisp, and scan lines across an 18px button cost more than they add.
 		super.render(graphics, mouseX, mouseY, partialTick);
 	}
 
@@ -225,8 +345,12 @@ public final class FirstRunNoticeScreen extends Screen {
 		if (zoomProgress <= 0.0F) {
 			renderGeneratedNoticeUi(graphics, base);
 			renderNoticeText(graphics, base);
-			fillGlass(graphics, glassBounds(base, 5),
-					withAlpha(GLASS_BLACKOUT, Math.round(255.0F * textFade)));
+			GlassBounds glass = glassOpening(base);
+			// The tube surface has to survive the click, or the panel visibly flattens on acknowledge.
+			graphics.enableScissor(glass.left(), glass.top(), glass.right(), glass.bottom());
+			drawGlassSurface(graphics, glass);
+			graphics.disableScissor();
+			fillGlass(graphics, glass, withAlpha(GLASS_BLACKOUT, Math.round(255.0F * textFade)));
 			return;
 		}
 
@@ -546,6 +670,15 @@ public final class FirstRunNoticeScreen extends Screen {
 		return Math.max(Math.max(scaleLeft, scaleRight), Math.max(scaleTop, scaleBottom)) * 1.04F;
 	}
 
+	/** The whole lit area of the tube: anything that paints the glass must cover exactly this. */
+	private static GlassBounds glassOpening(NoticeLayout layout) {
+		return new GlassBounds(
+				NoticeGrid.x(layout, GLASS_OPENING_LEFT_ASSET),
+				NoticeGrid.y(layout, GLASS_OPENING_TOP_ASSET),
+				NoticeGrid.x(layout, GLASS_OPENING_RIGHT_ASSET),
+				NoticeGrid.y(layout, GLASS_OPENING_BOTTOM_ASSET));
+	}
+
 	private static GlassBounds glassBounds(NoticeLayout layout, int inset) {
 		return new GlassBounds(
 				NoticeGrid.x(layout, GLASS_SAFE_LEFT_ASSET) + inset,
@@ -653,6 +786,9 @@ public final class FirstRunNoticeScreen extends Screen {
 	private void acknowledge() {
 		if (!acknowledgementAvailableForTesting() || transitionAge >= 0) return;
 		transitionAge = 0;
+		// The exit animation belongs to leaving, not to reading, so the menu theme is released here
+		// rather than at the end of it - it swells up under the zoom instead of behind it.
+		FirstRunNoticeController.beginRelease();
 		updateButtonState();
 	}
 

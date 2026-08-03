@@ -106,8 +106,8 @@ public final class WorldInterfaceClientState {
 			if (!encounter.timerPaused() && encounter.outcome() == WorldInterfaceProtocol.Outcome.NONE) {
 				extrapolated += Math.max(0L, currentServerTick - encounter.serverTick());
 			}
-			double total = (double) extrapolated + encounter.penaltyTicks();
-			return Math.clamp(total / WorldInterfaceProtocol.COLLAPSE_DURATION_TICKS, 0.0D, 1.0D);
+			return Math.clamp(extrapolated / (double) WorldInterfaceProtocol.COLLAPSE_DURATION_TICKS,
+					0.0D, 1.0D);
 		}
 
 		public boolean actionActive(long currentServerTick) {

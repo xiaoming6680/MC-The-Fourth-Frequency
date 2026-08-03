@@ -76,14 +76,38 @@ public final class WorldInterfaceActionScheduler {
 		return Math.max(1, (int) Math.round(scaled));
 	}
 
+	/**
+	 * Gap between scheduled attacks, per phase.
+	 *
+	 * <p>Third phase is deliberately much tighter than the curve the first two describe. At seventy
+	 * to a hundred and ten ticks it was one attack every four or five seconds - a slower cadence than
+	 * most of the mobs the player fought to get there - and since only one action could ever be
+	 * running, the final form of the thing eating the world spent most of the fight doing nothing.
+	 * Halved here, and the volley lane runs alongside it, so the last phase is continuous rather than
+	 * turn-based.</p>
+	 */
 	public static IntervalBounds intervalBounds(WorldInterfaceStage stage) {
 		requireCombatStage(stage);
 		return switch (stage) {
 			case PHASE_1 -> new IntervalBounds(140, 180);
 			case PHASE_2 -> new IntervalBounds(100, 140);
-			case PHASE_3 -> new IntervalBounds(70, 110);
+			case PHASE_3 -> new IntervalBounds(35, 60);
 			default -> throw new IllegalArgumentException("Stage is not a combat phase: " + stage);
 		};
+	}
+
+	/**
+	 * Ticks between third-phase volleys: the extra attacks that run alongside the scheduled one.
+	 *
+	 * <p>Stateless on purpose. The encounter's own active-tick counter is the clock, so a volley is
+	 * due whenever that counter lands on a multiple of this - no field to persist, no cursor to keep
+	 * in step with a restart, and a replayed encounter fires them on exactly the same ticks.</p>
+	 */
+	public static final int VOLLEY_INTERVAL_TICKS = 45;
+
+	/** How many extra attacks a single volley opens with, before the concurrency cap trims it. */
+	public static int volleySize(long encounterSeed, long elapsedTicks) {
+		return 1 + (int) Math.floorMod(mix64(encounterSeed ^ (elapsedTicks * SHUFFLE_GAMMA)) >>> 11, 2L);
 	}
 
 	/** Exclusive controls share one global lane, while ordinary attacks do not consume it. */

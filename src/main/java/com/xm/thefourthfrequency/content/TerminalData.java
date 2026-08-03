@@ -31,7 +31,6 @@ public final class TerminalData {
 	public static final String ISSUED_GAME_TIME = "issued_game_time";
 	public static final String PERSONALITY_SEED = "personality_seed";
 	public static final String PERSONALITY_TEMPLATE = "personality_template";
-	public static final String STOCK = "stock";
 	public static final String BOUND = "bound";
 	public static final String BAND_STAGE = "band_stage";
 	public static final String PLOT_STAGE = "plot_stage";
@@ -72,7 +71,6 @@ public final class TerminalData {
 	public static final String CONTINUITY_CONFIDENCE = "continuity_confidence";
 	public static final String LAST_PORTAL_ORIGIN = "last_portal_origin";
 	public static final String LAST_PORTAL_DESTINATION = "last_portal_destination";
-	public static final String PRIVATE_ANOMALY_SEED = "private_anomaly_seed";
 	public static final String PRIVATE_ANOMALY_VARIANT = "private_anomaly_variant";
 	public static final String PRIVATE_ANOMALY_COUNT = "private_anomaly_count";
 	/**
@@ -91,7 +89,6 @@ public final class TerminalData {
 	public static final String MULTIPLAYER_ROLE = "multiplayer_role";
 	public static final String TERMINAL_CAPTURED = "terminal_captured";
 	public static final String TERMINAL_CAPTURED_TICK = "terminal_captured_tick";
-	public static final String PURSUIT_GRACE_UNTIL = "pursuit_grace_until";
 	public static final String ANOMALY_LOGS = "anomaly_logs";
 	public static final String ANOMALY_LOG_SEQUENCE = "anomaly_log_sequence";
 	public static final String UNREAD_ANOMALY_COUNT = "unread_anomaly_count";
@@ -115,11 +112,7 @@ public final class TerminalData {
 	public static final String SIGNATURE_ANOMALY_PENDING = "signature_anomaly_pending";
 	public static final String NEXT_COMPOSITE_ANOMALY_TICK = "next_composite_anomaly_tick";
 	public static final String ANOMALY_LEGACY_RAMP = "anomaly_legacy_ramp";
-	public static final String ANOMALY_LEGACY_RAMP_TICKS = "anomaly_legacy_ramp_ticks";
 	public static final String ANOMALIES_SUSPENDED = "anomalies_suspended";
-	public static final String ANOMALY_LEASES = "anomaly_leases";
-	public static final String ANOMALY_PERMANENT_BLOCK_LOSS = "anomaly_permanent_block_loss";
-	public static final String ANOMALY_PERMANENT_ITEM_LOSS = "anomaly_permanent_item_loss";
 	public static final String ACTIVE_ANOMALY_ID = "active_anomaly_id";
 	public static final String ACTIVE_ANOMALY_UNTIL = "active_anomaly_until";
 	public static final String LAST_AMBIENT_DIMENSION = "last_ambient_dimension";
@@ -228,7 +221,6 @@ public final class TerminalData {
 		long personalitySeed = ownerId.getMostSignificantBits() ^ ownerId.getLeastSignificantBits();
 		tag.putLong(PERSONALITY_SEED, personalitySeed);
 		tag.putString(PERSONALITY_TEMPLATE, personalityTemplate(personalitySeed));
-		tag.putInt(STOCK, 0);
 		tag.putBoolean(BOUND, false);
 		tag.putInt(BAND_STAGE, 0);
 		tag.putInt(PLOT_STAGE, 1);
@@ -263,7 +255,6 @@ public final class TerminalData {
 		tag.putInt(CONTINUITY_CONFIDENCE, 0);
 		tag.putString(LAST_PORTAL_ORIGIN, "");
 		tag.putString(LAST_PORTAL_DESTINATION, "");
-		tag.putLong(PRIVATE_ANOMALY_SEED, personalitySeed ^ 0x5446464D364C4F4EL);
 		tag.putInt(PRIVATE_ANOMALY_VARIANT, Math.floorMod(cacheVariant, 4));
 		tag.putInt(PRIVATE_ANOMALY_COUNT, 0);
 		tag.putInt(ANOMALY_RESIDUE_COUNT, 0);
@@ -277,7 +268,6 @@ public final class TerminalData {
 		tag.putString(MULTIPLAYER_ROLE, "unresolved");
 		tag.putBoolean(TERMINAL_CAPTURED, false);
 		tag.putLong(TERMINAL_CAPTURED_TICK, 0L);
-		tag.putLong(PURSUIT_GRACE_UNTIL, 0L);
 		tag.put(ANOMALY_LOGS, new ListTag());
 		tag.putInt(ANOMALY_LOG_SEQUENCE, 0);
 		tag.putInt(UNREAD_ANOMALY_COUNT, 0);
@@ -293,11 +283,7 @@ public final class TerminalData {
 		tag.putBoolean(SIGNATURE_ANOMALY_PENDING, false);
 		tag.putLong(NEXT_COMPOSITE_ANOMALY_TICK, 0L);
 		tag.putBoolean(ANOMALY_LEGACY_RAMP, false);
-		tag.putLong(ANOMALY_LEGACY_RAMP_TICKS, 0L);
 		tag.putBoolean(ANOMALIES_SUSPENDED, false);
-		tag.put(ANOMALY_LEASES, new ListTag());
-		tag.putInt(ANOMALY_PERMANENT_BLOCK_LOSS, 0);
-		tag.putInt(ANOMALY_PERMANENT_ITEM_LOSS, 0);
 		tag.putString(ACTIVE_ANOMALY_ID, "none");
 		tag.putLong(ACTIVE_ANOMALY_UNTIL, 0L);
 		tag.putString(LAST_AMBIENT_DIMENSION, player.level().dimension().identifier().toString());
@@ -423,11 +409,7 @@ public final class TerminalData {
 		if (!record.contains(NEXT_COMPOSITE_ANOMALY_TICK)) record.putLong(NEXT_COMPOSITE_ANOMALY_TICK, 0L);
 		if (!record.contains(ANOMALY_LEGACY_RAMP)) record.putBoolean(ANOMALY_LEGACY_RAMP,
 				sourceSchema < 4 && record.getBooleanOr(BOUND, false));
-		if (!record.contains(ANOMALY_LEGACY_RAMP_TICKS)) record.putLong(ANOMALY_LEGACY_RAMP_TICKS, 0L);
 		if (!record.contains(ANOMALIES_SUSPENDED)) record.putBoolean(ANOMALIES_SUSPENDED, false);
-		if (!record.contains(ANOMALY_LEASES)) record.put(ANOMALY_LEASES, new ListTag());
-		if (!record.contains(ANOMALY_PERMANENT_BLOCK_LOSS)) record.putInt(ANOMALY_PERMANENT_BLOCK_LOSS, 0);
-		if (!record.contains(ANOMALY_PERMANENT_ITEM_LOSS)) record.putInt(ANOMALY_PERMANENT_ITEM_LOSS, 0);
 		if (!record.contains(ACTIVE_ANOMALY_ID)) record.putString(ACTIVE_ANOMALY_ID, "none");
 		if (!record.contains(ACTIVE_ANOMALY_UNTIL)) record.putLong(ACTIVE_ANOMALY_UNTIL, 0L);
 		if (!record.contains(LAST_AMBIENT_DIMENSION)) record.putString(LAST_AMBIENT_DIMENSION, "");

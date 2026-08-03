@@ -45,10 +45,16 @@ public final class ReworkEntity extends Monster {
 	private static final int PURSUIT_BREACH_STUCK_TICKS = 3;
 	private static final int PURSUIT_BREACH_RETRY_TICKS = 1;
 	private static final double PURSUIT_BREACH_PROBE_REACH = 1.25;
-	private static final double PURSUIT_MOVEMENT_SPEED = 0.32;
-	private static final double PURSUIT_NAVIGATION_SPEED = 1.42;
-	private static final double PURSUIT_CAVE_MOVEMENT_SPEED = 0.27;
-	private static final double PURSUIT_CAVE_NAVIGATION_SPEED = 1.10;
+	// Path speed is the product of these two. 0.31 * 1.32 is tuned against felt pace rather than the
+	// raw figure: a mob loses speed to node-to-node steering, corner slowdown and repaths that a
+	// player running a straight line does not, so matching a sprint on open ground takes a nominal
+	// value somewhat above it. The band is deliberate - at a sprint the gap holds, and sprint-jumping
+	// still opens it. The original 0.32 * 1.42 outran every form of player movement, so distance never
+	// opened at all and the chase's two escape routes could not be played toward.
+	private static final double PURSUIT_MOVEMENT_SPEED = 0.31;
+	private static final double PURSUIT_NAVIGATION_SPEED = 1.32;
+	private static final double PURSUIT_CAVE_MOVEMENT_SPEED = 0.25;
+	private static final double PURSUIT_CAVE_NAVIGATION_SPEED = 1.04;
 	private static final double PURSUIT_HIGH_GROUND_GAP = 3.0;
 	private static final double PURSUIT_HIGH_GROUND_RANGE_SQR = 100.0;
 	private static final int PURSUIT_HIGH_GROUND_WINDUP_TICKS = 12;

@@ -33,6 +33,7 @@
     "LocalPlayerAnomalyMixin",
 	"MinecraftAlphaStartupMixin",
 	"MinecraftMusicMixin",
+	"MusicManagerGainAccessor",
 	"MinecraftPursuitFrameHoldMixin",
 	"MinecraftTitleRetentionMixin",
 	"PackSelectionModelHiddenPacksMixin",

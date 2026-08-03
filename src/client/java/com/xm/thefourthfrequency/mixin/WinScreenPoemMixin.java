@@ -15,7 +15,10 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Reuses the real End poem screen while replacing only its encounter-authorized poem resource. */
+/**
+ * Reuses the real End poem screen while replacing only its encounter-authorized poem and credits
+ * resources.
+ */
 @Mixin(WinScreen.class)
 public abstract class WinScreenPoemMixin {
 	@Shadow @Final @Mutable private Runnable onFinished;
@@ -45,6 +48,15 @@ public abstract class WinScreenPoemMixin {
 	private Identifier thefourthfrequency$selectWorldInterfacePoem(Identifier vanillaPoem) {
 		return thefourthfrequency$poem == null
 				? vanillaPoem : WorldInterfaceVanillaPoemClient.poemResource(thefourthfrequency$poem);
+	}
+
+	// Ordinal 1 is the credits roll: init() reads the poem, then the credits, then the postcredits
+	// quote. The poem read sits behind the `poem` flag at runtime, but the ordinal is a bytecode
+	// position, so it stays 1 either way.
+	@ModifyArg(method = "init", at = @At(value = "INVOKE", ordinal = 1, target =
+			"Lnet/minecraft/client/gui/screens/WinScreen;wrapCreditsIO(Lnet/minecraft/resources/Identifier;Lnet/minecraft/client/gui/screens/WinScreen$CreditsReader;)V"), index = 0)
+	private Identifier thefourthfrequency$selectWorldInterfaceCredits(Identifier vanillaCredits) {
+		return thefourthfrequency$poem == null ? vanillaCredits : WorldInterfaceVanillaPoemClient.creditsResource();
 	}
 
 	@Inject(method = "onClose", at = @At("HEAD"))

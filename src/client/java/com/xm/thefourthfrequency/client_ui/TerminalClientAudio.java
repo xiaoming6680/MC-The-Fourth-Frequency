@@ -124,6 +124,14 @@ public final class TerminalClientAudio {
 		} else if (tone == TerminalNoticePayload.TONE_DENIED) {
 			// A refusal is a dull short fault, never the chime that reads as progress.
 			play(ModSounds.TERMINAL_FAULT, 0.88F, 0.34F);
+		} else if (tone == TerminalNoticePayload.TONE_ANCHOR) {
+			// An anchor falling is the loudest thing the table can cause; it gets the resonant hit.
+			play(ModSounds.WORLD_INTERFACE_ANCHOR, 1.0F, 0.52F);
+		} else if (tone == TerminalNoticePayload.TONE_ENCOUNTER) {
+			play(ModSounds.WORLD_INTERFACE_IMPACT, 0.70F, 0.30F);
+		} else if (tone == TerminalNoticePayload.TONE_DRAGON) {
+			// The dragon is the only friendly voice in the finale, so it does not share the boss cues.
+			play(SoundEvents.ENDER_DRAGON_AMBIENT, 1.25F, 0.34F);
 		} else {
 			play(SoundEvents.NOTE_BLOCK_CHIME.value(), 1.18F, 0.84F);
 		}

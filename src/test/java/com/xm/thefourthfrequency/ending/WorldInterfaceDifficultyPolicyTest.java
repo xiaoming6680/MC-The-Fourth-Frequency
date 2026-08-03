@@ -22,9 +22,9 @@ class WorldInterfaceDifficultyPolicyTest {
 	@Test
 	void theSameTickBoundaryHasTwoDistinctTerminalVerdicts() {
 		assertEquals(WorldInterfacePolicy.TickVerdict.SUCCESS,
-				WorldInterfacePolicy.resolveTick(11_999L, 0, true));
+				WorldInterfacePolicy.resolveTick(7_199L, true));
 		assertEquals(WorldInterfacePolicy.TickVerdict.FAILURE,
-				WorldInterfacePolicy.resolveTick(12_000L, 0, true));
+				WorldInterfacePolicy.resolveTick(7_200L, true));
 		assertEquals("SUCCESS", WorldInterfacePolicy.TickVerdict.SUCCESS.name());
 		assertEquals("FAILURE", WorldInterfacePolicy.TickVerdict.FAILURE.name());
 	}

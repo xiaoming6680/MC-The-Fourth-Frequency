@@ -355,25 +355,25 @@ final class ResourceContractTest {
 				zh.get("terminal.thefourthfrequency.tool.navigation.summary").getAsString());
 		assertEquals("自动记录你的重生点",
 				zh.get("terminal.thefourthfrequency.tool.home.summary").getAsString());
-		assertEquals("谐振探针只报告它真实听见的矿；越稀有的矿必须离得越近。",
+		assertEquals("只报告真实听见的矿，越稀有听得越近。",
 				zh.get("terminal.thefourthfrequency.tool.minerals.summary").getAsString());
-		assertEquals("正在探测矿物",
+		assertEquals("探测中",
 				zh.get("terminal.thefourthfrequency.tool.minerals.scanning").getAsString());
-		assertEquals("范围内无可分辨的矿脉读数",
+		assertEquals("范围内无读数",
 				zh.get("terminal.thefourthfrequency.tool.minerals.not_found").getAsString());
-		assertEquals("已自动勘测到最近的矿物，正在读取详细方位",
+		assertEquals("勘测到高价值矿物",
 				zh.get("terminal.thefourthfrequency.tool.minerals.nearby").getAsString());
-		assertEquals("勘测到最近矿物",
+		assertEquals("勘测到高价值矿物",
 				zh.get("terminal.thefourthfrequency.tool.minerals.nearby_short").getAsString());
 		assertEquals("探测",
 				zh.get("terminal.thefourthfrequency.tool.minerals.refresh").getAsString());
 		assertEquals("探测失败",
 				zh.get("message.thefourthfrequency.guidance.not_found").getAsString());
-		assertEquals("自动勘测到最近的矿物，可在矿物工具详情中查看并导航。",
+		assertEquals("勘测到高价值矿物",
 				zh.get("message.thefourthfrequency.guidance.nearby").getAsString());
 		assertEquals("已到达矿物附近，导航已结束",
 				zh.get("message.thefourthfrequency.navigation.mineral_arrived").getAsString());
-		assertEquals("已接近%s，导航结束",
+		assertEquals("已接近%s（在你%s侧），导航结束",
 				zh.get("message.thefourthfrequency.navigation.structure_nearby").getAsString());
 		assertFalse(zh.has("message.thefourthfrequency.terminal.unread"));
 		assertEquals("你有【%s】条未读记录",
@@ -654,8 +654,22 @@ final class ResourceContractTest {
 		assertTrue(audio.contains("tone == TerminalNoticePayload.TONE_DENIED"),
 				"A refusal must sound like a fault, never like the progress chime");
 		assertTrue(noticePayload.contains("TONE_DENIED = 4"));
-		assertTrue(noticePayload.contains("Math.clamp(value.tone, TONE_NONE, TONE_DENIED)"),
+		// The clamp has to track the highest declared tone, or every tone above the bound silently
+		// degrades into whichever one the bound names.
+		assertTrue(noticePayload.contains("TONE_DRAGON = 7"));
+		assertTrue(noticePayload.contains("Math.clamp(value.tone, TONE_NONE, TONE_DRAGON)"),
 				"The wire clamp must admit the new tone or it degrades into a pursuit warning");
+		// The finale's narration is the mod's own channel now, not chat.
+		for (String tone : new String[]{"TONE_ENCOUNTER", "TONE_ANCHOR", "TONE_DRAGON"}) {
+			assertTrue(hud.contains("case TerminalNoticePayload." + tone + " -> "),
+					"Every encounter tone must carry its own background: " + tone);
+			assertTrue(audio.contains("tone == TerminalNoticePayload." + tone),
+					"Every encounter tone must be distinguishable without looking: " + tone);
+		}
+		assertFalse(Files.readString(Path.of(
+						"src/main/java/com/xm/thefourthfrequency/ending/EndBossEncounterService.java"),
+						StandardCharsets.UTF_8).contains("displayClientMessage"),
+				"Boss-fight narration must go to the mod's notice stack rather than the chat log");
 		assertTrue(noticePayload.contains("TONE_PURSUIT_WARNING = 3"));
 		assertTrue(hud.contains("PURSUIT_BACKGROUND = 0x59151B"));
 		assertTrue(hud.contains("PURSUIT_BORDER = 0xF05B65"));
@@ -670,7 +684,9 @@ final class ResourceContractTest {
 		assertFalse(pursuit.contains("message.thefourthfrequency.pursuit.warning.\" + form"));
 		assertTrue(noticeService.contains("message.thefourthfrequency.pursuit.warning"));
 		assertTrue(noticeService.contains("TerminalNoticePayload.TONE_PURSUIT_WARNING"));
-		assertTrue(terminalRuntime.contains("TerminalPage.RECORDS.ordinal()"));
+		// The redirect has to outrank the remembered tab, or a player who left the terminal on files
+		// gets the warning without the records it points at.
+		assertTrue(terminalRuntime.contains("openRecords ? TerminalPage.RECORDS : remembered"));
 		assertTrue(terminalRuntime.contains("PURSUIT_WARNING_RECORDS_REDIRECT, false"));
 		assertTrue(terminalScreen.contains("TerminalPage.fromIndex(snapshot.initialPage())"));
 		assertTrue(terminalScreen.contains("TerminalControlPayload.MARK_RECORDS_READ"));
@@ -829,13 +845,13 @@ final class ResourceContractTest {
 		}
 		assertTrue(ritual.contains("RitualResult deposit(") && ritual.contains("RitualResult withdraw(")
 				&& ritual.contains("RitualResult cancel("));
-		assertTrue(policy.contains("COLLAPSE_DURATION_TICKS = 12_000")
-				&& policy.contains("MAX_PERMANENT_TERRAIN_EDITS = 2_048")
-				&& policy.contains("MAX_TERRAIN_EDITS_PER_TICK = 8"));
+		assertTrue(policy.contains("COLLAPSE_DURATION_TICKS = 7_200")
+				&& policy.contains("MAX_PERMANENT_TERRAIN_EDITS = 8_192")
+				&& policy.contains("MAX_TERRAIN_EDITS_PER_TICK = 32"));
 		assertTrue(stages.contains("SUCCESS_RESOLUTION") && stages.contains("FAILURE_RESOLUTION")
 				&& stages.contains("PHASE_1") && stages.contains("PHASE_2") && stages.contains("PHASE_3"));
-		for (String action : List.of("LASER_SWEEP", "ENERGY_ORB", "GRAB_SLAM", "MENTAL_ASSAULT",
-				"CHARGE_WEAPON_STEAL", "GRAB_THROW", "GAZE_HOTBAR_CLEAR", "ARROW_REFLECTION",
+		for (String action : List.of("LASER_SWEEP", "ENERGY_ORB", "SKY_LANCE",
+				"CHARGE_WEAPON_STEAL", "GRAB_THROW", "GAZE_HOTBAR_CLEAR", "TENDRIL_LASH",
 				"FORCED_EVICTION")) {
 			assertTrue(actions.contains(action));
 			assertTrue(attackService.contains("case " + action));
@@ -846,16 +862,20 @@ final class ResourceContractTest {
 				&& encounter.contains("FAILURE_RESOLUTION"));
 		assertTrue(arena.contains("GATEWAY_COUNT = 20") && arena.contains("ANCHOR_COUNT = 10")
 				&& arena.contains("MAX_PERMANENT_EDITS") && arena.contains("MAX_EDITS_PER_TICK"));
-		assertTrue(blocks.contains("RESONANCE_CORE") && blocks.contains("WARP_GATE_CORE")
-				&& blocks.contains("STABILITY_ANCHOR_CAGE"));
+		assertTrue(blocks.contains("RESONANCE_CORE") && blocks.contains("WORLD_INTERFACE_EXIT_PORTAL"));
+		// The anchor cage and the gate core are gone rather than retextured: the gate structures
+		// stopped being built long ago, and the cage wrapped a bright band of custom texture around
+		// the one thing in the arena a player is meant to be looking at.
+		assertFalse(blocks.contains("WARP_GATE_CORE") || blocks.contains("STABILITY_ANCHOR_CAGE"));
 		assertTrue(protocol.contains("VERSION = 1") && protocol.contains("MAX_PARTICIPANTS = 8")
 				&& protocol.contains("MAX_GATEWAYS = 20") && protocol.contains("ANCHOR_MASK = 0x03FF"));
 		assertFalse(immunityTag.get("replace").getAsBoolean());
 		String immuneValues = immunityTag.getAsJsonArray("values").toString();
-		for (String criticalBlock : List.of("resonance_core", "warp_gate_core",
-				"stability_anchor_cage", "world_interface_exit_portal")) {
+		for (String criticalBlock : List.of("resonance_core", "world_interface_exit_portal")) {
 			assertTrue(immuneValues.contains("thefourthfrequency:" + criticalBlock));
 		}
+		// A tag entry naming an unregistered block fails the whole tag on data-pack load.
+		assertFalse(immuneValues.contains("warp_gate_core") || immuneValues.contains("stability_anchor_cage"));
 		assertTrue(mixins.contains("EndCrystalMixin") && mixins.contains("EndPortalBlockMixin")
 				&& mixins.contains("EnderEyeItemMixin") && mixins.contains("EnderDragonMixin")
 				&& !mixins.contains("ServerPlayerDropMixin"));
@@ -912,6 +932,24 @@ final class ResourceContractTest {
 	}
 
 	@Test
+	void recoveryKeyIsPolledSoItSurvivesTheLockedEndingScreen() throws Exception {
+		String controller = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/meta_api/MetaController.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(controller.contains("GLFW.GLFW_KEY_F8"));
+		// KeyboardHandler only feeds KeyMapping.click while no screen is open, and every ending
+		// parks the player on the locked title screen, so consumeClick alone can never fire there.
+		assertTrue(controller.contains("InputConstants.isKeyDown"),
+				"The recovery key must be polled, not taken from the screen-gated click queue");
+		assertTrue(controller.contains("held && !toggleKeyHeld"),
+				"Polling must be edge-triggered so one press opens exactly one confirmation");
+		assertTrue(controller.contains("KeyBindingHelper.getBoundKeyOf(toggleKey)"),
+				"Polling must follow the player's rebind instead of the hardcoded default");
+		assertTrue(controller.contains("WorldInterfaceEndingClient.replayResetAvailable()"));
+		assertTrue(controller.contains("WorldInterfaceEndingClient.requestRecoveryConfirmation"));
+	}
+
+	@Test
 	void firstRunNoticeUsesClientLocalVersionMarkerAndCannotBeBypassed() throws Exception {
 		String controller = Files.readString(Path.of(
 				"src/client/java/com/xm/thefourthfrequency/client_ui/FirstRunNoticeController.java"),
@@ -925,6 +963,8 @@ final class ResourceContractTest {
 		assertTrue(controller.contains("ClientTickEvents.END_CLIENT_TICK"));
 		assertTrue(controller.contains("client.screen instanceof TitleScreen"));
 		assertTrue(controller.contains("new FirstRunNoticeScreen(titleScreen)"));
+		assertTrue(controller.contains("client.getOverlay() != null"),
+				"Minecraft ticks screens under the loading overlay, so the notice must wait it out");
 		assertFalse(controller.contains("ClientPlayConnectionEvents.JOIN"));
 		assertFalse(controller.contains("TerminalData"));
 		String screen = Files.readString(Path.of(
@@ -951,6 +991,24 @@ final class ResourceContractTest {
 		assertTrue(screen.contains("TUBE_LIT_TICK = IGNITION_TICKS + UNFOLD_TICKS"));
 		assertTrue(screen.contains("POWER_ON_END_TICK = TUBE_LIT_TICK + BLOOM_TICKS"));
 		assertTrue(screen.contains("renderPowerOn"));
+		assertTrue(screen.contains("drawGlassSurface"),
+				"A flat fill inside a painted bezel is what read as cheap; the glass keeps its surface");
+		// Painting the surface to the copy-safe rect stopped it short of the bezel and left a visible
+		// rectangle of different green. Anything that paints the tube must use the measured opening.
+		assertTrue(screen.contains("GlassBounds glass = glassOpening("),
+				"the tube surface must cover the lit opening, not the smaller copy-safe rect");
+		assertFalse(screen.contains("drawGlassSurface(graphics, glassBounds("),
+				"no paint pass may fall back to the copy-safe rect");
+		for (String surface : new String[]{"SCANLINE_PITCH", "SCANLINE_ALPHA",
+				"PHOSPHOR_FLOOR_ALPHA", "GLASS_OPENING_LEFT_ASSET"}) {
+			assertTrue(screen.contains(surface), surface);
+		}
+		assertTrue(screen.contains("NOTICE_READY_TICK = POWER_ON_END_TICK"),
+				"The raster sweep is the reveal, so no separate fade may follow the power-on");
+		assertFalse(screen.contains("NOTICE_REVEAL_TICKS"),
+				"A post-power-on fade would light the tube on an empty screen again");
+		assertTrue(screen.contains("minecraft.getOverlay() != null) return"),
+				"A reload overlay must hold the entrance clock instead of running it out of sight");
 		assertFalse(screen.contains("Calibration") || screen.contains("MHz"),
 				"The band-sweep entrance is replaced by a copy-free tube power-on");
 		assertFalse(screen.contains("drawHeaderScope"));
@@ -1192,6 +1250,152 @@ final class ResourceContractTest {
 	}
 
 	@Test
+	void worldInterfaceSheetsAreIslandPaintedAtUniformDensityWithContainedGlow() throws Exception {
+		String uv = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_render/WorldInterfaceUv.java"),
+				StandardCharsets.UTF_8);
+		// Hand-editing the offsets points the model at rectangles the generator never painted.
+		assertTrue(uv.contains("GENERATED by {@code tools/world_interface_uv.py --emit-java}"));
+		var widthMatch = java.util.regex.Pattern.compile("UV_WIDTH = (\\d+)").matcher(uv);
+		var heightMatch = java.util.regex.Pattern.compile("UV_HEIGHT = (\\d+)").matcher(uv);
+		assertTrue(widthMatch.find() && heightMatch.find());
+		int uvWidth = Integer.parseInt(widthMatch.group(1));
+		int uvHeight = Integer.parseInt(heightMatch.group(1));
+
+		String[] bases = {"world_interface_form_1", "world_interface_form_2",
+				"world_interface_form_3", "world_interface_form_3_black"};
+		String[] overlays = {"world_interface_form_1_emissive", "world_interface_form_2_emissive",
+				"world_interface_form_3_emissive", "world_interface_form_1_hit",
+				"world_interface_form_2_hit", "world_interface_form_3_hit"};
+		int sheetWidth = -1;
+		int sheetHeight = -1;
+		for (String name : bases) {
+			Path path = ASSETS.resolve("textures/entity/" + name + ".png");
+			assertTrue(Files.isRegularFile(path), name);
+			var image = ImageIO.read(path.toFile());
+			if (sheetWidth < 0) {
+				sheetWidth = image.getWidth();
+				sheetHeight = image.getHeight();
+			}
+			assertEquals(sheetWidth, image.getWidth(), name);
+			assertEquals(sheetHeight, image.getHeight(), name);
+			for (int y = 0; y < sheetHeight; y += 3) for (int x = 0; x < sheetWidth; x += 3) {
+				assertEquals(255, image.getRGB(x, y) >>> 24, name + " alpha at " + x + "," + y);
+			}
+		}
+		// A non-square texel would stretch every island along one axis; the generator scales both
+		// canvas dimensions by one factor, and this is what keeps a hand-resized PNG from shipping.
+		assertEquals(sheetWidth / uvWidth, sheetHeight / uvHeight,
+				"texel density must match on both axes");
+		assertEquals(0, sheetWidth % uvWidth);
+		assertEquals(0, sheetHeight % uvHeight);
+		// The third form is scaled sixteen times; at the old one-texel-per-unit a texel covered a
+		// whole block, which is what made the body read as untextured from anywhere close to it.
+		assertTrue(sheetWidth / uvWidth >= 4, "texel density=" + sheetWidth / uvWidth);
+
+		int packedRows = sheetHeight * 3 / 4;
+		for (String name : overlays) {
+			Path path = ASSETS.resolve("textures/entity/" + name + ".png");
+			assertTrue(Files.isRegularFile(path), name);
+			var image = ImageIO.read(path.toFile());
+			assertEquals(sheetWidth, image.getWidth(), name);
+			assertEquals(sheetHeight, image.getHeight(), name);
+			assertTrue(image.getColorModel().hasAlpha(), name);
+			boolean glow = name.endsWith("_emissive");
+			int nonTransparent = 0;
+			for (int y = 0; y < sheetHeight; y++) for (int x = 0; x < sheetWidth; x++) {
+				if ((image.getRGB(x, y) >>> 24) == 0) continue;
+				nonTransparent++;
+				// The old generator sprayed glow specks at random across the whole canvas, which
+				// put unexplained lit patches on whichever parts happened to sample them.
+				assertTrue(y < packedRows, name + " overlay pixel below the packed islands at "
+						+ x + "," + y);
+			}
+			assertTrue(nonTransparent > 0, name + " is entirely transparent");
+			double coverage = nonTransparent / (double) (sheetWidth * sheetHeight);
+			assertTrue(coverage <= (glow ? 0.02 : 0.05), name + " coverage=" + coverage);
+		}
+
+		// The offset table and the painted sheets are produced by one script but checked in
+		// separately, so regenerating either alone leaves parts sampling rectangles nothing was
+		// drawn into. Nothing else here would notice: both halves stay individually well-formed.
+		var manifest = Files.readAllLines(Path.of("docs/art/world_interface/layout.txt"),
+				StandardCharsets.UTF_8).stream().filter(line -> !line.startsWith("#")).toList();
+		assertFalse(manifest.isEmpty());
+		var manifestOffsets = new java.util.HashSet<String>();
+		var baseSheet = ImageIO.read(
+				ASSETS.resolve("textures/entity/world_interface_form_3.png").toFile());
+		for (String line : manifest) {
+			String[] fields = line.split(" ");
+			assertEquals(5, fields.length, line);
+			manifestOffsets.add("{" + fields[1] + ", " + fields[2] + "}");
+			int probeX = Integer.parseInt(fields[3]);
+			int probeY = Integer.parseInt(fields[4]);
+			// Unpainted sheet is a per-column constant, so the bottom row is the dead value for
+			// this column. A probe that matches it means the island was never painted there.
+			assertNotEquals(baseSheet.getRGB(probeX, sheetHeight - 1),
+					baseSheet.getRGB(probeX, probeY),
+					fields[0] + " samples unpainted sheet at " + probeX + "," + probeY);
+		}
+		String uvOffsets = uv.substring(uv.indexOf("private static int[] pick"));
+		int checked = 0;
+		// Bucketed parts carry {u, v} pairs; single-island parts carry a _U/_V constant each.
+		var pairMatcher = java.util.regex.Pattern.compile("\\{(\\d+), (\\d+)\\}").matcher(uvOffsets);
+		while (pairMatcher.find()) {
+			assertTrue(manifestOffsets.contains(pairMatcher.group()),
+					"WorldInterfaceUv offset " + pairMatcher.group() + " is not in layout.txt");
+			checked++;
+		}
+		var singleMatcher = java.util.regex.Pattern
+				.compile("(\\w+)_U = (\\d+);\\s*+static final int \\1_V = (\\d+);").matcher(uvOffsets);
+		while (singleMatcher.find()) {
+			String offset = "{" + singleMatcher.group(2) + ", " + singleMatcher.group(3) + "}";
+			assertTrue(manifestOffsets.contains(offset),
+					"WorldInterfaceUv " + singleMatcher.group(1) + " offset " + offset
+							+ " is not in layout.txt");
+			checked++;
+		}
+		assertEquals(manifest.size(), checked, "every island must be reachable from the model");
+
+		String model = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_render/WorldInterfaceModel.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(model.contains(
+				"LayerDefinition.create(mesh, WorldInterfaceUv.UV_WIDTH, WorldInterfaceUv.UV_HEIGHT)"));
+		// Every offset has to come from the generated table, or that part samples unpainted sheet.
+		assertFalse(java.util.regex.Pattern.compile("texOffs\\(\\d").matcher(model).find(),
+				"WorldInterfaceModel must take every texOffs from WorldInterfaceUv");
+		assertTrue(model.contains("void submitEmissive("));
+
+		String renderer = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_render/WorldInterfaceRenderer.java"),
+				StandardCharsets.UTF_8);
+		// The steady-state glow must not walk the whole body; only the damage flash still does.
+		assertTrue(renderer.contains("getParentModel().submitEmissive("));
+		assertEquals(1, count(renderer, "submitModel(getParentModel()"),
+				"only the damage flash may submit the entire model a second time");
+		assertTrue(renderer.contains("RenderTypes.entityTranslucentEmissive(HIT[form])"));
+
+		String beams = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_render/WorldInterfaceBeamBatchRenderer.java"),
+				StandardCharsets.UTF_8);
+		// Two copies of the scatter drifted the drawn storm off the modelled body when one changed.
+		assertTrue(beams.contains("WorldInterfaceScatter.hash(seed)"));
+		assertTrue(model.contains("WorldInterfaceScatter.hash(seed)"));
+		assertFalse(beams.contains("374761393"), "beam renderer must not carry its own scatter");
+		assertFalse(model.contains("374761393"), "model must not carry its own scatter");
+		assertTrue(Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_render/WorldInterfaceScatter.java"),
+				StandardCharsets.UTF_8).contains("374761393"));
+	}
+
+	private static int count(String haystack, String needle) {
+		int total = 0;
+		for (int at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1)) total++;
+		return total;
+	}
+
+	@Test
 	void anomalyPresentationUsesV3ControllerWithoutPotionOrPromptDependencies() throws Exception {
 		String networking = Files.readString(Path.of(
 				"src/main/java/com/xm/thefourthfrequency/networking/TerminalNetworking.java"), StandardCharsets.UTF_8);
@@ -1376,9 +1580,10 @@ final class ResourceContractTest {
 		assertTrue(fogMixin.contains("DimensionViewDistanceController.atmosphericChunks"));
 		assertTrue(fogMixin.contains("clampRenderStart"));
 		assertTrue(fogMixin.contains("clampRenderEnd"));
-		assertTrue(viewDistancePolicy.contains("OVERWORLD_CHUNKS = 3")
-				&& viewDistancePolicy.contains("NETHER_CHUNKS = 6")
-				&& viewDistancePolicy.contains("END_CHUNKS = 12")
+		assertTrue(viewDistancePolicy.contains("OVERWORLD_CHUNKS = 6")
+				&& viewDistancePolicy.contains("NETHER_CHUNKS = 12")
+				&& viewDistancePolicy.contains("END_CHUNKS = 16")
+				&& viewDistancePolicy.contains("OTHER_CHUNKS = 12")
 				&& viewDistancePolicy.contains("SUCCESS_RETURN_CHUNKS = 16"));
 		assertTrue(viewDistanceController.contains("ClientTickEvents.END_CLIENT_TICK")
 				&& viewDistanceController.contains("renderDistance().set(locked)")
@@ -1404,6 +1609,14 @@ final class ResourceContractTest {
 		assertTrue(handMixin.contains("renderHandsWithItems"));
 		assertTrue(entityRendererMixin.contains("isAnonymousProxy"));
 		assertTrue(renderRegionMixin.contains("visualReplacement"));
+		// Air has no hardness, no drops and nothing to mine, so a proxy painted over it is a solid
+		// face the player can never remove. Both substitution points must refuse air on their own.
+		for (String substitutionSource : new String[]{
+				"src/client/java/com/xm/thefourthfrequency/client_ui/AnomalyPresentationController.java",
+				"src/client/java/com/xm/thefourthfrequency/client_ui/WorldInterfacePresentationController.java"}) {
+			assertTrue(Files.readString(Path.of(substitutionSource), StandardCharsets.UTF_8)
+					.contains("original.isAir()) return original"), substitutionSource);
+		}
 		assertTrue(renderRegionMixin.contains("markTraceRendered"));
 		assertFalse(renderRegionMixin.contains("isLightSourceHidden"));
 		assertFalse(mixinConfig.contains("LevelRendererAnomalyMixin"));
@@ -1489,7 +1702,8 @@ final class ResourceContractTest {
 		assertTrue(controller.contains("screenTicks >= AlphaLoadTimeline.GLITCH_START_TICK"));
 		assertTrue(controller.contains("retainFinalWindowTitle"));
 		assertTrue(controller.contains("MENU_VERSION_TEXT = \"Minecraft 1.0.0\""));
-		assertTrue(controller.contains("MENU_WINDOW_TITLE = \"Minecraft 1.0.0\""));
+		assertTrue(controller.contains("MENU_WINDOW_TITLE = \"Minecraft Alpha 1.0.0\""),
+				"Docs, README and four client gametests pin the window bar to the Alpha era name");
 		assertEquals("%s - Singleplayer World", enLang.get(
 				"window.thefourthfrequency.alpha_load.singleplayer").getAsString());
 		assertEquals("%s - Multiplayer", enLang.get(
@@ -1620,8 +1834,34 @@ final class ResourceContractTest {
 			assertFalse(corruptionRenderer.contains(phase),
 					"AlphaCorruptionRenderer must not own timing: " + phase);
 		}
-		assertTrue(enLang.has("screen.thefourthfrequency.alpha_loading.timecode"));
-		assertTrue(zhLang.has("screen.thefourthfrequency.alpha_loading.timecode"));
+		for (String key : new String[]{"screen.thefourthfrequency.alpha_loading.timecode",
+				"screen.thefourthfrequency.alpha_loading.wall_intrusion",
+				"window.thefourthfrequency.alpha_load.dead_air"}) {
+			assertTrue(enLang.has(key), "missing English " + key);
+			assertTrue(zhLang.has(key), "missing Chinese " + key);
+		}
+		// One line in the failure wall contradicts the wall; the observer returns on a frame that
+		// has stopped; the recovered progress bar takes its own reassurance back once.
+		assertTrue(loadingMixin.contains("alpha_loading.wall_intrusion"));
+		assertTrue(loadingMixin.contains("INTRUSION_COLOR = 0xFFFF5C57"));
+		// Off the centre line: dead centre would present it, and it is meant to be found.
+		assertTrue(loadingMixin.contains("INTRUSION_CENTER_X = 0.66F"));
+		assertTrue(loadingMixin.contains("INTRUSION_CENTER_Y = 0.66F"));
+		// The wipe travels on its own; lit edges read as a transition effect laid over the screen.
+		assertFalse(loadingMixin.contains("0xB3E8DCD4"),
+				"The flood wipe must not draw leading edge lines");
+		// Text holds still: the damage is carried by chroma, scanlines and tracking, all of which
+		// sit on top of a stable layout. Jittering glyphs read as an effect, not as a failure.
+		assertFalse(loadingMixin.contains("tremorX"));
+		assertFalse(loadingMixin.contains("tremorY"));
+		assertTrue(loadingMixin.contains("int placement = thefourthfrequency$chaos(copy * 31)"),
+				"Failure copies must keep the offset they were born with");
+		assertTrue(loadingMixin.contains("AlphaLoadTimeline.frozenObserverVisible"));
+		assertTrue(loadingMixin.contains("AlphaLoadTimeline.recoveryProgressFault"));
+		assertTrue(loadingMixin.contains("AlphaLoadTimeline.initialNormalProgress"),
+				"The prelude bar must lose ground before anything visibly corrupts");
+		assertTrue(controller.contains("AlphaLoadTimeline.deadAirWindowTitle(screenTicks)"));
+		assertTrue(controller.contains("window.thefourthfrequency.alpha_load.dead_air"));
 
 		// Every bed the corruption starts must be stoppable from both routes out of the loading
 		// screen. Multiplayer can lose the screen to a kick or timeout without onClose ever
@@ -1632,14 +1872,17 @@ final class ResourceContractTest {
 		assertTrue(corruptionAudio.contains("ModSounds.SIGNAL_STATIC"));
 		assertTrue(corruptionAudio.contains("ModSounds.SIGNAL_DEAD_AIR"));
 		assertTrue(corruptionAudio.contains("ModSounds.SIGNAL_CARRIER_LOST"));
-		assertTrue(loadingMixin.contains("AlphaCorruptionAudio.stopAll()"));
-		assertTrue(controller.contains("AlphaCorruptionAudio.stopAll()"));
+		assertTrue(corruptionAudio.contains("private void fadeOut()"));
+		// Released with a tail, never cut: a hard edge marks the frame the sequence ended on.
+		assertTrue(loadingMixin.contains("AlphaCorruptionAudio.fadeOutAll()"));
+		assertFalse(loadingMixin.contains("AlphaCorruptionAudio.stopAll()"),
+				"Entering the world must fade the beds out, not cut them");
 		assertTrue(controller.substring(controller.indexOf("private static void end(Minecraft"))
-						.contains("AlphaCorruptionAudio.stopAll()"),
+						.contains("AlphaCorruptionAudio.fadeOutAll()"),
 				"The multiplayer disconnect path must silence the corruption beds");
 		// The window title is asked for every tick but changes six times; setting it every tick
 		// is twenty GLFW calls a second to write a string the window already has.
-		assertTrue(controller.contains("if (!force && resolved == appliedVersionStage"));
+		assertTrue(controller.contains("if (!force && title.equals(appliedWindowTitle)) return;"));
 		assertTrue(controller.contains("private static String titleForStage(int stage)"));
 
 		assertTrue(overlayMixin.contains("consumeResourceReloadAnimationSuppression"));

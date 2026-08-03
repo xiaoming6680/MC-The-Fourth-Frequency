@@ -10,17 +10,35 @@ import com.xm.thefourthfrequency.terminal.TerminalTool;
 import com.xm.thefourthfrequency.terminal.TerminalToolService;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
+import net.minecraft.world.level.levelgen.structure.Structure;
+import net.minecraft.world.level.levelgen.structure.StructureStart;
 import com.xm.thefourthfrequency.pursuit.PursuitDimensions;
+
+import java.util.HashSet;
+import java.util.Set;
 
 /** On-demand, cached structure location for the low-view-distance terminal navigator. */
 public final class StructureNavigationService {
 	public static final int ARRIVAL_RADIUS = 50;
+	/**
+	 * How far above or below a structure's real box still counts as having reached it.
+	 *
+	 * <p>Wide enough that standing on the roof of a village or on the surface directly over a
+	 * shallow ruined portal still resolves, and narrow enough that a mineshaft sixty blocks down
+	 * does not resolve from daylight.</p>
+	 */
+	public static final int VERTICAL_ARRIVAL_TOLERANCE = 16;
 	private static boolean initialized;
 
 	private StructureNavigationService() {
@@ -91,10 +109,6 @@ public final class StructureNavigationService {
 		return selectedTarget(tag) != TerminalStructureTarget.NONE && NavigationState.read(tag).located();
 	}
 
-	public static boolean navigationCompletionAvailable(CompoundTag tag) {
-		return tag.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_ACTIVE, false);
-	}
-
 	public static void clearStructureTargetOutsideDimension(CompoundTag tag, String dimension, long now) {
 		NavigationState navigation = NavigationState.read(tag);
 		if (TerminalStructureTarget.fromId(navigation.kind()) == TerminalStructureTarget.NONE
@@ -104,38 +118,8 @@ public final class StructureNavigationService {
 		new NavigationState("unresolved", "", false, "", 0L, "", now).writeTo(tag);
 	}
 
-	public static int navigationCompletionDirection(ServerPlayer player, CompoundTag tag) {
-		int fallback = Math.clamp(tag.getIntOr(TerminalData.NAVIGATION_COMPLETION_DIRECTION, 0), 0, 3);
-		String dimension = tag.getStringOr(TerminalData.NAVIGATION_COMPLETION_DIMENSION, "");
-		if (!dimension.equals(player.level().dimension().identifier().toString())) return fallback;
-		BlockPos target = BlockPos.of(tag.getLongOr(TerminalData.NAVIGATION_COMPLETION_POSITION, 0L));
-		BlockPos origin = player.blockPosition();
-		return TerminalNavigationMath.relativeDirection(target.getX() - origin.getX(),
-				target.getZ() - origin.getZ(), player.getYRot());
-	}
 
-	public static boolean acknowledgeCompletion(ServerPlayer player) {
-		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
-		CompoundTag tag = data.terminalRecord(player.getUUID()).orElse(null);
-		if (tag == null || !tag.getBooleanOr(TerminalData.NAVIGATION_COMPLETION_UNREAD, false)) return false;
-		data.updateTerminalRecord(player.getUUID(), record -> {
-			record.putBoolean(TerminalData.NAVIGATION_COMPLETION_UNREAD, false);
-			record.putBoolean(TerminalData.UNREAD_ALERT_ACTIVE,
-					com.xm.thefourthfrequency.terminal.TerminalSignalLog.unreadCount(record) > 0
-							|| TerminalFileState.unreadCount(record) > 0);
-		});
-		return true;
-	}
-
-	public static boolean dismissCompletion(ServerPlayer player) {
-		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
-		CompoundTag tag = data.terminalRecord(player.getUUID()).orElse(null);
-		if (tag == null || !navigationCompletionAvailable(tag)) return false;
-		data.updateTerminalRecord(player.getUUID(), StructureNavigationService::clearCompletion);
-		TerminalRuntimeService.synchronizeProjection(player);
-		return true;
-	}
-
+	/** Wipes the retired completion card, so saves written before it was removed do not keep one. */
 	public static void clearCompletion(CompoundTag tag) {
 		tag.putBoolean(TerminalData.NAVIGATION_COMPLETION_ACTIVE, false);
 		tag.putBoolean(TerminalData.NAVIGATION_COMPLETION_UNREAD, false);
@@ -144,9 +128,69 @@ public final class StructureNavigationService {
 		tag.putInt(TerminalData.NAVIGATION_COMPLETION_DIRECTION, 0);
 	}
 
-	public static boolean arrived(BlockPos player, BlockPos target) {
+	/** Pure horizontal test, for callers that have no level to resolve real geometry against. */
+	public static boolean arrived(BlockPos player, BlockPos target, TerminalStructureTarget structure) {
+		int radius = structure == TerminalStructureTarget.NONE ? ARRIVAL_RADIUS : structure.arrivalRadius();
 		return TerminalNavigationMath.withinHorizontalRadius(
-				player.getX(), player.getZ(), target.getX(), target.getZ(), ARRIVAL_RADIUS);
+				player.getX(), player.getZ(), target.getX(), target.getZ(), radius);
+	}
+
+	/**
+	 * Arrival, using the structure's real geometry when the world can still supply it.
+	 *
+	 * <p>The located position cannot carry height - {@code StructurePlacement.getLocatePos} reports
+	 * every structure at y=0 - so a horizontal-only test was the only thing the target itself
+	 * supported, and it declared a mineshaft reached while the player stood on the surface eighty
+	 * blocks above it. The generated structure does know where it is, though, and by the time
+	 * arrival is being considered the player is close enough that the chunk holding it is usually
+	 * loaded. So the check asks the world instead of the target:</p>
+	 *
+	 * <ol>
+	 * <li>standing inside one of the structure's own pieces is arrival outright, no radius needed;</li>
+	 * <li>otherwise the horizontal radius still applies, and the real bounding box adds the
+	 * vertical half of the test;</li>
+	 * <li>if the box cannot be resolved without forcing chunks to load, the horizontal radius
+	 * decides alone, exactly as before.</li>
+	 * </ol>
+	 */
+	public static boolean arrived(ServerLevel level, BlockPos player, BlockPos target,
+			TerminalStructureTarget structure) {
+		// getStructureWithPieceAt never returns null: a miss comes back as StructureStart.INVALID_START,
+		// a pieceless singleton. Testing the reference would make this branch unconditionally true and
+		// hand out arrival the moment guidance started, anywhere in the world.
+		if (structure != TerminalStructureTarget.NONE && structure.structureTag() != null
+				&& level.structureManager().getStructureWithPieceAt(player, structure.structureTag()).isValid()) {
+			return true;
+		}
+		if (!arrived(player, target, structure)) return false;
+		BoundingBox box = resolveStructureBox(level, target, structure);
+		if (box == null) return true;
+		return player.getY() >= box.minY() - VERTICAL_ARRIVAL_TOLERANCE
+				&& player.getY() <= box.maxY() + VERTICAL_ARRIVAL_TOLERANCE;
+	}
+
+	/** @return the generated structure's box, or null when reading it would force a chunk load */
+	private static BoundingBox resolveStructureBox(ServerLevel level, BlockPos target,
+			TerminalStructureTarget structure) {
+		if (structure == TerminalStructureTarget.NONE || structure.structureTag() == null) return null;
+		if (!level.hasChunkAt(target)) return null;
+		Registry<Structure> registry = level.registryAccess().lookupOrThrow(Registries.STRUCTURE);
+		Set<Structure> tagged = new HashSet<>();
+		for (Holder<Structure> holder : registry.getTagOrEmpty(structure.structureTag())) tagged.add(holder.value());
+		if (tagged.isEmpty()) return null;
+		BoundingBox box = null;
+		for (StructureStart start : level.structureManager()
+				.startsForStructure(new ChunkPos(target), tagged::contains)) {
+			if (!start.isValid()) continue;
+			box = box == null ? start.getBoundingBox() : encompass(box, start.getBoundingBox());
+		}
+		return box;
+	}
+
+	private static BoundingBox encompass(BoundingBox first, BoundingBox second) {
+		return new BoundingBox(Math.min(first.minX(), second.minX()), Math.min(first.minY(), second.minY()),
+				Math.min(first.minZ(), second.minZ()), Math.max(first.maxX(), second.maxX()),
+				Math.max(first.maxY(), second.maxY()), Math.max(first.maxZ(), second.maxZ()));
 	}
 
 	private static void onServerTick(MinecraftServer server) {
@@ -169,7 +213,7 @@ public final class StructureNavigationService {
 		if (target == TerminalStructureTarget.NONE || !navigation.located()
 				|| !navigation.dimension().equals(player.level().dimension().identifier().toString())) return;
 		BlockPos destination = BlockPos.of(navigation.position());
-		if (!arrived(player.blockPosition(), destination)) return;
+		if (!arrived(player.level(), player.blockPosition(), destination, target)) return;
 		int direction = TerminalNavigationMath.relativeDirection(
 				destination.getX() - player.getBlockX(), destination.getZ() - player.getBlockZ(), player.getYRot());
 		data.updateTerminalRecord(player.getUUID(), record -> {
@@ -177,16 +221,18 @@ public final class StructureNavigationService {
 			record.putInt(TerminalData.COMPLETED_STRUCTURE_TARGETS_MASK,
 					record.getIntOr(TerminalData.COMPLETED_STRUCTURE_TARGETS_MASK, 0)
 							| TerminalStructureTarget.bit(target));
-			record.putBoolean(TerminalData.NAVIGATION_COMPLETION_ACTIVE, true);
-			record.putBoolean(TerminalData.NAVIGATION_COMPLETION_UNREAD, true);
-			record.putLong(TerminalData.NAVIGATION_COMPLETION_POSITION, destination.asLong());
-			record.putString(TerminalData.NAVIGATION_COMPLETION_DIMENSION, navigation.dimension());
-			record.putInt(TerminalData.NAVIGATION_COMPLETION_DIRECTION, direction);
+			clearCompletion(record);
 			new NavigationState("unresolved", "", false, "", 0L, "", player.level().getGameTime()).writeTo(record);
 		});
+		// Arrival used to leave a card on the home page that the player had to close by hand, which
+		// made an event that is already over sit there looking like an outstanding task. The bearing
+		// it carried is the only thing worth keeping, so it moves into the notice and the whole
+		// acknowledge-and-dismiss round trip goes away.
 		com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
 				Component.translatable("message.thefourthfrequency.navigation.structure_nearby",
-						Component.translatable("terminal.thefourthfrequency.navigation.target." + target.id())));
+						Component.translatable("terminal.thefourthfrequency.navigation.target." + target.id()),
+						Component.translatable("terminal.thefourthfrequency.relative_direction."
+								+ TerminalNavigationMath.relativeDirectionId(direction))));
 		TerminalRuntimeService.synchronizeProjection(player);
 		TerminalRuntimeService.refresh(player);
 	}

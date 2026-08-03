@@ -40,6 +40,20 @@ public final class TerminalNoticeService {
 		denied(player, Component.translatable(messageKey));
 	}
 
+	/** Encounter narration: what the fight itself is doing. */
+	public static void encounter(ServerPlayer player, Component message) {
+		send(player, message, TerminalNoticePayload.TONE_ENCOUNTER);
+	}
+
+	/** Anchor pressure, which is the one channel the table can act on directly. */
+	public static void anchor(ServerPlayer player, Component message) {
+		send(player, message, TerminalNoticePayload.TONE_ANCHOR);
+	}
+
+	public static void dragon(ServerPlayer player, Component message) {
+		send(player, message, TerminalNoticePayload.TONE_DRAGON);
+	}
+
 	public static void pursuitWarning(ServerPlayer player) {
 		pursuit(player, Component.translatable("message.thefourthfrequency.pursuit.warning"));
 	}

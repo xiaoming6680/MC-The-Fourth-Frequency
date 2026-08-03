@@ -115,14 +115,6 @@ public final class ResourceGuidanceService {
 	}
 
 	public static void updatePlayer(ServerPlayer player) {
-		updatePlayer(player, null);
-	}
-
-	public static void updatePlayerForTesting(ServerPlayer player, int autoSurveyRoll) {
-		updatePlayer(player, Math.clamp(autoSurveyRoll, 0, 99));
-	}
-
-	private static void updatePlayer(ServerPlayer player, Integer forcedAutoSurveyRoll) {
 		MinecraftServer server = player.level().getServer();
 		Map<UUID, ProbeState> probes = ACTIVE_PROBES.computeIfAbsent(server, ignored -> new HashMap<>());
 		Map<UUID, AutoScanState> autoScans = AUTO_SCANS.computeIfAbsent(server, ignored -> new HashMap<>());
@@ -160,7 +152,7 @@ public final class ResourceGuidanceService {
 		}
 		if (hadSurveyState) autoScans.remove(player.getUUID());
 		if (TerminalRuntimeService.isOpen(player)) return;
-		updateAutoScan(player, data, autoScans, forcedAutoSurveyRoll);
+		updateAutoScan(player, data, autoScans);
 	}
 
 	/** Discards any reading and stops an in-flight probe; used when the tool is taken away. */
@@ -179,6 +171,19 @@ public final class ResourceGuidanceService {
 	public static void abandonProbe(ServerPlayer player) {
 		MinecraftServer server = player.level().getServer();
 		ACTIVE_PROBES.computeIfAbsent(server, ignored -> new HashMap<>()).remove(player.getUUID());
+	}
+
+	/**
+	 * Drops the finished passive sweep so the next update re-scans immediately.
+	 *
+	 * <p>A sweep that found nothing parks itself for {@link #AUTO_SCAN_RESET_TICKS} rather than
+	 * re-reading the same five blocks every tick. Tests run inside a single tick and so can never
+	 * wait that out; this is the one thing they need that the passage of time would otherwise
+	 * provide.</p>
+	 */
+	public static void forgetAutoScanForTesting(ServerPlayer player) {
+		MinecraftServer server = player.level().getServer();
+		AUTO_SCANS.computeIfAbsent(server, ignored -> new HashMap<>()).remove(player.getUUID());
 	}
 
 	/**
@@ -313,19 +318,41 @@ public final class ResourceGuidanceService {
 		if (!dimension.equals(record.getStringOr(TerminalData.MINERAL_READING_DIMENSION, ""))) {
 			// A reading is a measurement of one place. Carrying it across a portal would make it a
 			// lie, and re-taking it for free would give back the unlimited tool this replaced.
-			data.updateTerminalRecord(player.getUUID(), ResourceGuidanceService::clearReading);
-			TerminalRuntimeService.refresh(player);
+			discardReading(player, data, record, null);
 			return true;
 		}
 		if (kind != READING_EXACT) return false;
 		NavigationState navigation = NavigationState.read(record);
 		if (!navigation.located()) return false;
 		if (!targetStillPresent(player.level(), navigation)) {
-			data.updateTerminalRecord(player.getUUID(), ResourceGuidanceService::clearReading);
-			TerminalRuntimeService.refresh(player);
+			// The ore can go before the player ever reaches it - they mine into the vein from the
+			// side, or someone else gets there first. Arrival is not the only way navigation ends,
+			// and leaving it running would point the needle at a block that is no longer there.
+			discardReading(player, data, record,
+					Component.translatable("message.thefourthfrequency.navigation.mineral_mined"));
 			return true;
 		}
 		return completeMineralNavigationIfArrived(player, data, record, autoScans);
+	}
+
+	/**
+	 * Drops a reading that has stopped being true, and stops any navigation that was following it.
+	 *
+	 * @param notice announced only when navigation was actually running; a reading the player was
+	 *               not being guided by ends quietly, because nothing visible to them changed
+	 */
+	private static void discardReading(ServerPlayer player, FrequencyWorldData data, CompoundTag record,
+			Component notice) {
+		boolean guiding = TerminalToolService.guidanceTool(record) == TerminalTool.MINERALS.slot();
+		data.updateTerminalRecord(player.getUUID(), tag -> {
+			clearReading(tag);
+			if (guiding) tag.putInt(TerminalData.ACTIVE_GUIDANCE_TOOL, TerminalToolService.NO_TOOL);
+		});
+		if (guiding && notice != null) {
+			com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player, notice);
+		}
+		TerminalRuntimeService.synchronizeProjection(player);
+		TerminalRuntimeService.refresh(player);
 	}
 
 	private static boolean targetStillPresent(ServerLevel level, NavigationState navigation) {
@@ -415,22 +442,6 @@ public final class ResourceGuidanceService {
 		return surveyResource(level.getBlockState(target).getBlock()) != TerminalResource.NONE;
 	}
 
-	public static SurveyTarget automaticSurveyTarget(ServerPlayer player, CompoundTag record) {
-		if (!record.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false)) return SurveyTarget.unavailable();
-		String dimension = record.getStringOr(TerminalData.MINERAL_SURVEY_DIMENSION, "");
-		if (!dimension.equals(player.level().dimension().identifier().toString())) return SurveyTarget.unavailable();
-		BlockPos position = BlockPos.of(record.getLongOr(TerminalData.MINERAL_SURVEY_POSITION, 0L));
-		BlockPos origin = player.blockPosition();
-		if (!MineralSurveyPolicy.withinRange(position.getX() - origin.getX(),
-				position.getY() - origin.getY(), position.getZ() - origin.getZ())
-				|| !player.level().hasChunkAt(position)) return SurveyTarget.unavailable();
-		Block block = player.level().getBlockState(position).getBlock();
-		TerminalResource resource = surveyResource(block);
-		if (resource == TerminalResource.NONE) return SurveyTarget.unavailable();
-		return new SurveyTarget(true, resource, position,
-				BuiltInRegistries.BLOCK.getKey(block).toString(), dimension);
-	}
-
 	private static void clearAutoSurvey(ServerPlayer player, FrequencyWorldData data, CompoundTag record) {
 		if (!autoSurveyStatePresent(record)) return;
 		boolean visible = record.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false);
@@ -446,7 +457,7 @@ public final class ResourceGuidanceService {
 	}
 
 	private static void updateAutoScan(ServerPlayer player, FrequencyWorldData data,
-			Map<UUID, AutoScanState> autoScans, Integer forcedRoll) {
+			Map<UUID, AutoScanState> autoScans) {
 		long now = player.level().getGameTime();
 		String dimension = player.level().dimension().identifier().toString();
 		AutoScanState scan = autoScans.get(player.getUUID());
@@ -457,11 +468,11 @@ public final class ResourceGuidanceService {
 			autoScans.put(player.getUUID(), scan);
 		}
 		if (scan.finished) return;
-		scanAuto(player, data, autoScans, scan, forcedRoll);
+		scanAuto(player, data, autoScans, scan);
 	}
 
 	private static void scanAuto(ServerPlayer player, FrequencyWorldData data,
-			Map<UUID, AutoScanState> autoScans, AutoScanState scan, Integer forcedRoll) {
+			Map<UUID, AutoScanState> autoScans, AutoScanState scan) {
 		ServerLevel level = player.level();
 		int surveyCeiling = squared(MineralSurveyPolicy.RANGE);
 		while (scan.index < PROBE_OFFSETS.length) {
@@ -477,21 +488,39 @@ public final class ResourceGuidanceService {
 							candidate.getX() - player.getBlockX(),
 							candidate.getY() - player.getBlockY(),
 							candidate.getZ() - player.getBlockZ())) continue;
-			if (surveyResource(level.getBlockState(candidate).getBlock()) == TerminalResource.NONE) continue;
-			int roll = forcedRoll != null ? forcedRoll : player.getRandom().nextInt(100);
-			boolean nearby = MineralSurveyPolicy.shouldReveal(roll);
+			Block block = level.getBlockState(candidate).getBlock();
+			TerminalResource resource = surveyResource(block);
+			if (!MineralSurveyPolicy.surveyable(resource)) continue;
+			String blockId = BuiltInRegistries.BLOCK.getKey(block).toString();
+			long now = level.getGameTime();
+			// A survey hit becomes an ordinary exact reading rather than a proximity flag. The flag
+			// only existed while the player stood within five blocks of the ore, so by the time
+			// they had read the notice and opened the terminal they had usually walked out of it
+			// and found an empty tool - the survey announced something it then refused to show.
+			// As a reading it persists on the same terms as a probe: until the ore is gone, the
+			// player changes dimension, or they walk up to it.
 			data.updateTerminalRecord(player.getUUID(), record -> {
+				record.putInt(TerminalData.SELECTED_RESOURCE, resource.wireId());
+				record.putInt(TerminalData.MINERAL_READING_KIND, READING_EXACT);
+				record.putInt(TerminalData.MINERAL_READING_DX, 0);
+				record.putInt(TerminalData.MINERAL_READING_DZ, 0);
+				record.putInt(TerminalData.MINERAL_READING_MIN_DISTANCE, 0);
+				record.putInt(TerminalData.MINERAL_READING_MAX_DISTANCE, 0);
+				record.putString(TerminalData.MINERAL_READING_DIMENSION, scan.dimension);
+				new NavigationState(resource.id(), resourceItem(resource), true, blockId,
+						candidate.asLong(), scan.dimension, now).writeTo(record);
+				// Episode bookkeeping still exists, but only to stop the same block being
+				// re-announced every tick while the player is standing beside it.
 				record.putBoolean(TerminalData.MINERAL_SURVEY_PROXIMITY, true);
-				record.putBoolean(TerminalData.MINERAL_SURVEY_NEARBY, nearby);
+				record.putBoolean(TerminalData.MINERAL_SURVEY_NEARBY, true);
 				record.putLong(TerminalData.MINERAL_SURVEY_POSITION, candidate.asLong());
 				record.putString(TerminalData.MINERAL_SURVEY_DIMENSION, scan.dimension);
 			});
 			autoScans.remove(player.getUUID());
-			if (nearby) {
-				com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
-						Component.translatable("message.thefourthfrequency.guidance.nearby"));
-				TerminalRuntimeService.refresh(player);
-			}
+			com.xm.thefourthfrequency.terminal.TerminalNoticeService.send(player,
+					Component.translatable("message.thefourthfrequency.guidance.nearby"));
+			TerminalRuntimeService.synchronizeProjection(player);
+			TerminalRuntimeService.refresh(player);
 			return;
 		}
 		scan.finished = true;
@@ -513,6 +542,7 @@ public final class ResourceGuidanceService {
 			case COAL -> "minecraft:coal";
 			case GOLD -> "minecraft:raw_gold";
 			case DIAMOND -> "minecraft:diamond";
+			case EMERALD -> "minecraft:emerald";
 			case NONE -> "";
 		};
 	}
@@ -528,6 +558,10 @@ public final class ResourceGuidanceService {
 
 	private static int squared(int value) {
 		return value * value;
+	}
+
+	private static CompoundTag record(FrequencyWorldData data, ServerPlayer player) {
+		return data.terminalRecord(player.getUUID()).orElseGet(CompoundTag::new);
 	}
 
 	private static int offsetComponent(long packed, int shift) {
@@ -585,7 +619,8 @@ public final class ResourceGuidanceService {
 		COAL("coal", Set.of(Blocks.COAL_ORE, Blocks.DEEPSLATE_COAL_ORE), List.of(Items.COAL)),
 		GOLD("gold", Set.of(Blocks.GOLD_ORE, Blocks.DEEPSLATE_GOLD_ORE, Blocks.NETHER_GOLD_ORE),
 				List.of(Items.RAW_GOLD, Items.GOLD_INGOT)),
-		DIAMOND("diamond", Set.of(Blocks.DIAMOND_ORE, Blocks.DEEPSLATE_DIAMOND_ORE), List.of(Items.DIAMOND));
+		DIAMOND("diamond", Set.of(Blocks.DIAMOND_ORE, Blocks.DEEPSLATE_DIAMOND_ORE), List.of(Items.DIAMOND)),
+		EMERALD("emerald", Set.of(Blocks.EMERALD_ORE, Blocks.DEEPSLATE_EMERALD_ORE), List.of(Items.EMERALD));
 
 		private final String id;
 		private final Set<Block> blocks;
@@ -639,10 +674,4 @@ public final class ResourceGuidanceService {
 		}
 	}
 
-	public record SurveyTarget(boolean located, TerminalResource resource, BlockPos position,
-			String blockId, String dimension) {
-		private static SurveyTarget unavailable() {
-			return new SurveyTarget(false, TerminalResource.NONE, BlockPos.ZERO, "", "");
-		}
-	}
 }

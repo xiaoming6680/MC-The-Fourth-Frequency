@@ -9,6 +9,7 @@ import com.xm.thefourthfrequency.networking.DebugStatusPayload;
 import com.xm.thefourthfrequency.pursuit.PursuitDirector;
 import com.xm.thefourthfrequency.terminal.AmbientAnomalyService;
 import com.xm.thefourthfrequency.terminal.AnomalyCatalog;
+import com.xm.thefourthfrequency.terminal.AnomalyConditions;
 import com.xm.thefourthfrequency.terminal.DebugNames;
 import com.xm.thefourthfrequency.terminal.TerminalAnomalyLogService;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
@@ -186,7 +187,9 @@ public final class DebugPanelService {
 			}
 			case PRECONDITION_UNMET -> switch (id) {
 				case "phantom_echo" -> "附近不是足够封闭、低天光的洞穴环境";
-				case "light_dropout" -> "玩家周围 16 格内没有可安全熄灭的普通方块光源";
+				case "light_dropout" -> AnomalyConditions.nightLike(player.level())
+						? "玩家周围 16 格内没有可安全熄灭的普通方块光源"
+						: "当前不是夜晚：光源失效只在夜间启用";
 				case "surface_fracture" -> "玩家前方或侧前方没有可作用的实体方块";
 				case "action_echo" -> "进入世界尚未满 3 秒，无法取得动作历史";
 				default -> "当前玩家状态或环境不满足该异象的启动条件";

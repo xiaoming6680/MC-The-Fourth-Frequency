@@ -99,9 +99,14 @@ public final class PursuitSessionService {
 		ServerLevel source = PursuitDimensions.sourceLevel(player.level().getServer(),
 				record.getStringOr(TerminalData.PURSUIT_SOURCE_DIMENSION, ""))
 				.orElse(player.level().getServer().overworld());
-		BlockPos preferred = BlockPos.of(record.getLongOr(TerminalData.PURSUIT_SOURCE_POSITION,
+		BlockPos entry = BlockPos.of(record.getLongOr(TerminalData.PURSUIT_SOURCE_POSITION,
 				source.getRespawnData().pos().asLong()));
-		BlockPos safe = PursuitReturnLocator.find(source, preferred);
+		// The mirror is a block-for-block copy at the same coordinates, so wherever the chase left
+		// the player is a real place in the source world. Always returning them to the entry point
+		// threw the whole chase away: someone who ran two hundred blocks to break line of sight was
+		// put back where they started, which reads as the escape not having counted for anything.
+		BlockPos preferred = PursuitDimensions.isMirror(player.level()) ? player.blockPosition() : entry;
+		BlockPos safe = PursuitReturnLocator.find(source, preferred, entry);
 		float yaw = (float) record.getDoubleOr(TerminalData.PURSUIT_SOURCE_YAW, player.getYRot());
 		float pitch = (float) record.getDoubleOr(TerminalData.PURSUIT_SOURCE_PITCH, player.getXRot());
 		sendPresentation(player, record.getStringOr(TerminalData.PURSUIT_SESSION_ID, ""),
@@ -110,6 +115,10 @@ public final class PursuitSessionService {
 		player.teleportTo(source, safe.getX() + 0.5D, safe.getY(), safe.getZ() + 0.5D,
 				Set.of(), yaw, pitch, true);
 		PursuitVisibilityService.restore(player);
+		// interrupt() above already clears this for a session that reached the mirror; this also
+		// covers a return from the prelude, and a recovery join where no runtime exists any more but
+		// the effect was persisted with the player.
+		PursuitVisionService.clear(player);
 		PursuitRecoveryLedger.settleAndDeliver(player);
 		clearSession(data, player, resolution);
 		return true;

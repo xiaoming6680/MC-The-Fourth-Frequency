@@ -3,9 +3,13 @@ package com.xm.thefourthfrequency.entity;
 import com.xm.thefourthfrequency.world.StoryProgressService;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.ai.control.BodyRotationControl;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
@@ -13,6 +17,15 @@ import net.minecraft.world.phys.Vec3;
 import java.util.UUID;
 
 public final class WatcherEntity extends Monster {
+	/** Aims the gaze test at the eye, 2.62 of 2.9 blocks up, rather than at the chest. */
+	public static final double GAZE_TARGET_HEIGHT_FRACTION = 0.90;
+	/** Far past a human neck, so the body can face away while the head stays on the player. */
+	private static final int MAX_HEAD_YAW = 145;
+	/** Reaching it counts the same as seeing it. Either way, it is not there. Five blocks. */
+	private static final double VANISH_RANGE_SQR = 25.0;
+	/** Two seconds. Long enough that holding the stare is a decision, not an accident. */
+	private static final int GAZE_TICKS_TO_VANISH = 40;
+
 	private UUID observedPlayer;
 	private int gazeTicks;
 	private int maximumLifetime = 400;
@@ -28,6 +41,11 @@ public final class WatcherEntity extends Monster {
 				.add(Attributes.MOVEMENT_SPEED, 0.0)
 				.add(Attributes.FOLLOW_RANGE, 64.0)
 				.add(Attributes.KNOCKBACK_RESISTANCE, 1.0);
+	}
+
+	/** Shared by the server gaze counter and the client eye reveal so the two cannot drift apart. */
+	public static double gazeAlignmentThreshold(double distanceSqr) {
+		return distanceSqr < 64.0 ? 0.72 : 0.93;
 	}
 
 	public void observe(ServerPlayer player, int lifetimeTicks) {
@@ -50,6 +68,21 @@ public final class WatcherEntity extends Monster {
 	}
 
 	@Override
+	protected BodyRotationControl createBodyControl() {
+		// The body must never chase the head. A torso facing away with the skull turned back is the
+		// whole pose, and vanilla's body control would quietly straighten it out within seconds.
+		return new BodyRotationControl(this) {
+			@Override
+			public void clientTick() {
+			}
+		};
+	}
+
+	@Override public int getMaxHeadYRot() { return MAX_HEAD_YAW; }
+
+	@Override protected float getMaxHeadRotationRelativeToBody() { return MAX_HEAD_YAW; }
+
+	@Override
 	protected void customServerAiStep(ServerLevel level) {
 		super.customServerAiStep(level);
 		if (observedPlayer == null) {
@@ -65,23 +98,43 @@ public final class WatcherEntity extends Monster {
 		getNavigation().stop();
 		setNoGravity(true);
 		setDeltaMovement(Vec3.ZERO);
+		// Only the head tracks. The body keeps whatever yaw it spawned with.
 		getLookControl().setLookAt(player, 360.0F, 360.0F);
-		Vec3 delta = player.position().subtract(position());
-		setYRot((float) Math.toDegrees(Math.atan2(delta.z, delta.x)) - 90.0F);
-		setYHeadRot(getYRot());
 
-		if (tickCount > 15 && playerCanSee(player)) gazeTicks++; else gazeTicks = 0;
-		if (gazeTicks >= 20) {
-			StoryProgressService.recordWatcher(player);
-			discard();
+		if (tickCount > 15 && distanceToSqr(player) < VANISH_RANGE_SQR) {
+			vanish(level, player);
+			return;
 		}
+		if (tickCount > 15 && playerCanSee(player)) gazeTicks++; else gazeTicks = 0;
+		if (gazeTicks >= GAZE_TICKS_TO_VANISH) vanish(level, player);
+	}
+
+	@Override
+	public boolean hurtServer(ServerLevel level, DamageSource source, float amount) {
+		// Swinging at it must not land, flash, or knock back. The blade passes through an absence.
+		if (source.getEntity() instanceof ServerPlayer player && observes(player.getUUID())) {
+			vanish(level, player);
+		}
+		return false;
+	}
+
+	/**
+	 * The single exit for every route out: gaze, reach, or a swing. All three are "you found it",
+	 * so none of them costs the player story progress; the horror is that it is already gone.
+	 */
+	private void vanish(ServerLevel level, ServerPlayer player) {
+		if (isRemoved()) return;
+		level.playSound(null, getX(), getY(), getZ(), SoundEvents.AMBIENT_CAVE,
+				SoundSource.AMBIENT, 1.0F, 0.72F);
+		StoryProgressService.recordWatcher(player);
+		discard();
 	}
 
 	private boolean playerCanSee(ServerPlayer player) {
-		Vec3 towardWatcher = position().add(0.0, getBbHeight() * 0.72, 0.0)
+		Vec3 towardWatcher = position().add(0.0, getBbHeight() * GAZE_TARGET_HEIGHT_FRACTION, 0.0)
 				.subtract(player.getEyePosition()).normalize();
 		double alignment = player.getViewVector(1.0F).dot(towardWatcher);
-		return alignment > (distanceToSqr(player) < 64.0 ? 0.72 : 0.93) && player.hasLineOfSight(this);
+		return alignment > gazeAlignmentThreshold(distanceToSqr(player)) && player.hasLineOfSight(this);
 	}
 
 	@Override
@@ -90,5 +143,7 @@ public final class WatcherEntity extends Monster {
 	}
 
 	@Override public boolean isPushable() { return false; }
-	@Override public boolean isPickable() { return false; }
+
+	/** Pickable so an attack ray can reach it; hurtServer then refuses to let the hit land. */
+	@Override public boolean isPickable() { return true; }
 }

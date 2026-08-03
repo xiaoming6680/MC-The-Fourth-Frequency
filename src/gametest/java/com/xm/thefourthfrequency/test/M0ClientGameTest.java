@@ -36,6 +36,7 @@ import com.xm.thefourthfrequency.correction.EmptySegmentService;
 import com.xm.thefourthfrequency.world.DebugPanelService;
 import com.xm.thefourthfrequency.world.SurvivalMilestone;
 import com.xm.thefourthfrequency.world.TerminalLifecycleService;
+import com.xm.thefourthfrequency.world.ZeroStationLayout;
 import com.xm.thefourthfrequency.meta_api.MetaController;
 import com.xm.thefourthfrequency.meta_api.MetaEvent;
 import com.xm.thefourthfrequency.meta_api.MockMetaPlatformAdapter;
@@ -790,7 +791,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 						record.getIntOr(TerminalData.PORTAL_TRANSITIONS, 0));
 			});
 
-			removedWall = stationPosition.offset(-4, 0, -3);
+			removedWall = ZeroStationLayout.solidWallSample(stationPosition);
 			singleplayer.getServer().runOnServer(server -> {
 				if (server.overworld().getBlockState(removedWall).isAir()) {
 					throw new AssertionError("Expected station wall before persistence mutation");
@@ -905,13 +906,13 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				throw new AssertionError("Render distance was not initialized to the locked Overworld value"
 						+ " (stored=" + stored + ", effective=" + effective + ")");
 			}
-			client.options.renderDistance().set(12);
+			client.options.renderDistance().set(fixed + 8);
 			if (client.options.getEffectiveRenderDistance() != fixed) {
-				throw new AssertionError("A runtime option change bypassed the effective three-chunk limit");
+				throw new AssertionError("A runtime option change bypassed the effective locked limit");
 			}
 			client.options.save();
 			if (!client.options.renderDistance().get().equals(fixed)) {
-				throw new AssertionError("Saving did not restore the stored three-chunk option");
+				throw new AssertionError("Saving did not restore the stored locked option");
 			}
 			client.setScreen(new VideoSettingsScreen(client.screen, client, client.options));
 		});
@@ -928,7 +929,8 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				throw new AssertionError("Video settings did not contain the render-distance control");
 			}
 			String label = renderDistance.getMessage().getString();
-			if (renderDistance.active || !label.equals("渲染距离：3 个区块（已锁定）")) {
+			String expected = "渲染距离：" + DimensionViewDistancePolicy.OVERWORLD_CHUNKS + " 个区块（已锁定）";
+			if (renderDistance.active || !label.equals(expected)) {
 				throw new AssertionError("Render-distance control was not visibly locked: active="
 						+ renderDistance.active + ", label=" + label);
 			}
@@ -937,7 +939,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			optionsList.setScrollAmount(Math.max(0.0D, Math.min(optionsList.maxScrollAmount(), centered)));
 		});
 		context.waitTicks(2);
-		context.takeScreenshot("render-distance-locked-three-chunks");
+		context.takeScreenshot("render-distance-locked-overworld-chunks");
 		context.runOnClient(client -> client.screen.onClose());
 		context.waitForScreen(TitleScreen.class);
 	}

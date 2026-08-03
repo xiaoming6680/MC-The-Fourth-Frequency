@@ -27,13 +27,14 @@ class WorldInterfaceStageContractTest {
 
 	@Test
 	void nineActionsAndTheBoundedTerrainBudgetMatchTheWorldInterfaceContract() {
-		assertEquals(9, WorldInterfaceAction.values().length);
+		// Eight live attacks behind nine wire ids: 3 is the retired grab-slam and stays unused.
+		assertEquals(8, WorldInterfaceAction.values().length);
 		assertEquals(9, WorldInterfaceAction.FORCED_EVICTION.wireId());
 		assertFalse(WorldInterfaceAction.FORCED_EVICTION
 				.isUnlockedAt(WorldInterfaceStage.PHASE_2));
-		assertEquals(2_048, WorldInterfacePolicy.MAX_PERMANENT_TERRAIN_EDITS);
-		assertEquals(8, WorldInterfacePolicy.terrainEditBudgetThisTick(0));
-		assertEquals(3, WorldInterfacePolicy.terrainEditBudgetThisTick(2_045));
-		assertEquals(0, WorldInterfacePolicy.terrainEditBudgetThisTick(2_048));
+		assertEquals(8_192, WorldInterfacePolicy.MAX_PERMANENT_TERRAIN_EDITS);
+		assertEquals(32, WorldInterfacePolicy.terrainEditBudgetThisTick(0));
+		assertEquals(3, WorldInterfacePolicy.terrainEditBudgetThisTick(8_189));
+		assertEquals(0, WorldInterfacePolicy.terrainEditBudgetThisTick(8_192));
 	}
 }

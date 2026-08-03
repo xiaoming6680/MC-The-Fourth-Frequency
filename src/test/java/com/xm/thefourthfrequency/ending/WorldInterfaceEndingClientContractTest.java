@@ -25,11 +25,21 @@ final class WorldInterfaceEndingClientContractTest {
 		assertTrue(transaction.contains("PREPARED") && transaction.contains("APPLIED")
 				&& transaction.contains("NOTEPAD_TYPED") && transaction.contains("LOCKED"));
 		assertTrue(transaction.contains("我永远在盯着你......."));
-		assertTrue(transaction.contains("ShowWindow(window,3)") && transaction.contains("IsZoomed(window)"));
+		// The note is the only place a player is told how to undo this, so it has to name the key.
+		assertTrue(transaction.contains("按下F8来撤销MOD对电脑造成的所有更改"));
+		// SW_RESTORE. A maximized Notepad would cover the failure wallpaper it is written over.
+		assertTrue(transaction.contains("ShowWindow(window,9)"));
+		assertFalse(transaction.contains("ShowWindow(window,3)") || transaction.contains("IsZoomed"));
 		assertTrue(transaction.contains("GetForegroundWindow()==window"));
 		assertTrue(transaction.contains("notepad.start") && transaction.contains("TffOwnedNotepad"));
 		assertTrue(transaction.contains("wallpaper.path64") && transaction.contains("wallpaper.style")
 				&& transaction.contains("wallpaper.tile"));
+		// Wallpaper Engine hides the failure wallpaper, so it is paused and resumed - never killed,
+		// never started - and the executable it is told to signal is recorded write-ahead.
+		assertTrue(transaction.contains("engine.path64") && transaction.contains("'-control', $command"));
+		assertTrue(transaction.contains("wallpaper32.exe") && transaction.contains("wallpaper64.exe"));
+		assertTrue(transaction.contains("\"STOP\"") && transaction.contains("\"RESUME\""));
+		assertFalse(transaction.contains("Stop-Process"));
 		assertFalse(transaction.contains("System.exit"));
 		assertFalse(transaction.contains("taskkill"));
 		assertFalse(transaction.contains("-Command"));
@@ -56,7 +66,12 @@ final class WorldInterfaceEndingClientContractTest {
 		assertTrue(packs.contains("originalOrder") && packs.contains("autoAddedIds"));
 		assertTrue(packs.contains("client.options.updateResourcePacks(repository)")
 				&& packs.contains("client.reloadResourcePacks()"));
-		assertTrue(ending.contains("disconnectWithSavingScreen") && ending.contains("client.stop()"));
+		assertTrue(ending.contains("disconnectWithSavingScreen") && ending.contains("client::stop"));
+		// Both of these paint a progress screen by driving runTick themselves. Called inline from
+		// END_CLIENT_TICK they re-enter runTick from inside its own tick, and the failure ending
+		// hangs on "Saving world" until the watchdog kills the process. They have to be queued.
+		assertTrue(ending.contains("client.execute(() -> {") && ending.contains("client.execute(client::stop)"),
+				"shutdown must be queued off the tick that requests it, never called inline");
 		assertTrue(ending.contains("thefourthfrequency.safeMode"));
 		assertFalse(ending.contains("System.exit"));
 	}
@@ -104,7 +119,14 @@ final class WorldInterfaceEndingClientContractTest {
 		String fluids = source(
 				"src/client/java/com/xm/thefourthfrequency/mixin/LiquidBlockRendererFailureMixin.java");
 		assertTrue(ending.contains("getSingleplayerServer().isPublished()"));
-		assertTrue(ending.contains("Mode.LAN_HOST_RETURNING"));
+		// Every loss now ends the way the LAN host's already did. Driving Minecraft's teardown from a
+		// mod hung inside the save of a world this ending had just gutted, and the shutdown watchdog
+		// killed the process on "Saving world" - so neither ending closes the client any more.
+		assertTrue(ending.contains("Mode.FAILURE_RETURNING") && ending.contains("Mode.RUN_COMPLETE"));
+		assertFalse(ending.contains("Mode.LAN_HOST_RETURNING"));
+		assertTrue(ending.contains("hud.thefourthfrequency.world_interface.ending.complete"),
+				"the epilogue has to tell the player the run is over, since it no longer leaves for them");
+		assertFalse(ending.contains("returnToMenuAfterSuccess"));
 		assertTrue(ending.contains("new ConfirmScreen"));
 		assertTrue(title.contains("menu.singleplayer") && title.contains("menu.multiplayer")
 				&& title.contains("menu.online") && title.contains("setTooltip"));

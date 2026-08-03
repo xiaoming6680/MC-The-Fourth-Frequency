@@ -143,16 +143,6 @@ public record TerminalToolSnapshot(TerminalToolSnapshotPayload payload) {
 		return payload.mineralSurveyNearby();
 	}
 
-	public boolean navigationCompletionAvailable() {
-		return payload.navigationCompletionAvailable();
-	}
-
-	public Component navigationCompletionLine() {
-		return Component.translatable("terminal.thefourthfrequency.navigation.completed",
-				Component.translatable("terminal.thefourthfrequency.relative_direction."
-						+ TerminalNavigationMath.relativeDirectionId(payload.navigationCompletionDirection())));
-	}
-
 	public Component disabledLine() {
 		int seconds = Math.max(1, (payload.toolsDisabledTicks() + 19) / 20);
 		return Component.translatable("terminal.thefourthfrequency.tool.disabled", seconds);

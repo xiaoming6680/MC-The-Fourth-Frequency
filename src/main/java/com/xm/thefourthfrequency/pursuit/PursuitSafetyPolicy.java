@@ -46,6 +46,9 @@ public final class PursuitSafetyPolicy {
 
 	private static boolean hardInvariantsMet(ServerPlayer player, CompoundTag record) {
 		if (!player.isAlive() || player.isSpectator()) return false;
+		// The finale is the end of the mainline, so nothing may chase anyone after it. Enforced here
+		// rather than in canBegin so the debug button cannot conjure an epilogue chase either.
+		if (FinaleRuntimePolicy.concluded(FrequencyWorldData.get(player.level().getServer()))) return false;
 		if (PursuitDimensions.isMirror(player.level())
 				|| PursuitDimensions.sourceFamily(player.level().dimension()).isEmpty()) return false;
 		// The End mirror is registered for recovery symmetry; dragon/finale pursuit remains disabled in v1.

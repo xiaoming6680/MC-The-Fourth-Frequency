@@ -30,6 +30,8 @@ public final class AlphaCorruptionAudio {
 	private static final float DEAD_AIR_VOLUME = 0.66F;
 	private static final float CARRIER_LOST_VOLUME = 0.62F;
 	private static final float VOLUME_EASE = 0.12F;
+	/** About a second and a half of tail - long enough that no frame is the one it stopped on. */
+	private static final float FADE_OUT_EASE = 0.055F;
 
 	private static final Map<Bed, TapeLoop> ACTIVE = new EnumMap<>(Bed.class);
 	private static boolean carrierLostPlayed;
@@ -53,10 +55,24 @@ public final class AlphaCorruptionAudio {
 	}
 
 	/**
-	 * Hard stop for every bed. Must run when the loading screen goes away by any route - a bed
-	 * that outlives its screen would follow the player into a world that has no idea why it is
-	 * hissing.
+	 * Releases every bed with a tail. Must run when the loading screen goes away by any route - a
+	 * bed that outlives its screen would follow the player into a world that has no idea why it
+	 * is hissing.
+	 *
+	 * <p>Cutting them dead on the frame the world appears is its own kind of announcement: the
+	 * silence arrives on a hard edge and marks exactly where the sequence ended, which invites
+	 * the player to file everything before that edge as a cutscene. Letting the noise floor recede
+	 * over a second or so means there is no frame at which it stopped - the world simply comes up
+	 * underneath it. The loops keep ticking on the sound engine after the screen is gone, so the
+	 * handles can be dropped here; each one stops itself once it is inaudible.</p>
 	 */
+	public static void fadeOutAll() {
+		for (TapeLoop loop : ACTIVE.values()) loop.fadeOut();
+		ACTIVE.clear();
+		carrierLostPlayed = false;
+	}
+
+	/** Immediate silence, for teardown and for replaying the sequence in tests. */
 	public static void stopAll() {
 		for (TapeLoop loop : ACTIVE.values()) loop.forceStop();
 		ACTIVE.clear();
@@ -118,6 +134,7 @@ public final class AlphaCorruptionAudio {
 
 	private static final class TapeLoop extends AbstractTickableSoundInstance {
 		private float target;
+		private boolean fading;
 
 		private TapeLoop(SoundEvent cue) {
 			// MASTER, matching the signal beds: this noise is not part of the world, and must not
@@ -134,6 +151,11 @@ public final class AlphaCorruptionAudio {
 			target = Math.clamp(value, 0.0F, 1.0F);
 		}
 
+		private void fadeOut() {
+			target = 0.0F;
+			fading = true;
+		}
+
 		private void forceStop() {
 			stop();
 		}
@@ -146,8 +168,9 @@ public final class AlphaCorruptionAudio {
 		@Override
 		public void tick() {
 			float scaled = (float) (target * RuntimeServices.config().meta().effectiveBedVolume());
-			// Eased rather than stepped, so a bed arriving cannot be heard arriving.
-			volume += (scaled - volume) * VOLUME_EASE;
+			// Eased rather than stepped, so a bed arriving cannot be heard arriving, and the
+			// release is slower still so it cannot be heard leaving either.
+			volume += (scaled - volume) * (fading ? FADE_OUT_EASE : VOLUME_EASE);
 			if (target <= 0.0F && volume < 0.004F) stop();
 		}
 	}

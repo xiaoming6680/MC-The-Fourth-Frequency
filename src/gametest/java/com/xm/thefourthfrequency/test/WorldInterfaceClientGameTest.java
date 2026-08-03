@@ -68,12 +68,11 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 	private static final List<WorldInterfaceProtocol.BossAction> COMBAT_ACTIONS = List.of(
 			WorldInterfaceProtocol.BossAction.LASER_SWEEP,
 			WorldInterfaceProtocol.BossAction.ENERGY_ORB,
-			WorldInterfaceProtocol.BossAction.GRAB_SLAM,
-			WorldInterfaceProtocol.BossAction.MENTAL_ATTACK,
+			WorldInterfaceProtocol.BossAction.SKY_LANCE,
 			WorldInterfaceProtocol.BossAction.WEAPON_CHARGE,
 			WorldInterfaceProtocol.BossAction.GRAB_THROW,
 			WorldInterfaceProtocol.BossAction.HOTBAR_PURGE,
-			WorldInterfaceProtocol.BossAction.ARROW_REFLECTION,
+			WorldInterfaceProtocol.BossAction.TENDRIL_LASH,
 			WorldInterfaceProtocol.BossAction.FORCED_EXPULSION);
 
 	@Override
@@ -130,7 +129,7 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 			captureGateway(context, singleplayer, fixture, WorldInterfaceProtocol.GatewayState.PURPLE);
 			captureGateway(context, singleplayer, fixture, WorldInterfaceProtocol.GatewayState.GOLD);
 			captureGateway(context, singleplayer, fixture, WorldInterfaceProtocol.GatewayState.RED);
-			captureCollapseJump(context, singleplayer, fixture);
+			captureAnchorLossLeavesTheClock(context, singleplayer, fixture);
 			captureAltar(context, singleplayer, fixture);
 			capturePoems(context, singleplayer, fixture);
 			captureRealPortalRoundTrip(context, singleplayer);
@@ -216,7 +215,7 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 			body.clearAction();
 			body.setForm(form.wireId() - 1);
 			return sendEncounter(server, fixture, stage, form, healthRatio,
-					WorldInterfaceProtocol.ANCHOR_MASK, 1_200L, 0L, false,
+					WorldInterfaceProtocol.ANCHOR_MASK, 1_200L, false,
 					WorldInterfaceProtocol.GatewayState.PURPLE, WorldInterfaceProtocol.Outcome.NONE, 0.0F);
 		});
 		waitForEncounter(context, fixture, sequence, stage, form);
@@ -345,7 +344,7 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 				default -> throw new AssertionError("The visual gateway test requires an active color");
 			}
 			return sendEncounter(server, fixture, stage, WorldInterfaceProtocol.Form.WORLD_INTERFACE,
-					0.25F, WorldInterfaceProtocol.ANCHOR_MASK, 3_000L, 0L, false,
+					0.25F, WorldInterfaceProtocol.ANCHOR_MASK, 3_000L, false,
 					gatewayState, outcome, failureProgress);
 		});
 		context.waitFor(client -> {
@@ -358,13 +357,18 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 		context.takeScreenshot("world-interface-gateway-" + gatewayState.name().toLowerCase(Locale.ROOT));
 	}
 
-	private static void captureCollapseJump(ClientGameTestContext context, TestSingleplayerContext singleplayer,
-			Fixture fixture) {
+	/**
+	 * Cutting an anchor must leave the collapse clock exactly where it was. It used to spend ten
+	 * percent of the fight, which made the encounter's central action cost the player the time they
+	 * needed to use it in; the gauge's gold sweep reports what the anchor bought instead.
+	 */
+	private static void captureAnchorLossLeavesTheClock(ClientGameTestContext context,
+			TestSingleplayerContext singleplayer, Fixture fixture) {
 		long baselineSequence = singleplayer.getServer().computeOnServer(server -> {
 			body(requireEnd(server), fixture.bodyId()).clearAction();
 			return sendEncounter(server, fixture, WorldInterfaceProtocol.Stage.PHASE_3,
 					WorldInterfaceProtocol.Form.WORLD_INTERFACE, 0.28F,
-					WorldInterfaceProtocol.ANCHOR_MASK, 3_000L, 0L, true,
+					WorldInterfaceProtocol.ANCHOR_MASK, 1_800L, true,
 					WorldInterfaceProtocol.GatewayState.PURPLE, WorldInterfaceProtocol.Outcome.NONE, 0.0F);
 		});
 		waitForEncounter(context, fixture, baselineSequence, WorldInterfaceProtocol.Stage.PHASE_3,
@@ -372,22 +376,22 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 		double baseline = context.computeOnClient(client -> WorldInterfaceClientState.snapshot()
 				.collapseProgress(client.level.getGameTime()));
 
-		long jumpedSequence = singleplayer.getServer().computeOnServer(server -> sendEncounter(server, fixture,
+		long cutSequence = singleplayer.getServer().computeOnServer(server -> sendEncounter(server, fixture,
 				WorldInterfaceProtocol.Stage.PHASE_3, WorldInterfaceProtocol.Form.WORLD_INTERFACE, 0.28F,
-				WorldInterfaceProtocol.ANCHOR_MASK & ~1, 3_000L, 600L, true,
+				WorldInterfaceProtocol.ANCHOR_MASK & ~1, 1_800L, true,
 				WorldInterfaceProtocol.GatewayState.PURPLE, WorldInterfaceProtocol.Outcome.NONE, 0.0F));
-		waitForEncounter(context, fixture, jumpedSequence, WorldInterfaceProtocol.Stage.PHASE_3,
+		waitForEncounter(context, fixture, cutSequence, WorldInterfaceProtocol.Stage.PHASE_3,
 				WorldInterfaceProtocol.Form.WORLD_INTERFACE);
-		double jumped = context.computeOnClient(client -> WorldInterfaceClientState.snapshot()
+		double afterCut = context.computeOnClient(client -> WorldInterfaceClientState.snapshot()
 				.collapseProgress(client.level.getGameTime()));
 		require(Math.abs(baseline - 0.25D) < 0.000_001D,
 				"The baseline collapse projection was not 25%");
-		require(Math.abs(jumped - baseline - 0.05D) < 0.000_001D,
-				"Destroying one authoritative anchor did not jump collapse by exactly 5%");
+		require(Math.abs(afterCut - baseline) < 0.000_001D,
+				"Destroying an authoritative anchor moved the collapse clock");
 		context.runOnClient(client -> require(Integer.bitCount(WorldInterfaceClientState.snapshot()
 				.encounter().anchorAliveMask()) == 9, "The client did not project exactly nine live anchors"));
 		context.waitTicks(4);
-		context.takeScreenshot("world-interface-collapse-anchor-jump");
+		context.takeScreenshot("world-interface-collapse-anchor-cut");
 	}
 
 	private static void captureAltar(ClientGameTestContext context, TestSingleplayerContext singleplayer,
@@ -416,7 +420,7 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 
 		long closeSequence = singleplayer.getServer().computeOnServer(server -> sendEncounter(server, fixture,
 				WorldInterfaceProtocol.Stage.SUMMONING, WorldInterfaceProtocol.Form.LISTENING_EMBRYO, 1.0F,
-				WorldInterfaceProtocol.ANCHOR_MASK, 0L, 0L, true,
+				WorldInterfaceProtocol.ANCHOR_MASK, 0L, true,
 				WorldInterfaceProtocol.GatewayState.PURPLE, WorldInterfaceProtocol.Outcome.NONE, 0.0F));
 		waitForEncounter(context, fixture, closeSequence, WorldInterfaceProtocol.Stage.SUMMONING,
 				WorldInterfaceProtocol.Form.LISTENING_EMBRYO);
@@ -631,7 +635,7 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 
 	private static long sendEncounter(MinecraftServer server, Fixture fixture,
 			WorldInterfaceProtocol.Stage stage, WorldInterfaceProtocol.Form form, float healthRatio,
-			int anchorAliveMask, long elapsedTicks, long penaltyTicks, boolean timerPaused,
+			int anchorAliveMask, long elapsedTicks, boolean timerPaused,
 			WorldInterfaceProtocol.GatewayState gatewayState, WorldInterfaceProtocol.Outcome outcome,
 			float failureProgress) {
 		ServerLevel end = requireEnd(server);
@@ -639,7 +643,7 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 		ServerPlayNetworking.send(firstPlayer(server), new WorldInterfaceSnapshotS2C(
 				WorldInterfaceProtocol.VERSION, fixture.encounterId(), sequence, stage.wireId(), form.wireId(),
 				fixture.bodyId(), fixture.center(), 600.0F, 600.0F * healthRatio, anchorAliveMask,
-				elapsedTicks, penaltyTicks, timerPaused, Math.max(0L, end.getGameTime()), gatewayState.wireId(),
+				elapsedTicks, timerPaused, Math.max(0L, end.getGameTime()), gatewayState.wireId(),
 				fixture.gateways(), outcome.wireId(), failureProgress));
 		return sequence;
 	}
@@ -752,7 +756,7 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 				stage.wireId(), (complete ? WorldInterfaceProtocol.Form.NONE
 						: WorldInterfaceProtocol.Form.LISTENING_EMBRYO).wireId(), NIL_UUID, BlockPos.ZERO,
 				complete ? 0.0F : 600.0F, complete ? 0.0F : 600.0F,
-				WorldInterfaceProtocol.ANCHOR_MASK, 0L, 0L, true, 0L,
+				WorldInterfaceProtocol.ANCHOR_MASK, 0L, true, 0L,
 				WorldInterfaceProtocol.GatewayState.DORMANT.wireId(), List.of(),
 				(complete ? WorldInterfaceProtocol.Outcome.SUCCESS
 						: WorldInterfaceProtocol.Outcome.NONE).wireId(), 0.0F);
@@ -817,11 +821,11 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 
 	private static WorldInterfaceProtocol.Form formForAction(WorldInterfaceProtocol.BossAction action) {
 		return switch (action) {
-			case LASER_SWEEP, ENERGY_ORB, GRAB_SLAM, MENTAL_ATTACK ->
+			case LASER_SWEEP, ENERGY_ORB, SKY_LANCE ->
 					WorldInterfaceProtocol.Form.LISTENING_EMBRYO;
 			case WEAPON_CHARGE, GRAB_THROW, HOTBAR_PURGE ->
 					WorldInterfaceProtocol.Form.FREQUENCY_DEVOURER;
-			case ARROW_REFLECTION, FORCED_EXPULSION -> WorldInterfaceProtocol.Form.WORLD_INTERFACE;
+			case TENDRIL_LASH, FORCED_EXPULSION -> WorldInterfaceProtocol.Form.WORLD_INTERFACE;
 			default -> throw new AssertionError("Not one of the nine combat actions: " + action);
 		};
 	}

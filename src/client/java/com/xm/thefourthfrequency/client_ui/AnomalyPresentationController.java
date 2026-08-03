@@ -997,6 +997,10 @@ public final class AnomalyPresentationController {
 	}
 	public static Set<Integer> misreadSlotsForTesting() { return Set.copyOf(MISREAD_SLOTS); }
 	public static BlockState visualReplacement(BlockPos pos, BlockState original) {
+		// Substituting air paints a solid proxy where nothing exists, so the player sees a block
+		// that cannot be mined, has no drops and no hardness - there is nothing there to break.
+		// Skipping air also short-circuits the most common state in any chunk build before any work.
+		if (original.isAir()) return original;
 		BlockState endingReplacement = WorldInterfacePresentationController.failureBlockReplacement(pos, original);
 		if (endingReplacement != original) return endingReplacement;
 		// This runs on chunk-build worker threads for every queried block (10^5-10^6 calls per

@@ -1,0 +1,299 @@
+[
+	{
+		"section": "第四频段",
+		"disciplines": [
+			{
+				"discipline": "制作",
+				"titles": [
+					{
+						"title": "主创 / 总监",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "制作人",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "设计",
+				"titles": [
+					{
+						"title": "游戏设计",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "系统与数值设计",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "终端与交互设计",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "异象与个人追逐设计",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "末地终局设计",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "叙事",
+				"titles": [
+					{
+						"title": "世界观设定",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "剧本与终端文本",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "破损文件与完整日记",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "终末之诗",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "本地化（简体中文 / English）",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "程序",
+				"titles": [
+					{
+						"title": "客户端",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "服务端",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "网络协议",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "存档与持久化",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "渲染与动画",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Mixin 与兼容",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "美术",
+				"titles": [
+					{
+						"title": "实体模型与贴图",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "界面与 HUD",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "演出与特效",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "音频",
+				"titles": [
+					{
+						"title": "选曲与场景编排",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "音频实现与播放调度",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "质量保证",
+				"titles": [
+					{
+						"title": "功能测试",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "自动化测试",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "版本验收",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "文档",
+				"titles": [
+					{
+						"title": "架构与测试文档",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "世界圣经",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			}
+		]
+	},
+	{
+		"section": "音乐",
+		"disciplines": [
+			{
+				"discipline": "使用曲目",
+				"titles": [
+					{
+						"title": "游戏内 BGM",
+						"names": [
+							"School Rooftop — hisohkah, WMD",
+							"Comfort Chain — instupendo",
+							"千禧梦（中式梦核）— LUSTN",
+							"天使は感動する (feat. Aiobahn +81) — NEEDY GIRL OVERDOSE, Aiobahn +81",
+							"Are You Lost — Park Bird",
+							"Hi — TEMPOREX"
+						]
+					},
+					{
+						"title": "主菜单 BGM",
+						"names": [
+							"frutiger aero — amirthetrash",
+							"green to blue (Sped Up) — Aurenth",
+							"Hi（纯钢琴梦核）— 弹琴老周",
+							"nop — 陈越龙"
+						]
+					},
+					{
+						"title": "个人追逐",
+						"names": [
+							"level！— niqizhuo, Dapper Husky"
+						]
+					},
+					{
+						"title": "世界接口战斗",
+						"names": [
+							"NCPD Prowl — Marcin Przybyłowicz",
+							"WAKE UP! (Sped Up) — MoonDeity"
+						]
+					},
+					{
+						"title": "终末之诗 · 胜利",
+						"names": [
+							"Reverie — ILLENIUM, Dana Salah"
+						]
+					},
+					{
+						"title": "终末之诗 · 失败",
+						"names": [
+							"Fallen Down (Electric Piano Version) — The Versions"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "",
+				"titles": [
+					{
+						"title": "版权说明",
+						"names": [
+							"以上曲目均非本模组的原创内容",
+							"著作权归各自的艺术家与权利人所有",
+							"本模组不对任何音乐主张权利"
+						]
+					}
+				]
+			}
+		]
+	},
+	{
+		"section": "特别感谢",
+		"disciplines": [
+			{
+				"discipline": "",
+				"titles": [
+					{
+						"title": "谨以此献给每一位听完这段频率的人",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			}
+		]
+	}
+]

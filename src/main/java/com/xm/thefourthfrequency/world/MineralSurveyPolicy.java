@@ -16,7 +16,6 @@ public final class MineralSurveyPolicy {
 	/** Passive survey: how close the player must be for the terminal to notice an ore at all. */
 	public static final int RANGE = 5;
 	public static final int ARRIVAL_RADIUS = 1;
-	public static final int CHANCE_PERCENT = 30;
 
 	/** Requested probe: charges held at once, and how long one takes to come back. */
 	public static final int MAX_PROBE_CHARGES = 3;
@@ -42,8 +41,16 @@ public final class MineralSurveyPolicy {
 		return distanceSquared <= (long) RANGE * RANGE;
 	}
 
-	public static boolean shouldReveal(int roll) {
-		return roll >= 0 && roll < CHANCE_PERCENT;
+	/**
+	 * What the passive survey is allowed to notice at all.
+	 *
+	 * <p>It used to notice every ore and then throw a thirty-percent die, which underground meant a
+	 * banner every few seconds about coal the player was already standing in. Restricting it to the
+	 * two ores worth stopping for makes the roll unnecessary: a survey hit is now rare enough to be
+	 * worth reporting every single time, and rare enough that reporting it is not noise.</p>
+	 */
+	public static boolean surveyable(TerminalResource resource) {
+		return resource == TerminalResource.DIAMOND || resource == TerminalResource.EMERALD;
 	}
 
 	public static boolean arrived(int dx, int dy, int dz) {
@@ -63,7 +70,7 @@ public final class MineralSurveyPolicy {
 			case COAL -> 32;
 			case IRON -> 28;
 			case GOLD -> 20;
-			case DIAMOND -> 16;
+			case DIAMOND, EMERALD -> 16;
 			case NONE -> 0;
 		};
 	}
@@ -71,6 +78,7 @@ public final class MineralSurveyPolicy {
 	/** Which reading the terminal prefers to report when several are in range at once. */
 	public static int reportPriority(TerminalResource resource) {
 		return switch (resource) {
+			case EMERALD -> 5;
 			case DIAMOND -> 4;
 			case GOLD -> 3;
 			case IRON -> 2;

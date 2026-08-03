@@ -31,7 +31,10 @@ import java.util.concurrent.TimeUnit;
  * No path, text, executable or script is accepted from the network.
  */
 public final class WindowsEndingMetaTransaction {
-	private static final String FIXED_TEXT = "我永远在盯着你.......";
+	// Line breaks are authored as \n here and typed as CR, which is what an edit control accepts;
+	// both sides of the verification below normalize before comparing.
+	private static final String FIXED_TEXT = "我永远在盯着你.......\n\n"
+			+ "重新启动游戏，按下F8来撤销MOD对电脑造成的所有更改";
 	private static final String WALLPAPER_RESOURCE =
 			"/assets/thefourthfrequency/textures/gui/ending/world_interface_failure.png";
 	private static final String DIRECTORY_NAME = "thefourthfrequency-ending";
@@ -41,6 +44,8 @@ public final class WindowsEndingMetaTransaction {
 	private static final String NOTE_NAME = "ending-note.txt";
 	private static final String WALLPAPER_SCRIPT_NAME = "wallpaper-transaction.ps1";
 	private static final String NOTEPAD_SCRIPT_NAME = "owned-notepad.ps1";
+	private static final String WALLPAPER_ENGINE_SCRIPT_NAME = "wallpaper-engine.ps1";
+	private static final List<String> WALLPAPER_ENGINE_EXECUTABLES = List.of("wallpaper32.exe", "wallpaper64.exe");
 	private static final List<String> BACKUP_NAMES = List.of(
 			"original-wallpaper.png", "original-wallpaper.jpg", "original-wallpaper.jpeg",
 			"original-wallpaper.bmp", "original-wallpaper.gif", "original-wallpaper.img");
@@ -120,15 +125,19 @@ public final class WindowsEndingMetaTransaction {
 			Files.createDirectories(owned);
 			Path wallpaperScript = owned.resolve(WALLPAPER_SCRIPT_NAME).normalize();
 			Path notepadScript = owned.resolve(NOTEPAD_SCRIPT_NAME).normalize();
+			Path engineScript = owned.resolve(WALLPAPER_ENGINE_SCRIPT_NAME).normalize();
 			Path failureWallpaper = owned.resolve(FAILURE_WALLPAPER_NAME).normalize();
 			Path note = owned.resolve(NOTE_NAME).normalize();
 			requireOwned(wallpaperScript);
 			requireOwned(notepadScript);
+			requireOwned(engineScript);
 			requireOwned(failureWallpaper);
 			requireOwned(note);
 			Files.writeString(wallpaperScript, wallpaperScript(), StandardCharsets.UTF_8,
 					StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 			Files.writeString(notepadScript, notepadScript(), StandardCharsets.UTF_8,
+					StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+			Files.writeString(engineScript, wallpaperEngineScript(), StandardCharsets.UTF_8,
 					StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 			try (InputStream input = WindowsEndingMetaTransaction.class.getResourceAsStream(WALLPAPER_RESOURCE)) {
 				if (input == null) throw new IOException("Missing fixed ending wallpaper resource");
@@ -136,6 +145,7 @@ public final class WindowsEndingMetaTransaction {
 			}
 			WallpaperState wallpaper = captureWallpaper(wallpaperScript);
 			String backupName = backupOriginalWallpaper(wallpaper.path());
+			String enginePath = captureWallpaperEngine(engineScript);
 			Properties manifest = new Properties();
 			manifest.setProperty("version", "1");
 			manifest.setProperty("state", State.PREPARED.name());
@@ -145,9 +155,16 @@ public final class WindowsEndingMetaTransaction {
 			manifest.setProperty("wallpaper.style", wallpaper.style());
 			manifest.setProperty("wallpaper.tile", wallpaper.tile());
 			manifest.setProperty("wallpaper.backup", backupName);
+			manifest.setProperty("engine.path64", encode(enginePath));
 			window.write(manifest);
 			writeManifest(manifest);
 
+			// Wallpaper Engine paints over the desktop, so the failure wallpaper below would never be
+			// seen while it is playing. Stopping it is write-ahead like everything else here: the path
+			// is already on disk, and recovery resumes playback.
+			if (!enginePath.isBlank()) {
+				logEngineControl(runPowerShell(engineScript, "STOP", encode(enginePath)), "stop");
+			}
 			runPowerShell(wallpaperScript, "SET", failureWallpaper.toString(), "10", "0");
 			advance(manifest, State.APPLIED);
 			Files.writeString(note, "", StandardCharsets.UTF_8, StandardOpenOption.CREATE,
@@ -165,7 +182,7 @@ public final class WindowsEndingMetaTransaction {
 			long verifiedPid = parseLong(output, "PID=");
 			long verifiedStart = parseLong(output, "START=");
 			if (verifiedPid <= 0L || verifiedStart <= 0L
-					|| !FIXED_TEXT.equals(Files.readString(note, StandardCharsets.UTF_8))) {
+					|| !FIXED_TEXT.equals(normalizeLineEndings(Files.readString(note, StandardCharsets.UTF_8)))) {
 				throw new IOException("Owned Notepad verification did not produce the fixed text");
 			}
 			manifest.setProperty("notepad.pid", Long.toString(verifiedPid));
@@ -217,6 +234,12 @@ public final class WindowsEndingMetaTransaction {
 				String style = validatedDesktopValue(manifest.getProperty("wallpaper.style"), "0");
 				String tile = validatedDesktopValue(manifest.getProperty("wallpaper.tile"), "0");
 				runPowerShell(wallpaperScript, "SET", restoreValue, style, tile);
+				String enginePath = validatedEnginePath(decode(manifest.getProperty("engine.path64", "")));
+				if (!enginePath.isBlank()) {
+					Path engineScript = ownedDirectory().resolve(WALLPAPER_ENGINE_SCRIPT_NAME).normalize();
+					requireOwned(engineScript);
+					logEngineControl(runPowerShell(engineScript, "RESUME", encode(enginePath)), "resume");
+				}
 			}
 			return new Recovery(window, true);
 		} catch (Exception exception) {
@@ -231,6 +254,28 @@ public final class WindowsEndingMetaTransaction {
 		return new WallpaperState(path,
 				validatedDesktopValue(parseString(output, "STYLE="), "0"),
 				validatedDesktopValue(parseString(output, "TILE="), "0"));
+	}
+
+	/** The running Wallpaper Engine executable, or {@code ""} when the player is not running it. */
+	private static String captureWallpaperEngine(Path script) throws IOException, InterruptedException {
+		List<String> output = runPowerShell(script, "GET", "");
+		return validatedEnginePath(decode(parseString(output, "ENGINE64=")));
+	}
+
+	/**
+	 * Only the two known Wallpaper Engine executables are ever handed back to PowerShell, so a
+	 * process table that reported something else can never turn into an arbitrary launch.
+	 */
+	private static String validatedEnginePath(String value) throws IOException {
+		if (value.isBlank()) return "";
+		Path path;
+		try { path = Path.of(value).toAbsolutePath().normalize(); }
+		catch (RuntimeException invalid) { throw new IOException("Invalid Wallpaper Engine path", invalid); }
+		String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
+		if (!WALLPAPER_ENGINE_EXECUTABLES.contains(name)) {
+			throw new IOException("Refused a Wallpaper Engine path that is not a known executable");
+		}
+		return path.toString();
 	}
 
 	private static String backupOriginalWallpaper(String original) throws IOException {
@@ -276,6 +321,7 @@ public final class WindowsEndingMetaTransaction {
 		Files.deleteIfExists(owned.resolve(FAILURE_WALLPAPER_NAME));
 		Files.deleteIfExists(owned.resolve(WALLPAPER_SCRIPT_NAME));
 		Files.deleteIfExists(owned.resolve(NOTEPAD_SCRIPT_NAME));
+		Files.deleteIfExists(owned.resolve(WALLPAPER_ENGINE_SCRIPT_NAME));
 		for (String backup : BACKUP_NAMES) Files.deleteIfExists(owned.resolve(backup));
 		Files.deleteIfExists(owned);
 		Files.deleteIfExists(manifestPath());
@@ -357,6 +403,16 @@ public final class WindowsEndingMetaTransaction {
 				.findFirst().orElseThrow(() -> new IOException("Missing helper output " + prefix));
 	}
 
+	private static void logEngineControl(List<String> output, String action) {
+		if (output.contains("CONTROL=OK") || output.contains("CONTROL=SKIPPED")) return;
+		TheFourthFrequency.LOGGER.warn("Could not {} Wallpaper Engine playback; the desktop stays as the player left it",
+				action);
+	}
+
+	private static String normalizeLineEndings(String value) {
+		return value.replace("\r\n", "\n").replace("\r", "\n");
+	}
+
 	private static String encode(String value) {
 		return Base64.getEncoder().encodeToString(value.getBytes(StandardCharsets.UTF_8));
 	}
@@ -418,6 +474,44 @@ public final class WindowsEndingMetaTransaction {
 				""";
 	}
 
+	private static String wallpaperEngineScript() {
+		return """
+				param([ValidateSet('GET','STOP','RESUME')][string]$Mode, [string]$PathBase64)
+				$ErrorActionPreference = 'Stop'
+				$names = @('wallpaper32', 'wallpaper64')
+				function Get-Engine {
+				  foreach ($process in @(Get-Process -Name $names -ErrorAction SilentlyContinue)) {
+				    # Path throws for processes this session cannot open; those are not ours to touch.
+				    try { if ($process.Path) { return $process } } catch { }
+				  }
+				  return $null
+				}
+				if ($Mode -eq 'GET') {
+				  $running = Get-Engine
+				  $path = ''
+				  if ($null -ne $running) { $path = $running.Path }
+				  Write-Output ('ENGINE64=' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($path)))
+				  exit 0
+				}
+				$target = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($PathBase64))
+				if ([IO.Path]::GetFileName($target).ToLowerInvariant() -notmatch '^wallpaper(32|64)\\.exe$') { exit 3 }
+				if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { Write-Output 'CONTROL=SKIPPED'; exit 0 }
+				# Only ever signal an engine that is already running. Playback is paused, not killed, and a
+				# player who closed Wallpaper Engine themselves must not have it started back up for them.
+				if ($null -eq (Get-Engine)) { Write-Output 'CONTROL=SKIPPED'; exit 0 }
+				$command = if ($Mode -eq 'STOP') { 'stop' } else { 'play' }
+				try {
+				  Start-Process -FilePath $target -ArgumentList '-control', $command -WindowStyle Hidden | Out-Null
+				  Write-Output 'CONTROL=OK'
+				} catch {
+				  # A desktop that keeps its live wallpaper is a downgrade, never a reason to fail the
+				  # surrounding transaction or to block recovery of the things that do matter.
+				  Write-Output 'CONTROL=FAILED'
+				}
+				exit 0
+				""";
+	}
+
 	private static String notepadScript() {
 		return """
 				param([int]$RootPid, [string]$TextBase64, [string]$NotePath)
@@ -429,7 +523,7 @@ public final class WindowsEndingMetaTransaction {
 				using System.Threading;
 				public static class TffOwnedNotepad {
 				  const uint SNAP = 2, INPUT_KEYBOARD = 1, KEYUP = 2, UNICODE = 4;
-				  const ushort VK_CONTROL = 0x11, VK_S = 0x53;
+				  const ushort VK_CONTROL = 0x11, VK_S = 0x53, VK_RETURN = 0x0D;
 				  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct PE { public uint size,usage,pid; public IntPtr heap; public uint module,threads,parent; public int priority; public uint flags; [MarshalAs(UnmanagedType.ByValTStr,SizeConst=260)] public string exe; }
 				  [StructLayout(LayoutKind.Sequential)] struct MI { public int dx,dy; public uint data,flags,time; public UIntPtr extra; }
 				  [StructLayout(LayoutKind.Sequential)] struct KI { public ushort key,scan; public uint flags,time; public UIntPtr extra; }
@@ -448,18 +542,26 @@ public final class WindowsEndingMetaTransaction {
 				  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
 				  [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr window);
 				  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window,int command);
-				  [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr window);
 				  [DllImport("user32.dll")] static extern uint SendInput(uint count,INPUT[] input,int size);
 				  static HashSet<uint> Tree(uint root) { var pairs=new List<Tuple<uint,uint>>(); var snap=CreateToolhelp32Snapshot(SNAP,0); if(snap!=new IntPtr(-1)){try{var e=new PE();e.size=(uint)Marshal.SizeOf(typeof(PE));if(Process32FirstW(snap,ref e))do{pairs.Add(Tuple.Create(e.pid,e.parent));e.size=(uint)Marshal.SizeOf(typeof(PE));}while(Process32NextW(snap,ref e));}finally{CloseHandle(snap);}} var owned=new HashSet<uint>();owned.Add(root);bool changed;do{changed=false;foreach(var p in pairs)if(owned.Contains(p.Item2)&&owned.Add(p.Item1))changed=true;}while(changed);return owned; }
 				  static IntPtr Find(HashSet<uint> owned,out uint pid) { IntPtr found=IntPtr.Zero;uint actual=0;EnumWindows(delegate(IntPtr w,IntPtr v){uint p;GetWindowThreadProcessId(w,out p);if(IsWindowVisible(w)&&owned.Contains(p)){found=w;actual=p;return false;}return true;},IntPtr.Zero);pid=actual;return found; }
-				  static bool Focus(HashSet<uint> owned,IntPtr window) { uint pid;GetWindowThreadProcessId(window,out pid);if(!owned.Contains(pid))return false;ShowWindow(window,3);BringWindowToTop(window);SetForegroundWindow(window);Thread.Sleep(120);return GetForegroundWindow()==window&&IsZoomed(window); }
+				  // SW_RESTORE, never SW_MAXIMIZE: the note is meant to sit on the desktop as an ordinary
+				  // window, so a maximized Notepad would hide the failure wallpaper it is written over.
+				  static bool Focus(HashSet<uint> owned,IntPtr window) { uint pid;GetWindowThreadProcessId(window,out pid);if(!owned.Contains(pid))return false;ShowWindow(window,9);BringWindowToTop(window);SetForegroundWindow(window);Thread.Sleep(120);return GetForegroundWindow()==window; }
 				  static INPUT Key(ushort key,bool up){var i=new INPUT();i.type=INPUT_KEYBOARD;i.data.ki.key=key;i.data.ki.flags=up?KEYUP:0;return i;}
-				  public static uint Type(int root,string text) { var owned=Tree((uint)root);IntPtr window=IntPtr.Zero;uint pid=0;DateTime until=DateTime.UtcNow.AddSeconds(8);while(DateTime.UtcNow<until&&window==IntPtr.Zero){owned=Tree((uint)root);window=Find(owned,out pid);if(window==IntPtr.Zero)Thread.Sleep(100);}if(window==IntPtr.Zero||!Focus(owned,window))throw new Exception("No verified maximized owned window");foreach(char c in text){if(GetForegroundWindow()!=window&&!Focus(owned,window))throw new Exception("Lost owned foreground");var down=new INPUT();down.type=INPUT_KEYBOARD;down.data.ki.scan=c;down.data.ki.flags=UNICODE;var up=down;up.data.ki.flags=UNICODE|KEYUP;if(SendInput(2,new INPUT[]{down,up},Marshal.SizeOf(typeof(INPUT)))!=2)throw new Exception("SendInput failed");Thread.Sleep(34);}var save=new INPUT[]{Key(VK_CONTROL,false),Key(VK_S,false),Key(VK_S,true),Key(VK_CONTROL,true)};if(SendInput(4,save,Marshal.SizeOf(typeof(INPUT)))!=4)throw new Exception("Save failed");Thread.Sleep(500);return pid; }
+				  public static uint Type(int root,string text) { var owned=Tree((uint)root);IntPtr window=IntPtr.Zero;uint pid=0;DateTime until=DateTime.UtcNow.AddSeconds(8);while(DateTime.UtcNow<until&&window==IntPtr.Zero){owned=Tree((uint)root);window=Find(owned,out pid);if(window==IntPtr.Zero)Thread.Sleep(100);}if(window==IntPtr.Zero||!Focus(owned,window))throw new Exception("No verified owned window");foreach(char c in text){if(GetForegroundWindow()!=window&&!Focus(owned,window))throw new Exception("Lost owned foreground");if(c=='\\n'){var enter=new INPUT[]{Key(VK_RETURN,false),Key(VK_RETURN,true)};if(SendInput(2,enter,Marshal.SizeOf(typeof(INPUT)))!=2)throw new Exception("SendInput failed");Thread.Sleep(34);continue;}var down=new INPUT();down.type=INPUT_KEYBOARD;down.data.ki.scan=c;down.data.ki.flags=UNICODE;var up=down;up.data.ki.flags=UNICODE|KEYUP;if(SendInput(2,new INPUT[]{down,up},Marshal.SizeOf(typeof(INPUT)))!=2)throw new Exception("SendInput failed");Thread.Sleep(34);}var save=new INPUT[]{Key(VK_CONTROL,false),Key(VK_S,false),Key(VK_S,true),Key(VK_CONTROL,true)};if(SendInput(4,save,Marshal.SizeOf(typeof(INPUT)))!=4)throw new Exception("Save failed");Thread.Sleep(900);return pid; }
 				}
 				'@
 				$text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($TextBase64))
 				$actualPid = [TffOwnedNotepad]::Type($RootPid, $text)
-				if ([IO.File]::ReadAllText($NotePath, [Text.Encoding]::UTF8) -ne $text) { exit 7 }
+				$saved = [IO.File]::ReadAllText($NotePath, [Text.Encoding]::UTF8).Replace("`r`n", "`n").Replace("`r", "`n")
+				if ($saved.TrimEnd("`n") -ne $text.TrimEnd("`n")) {
+				  # Base64 so the mod log can show exactly what landed in the note. A bare exit code here
+				  # cost a whole test run to diagnose: the transaction rolled the wallpaper back with no
+				  # word on why the note it was rolling back for had failed.
+				  Write-Output ('SAVED64=' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($saved)))
+				  exit 7
+				}
 				$process = [Diagnostics.Process]::GetProcessById([int]$actualPid)
 				$start = [DateTimeOffset]::new($process.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds()
 				Write-Output ('PID=' + $actualPid)

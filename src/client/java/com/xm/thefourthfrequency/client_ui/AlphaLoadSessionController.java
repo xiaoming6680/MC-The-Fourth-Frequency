@@ -32,7 +32,12 @@ public final class AlphaLoadSessionController {
 			"/assets/thefourthfrequency/textures/gui/alpha_java_icon.png";
 	private static final String VANILLA_VERSION_PREFIX = "Minecraft ";
 	private static final String MENU_VERSION_TEXT = "Minecraft 1.0.0";
-	private static final String MENU_WINDOW_TITLE = "Minecraft 1.0.0";
+	/**
+	 * The window bar names the era, the in-game version stamp names the build. They are deliberately
+	 * different strings: the title screen draws what a 1.0.0 client would have drawn, while the
+	 * chrome around it is what the launcher of that era would have called it.
+	 */
+	private static final String MENU_WINDOW_TITLE = "Minecraft Alpha 1.0.0";
 	private static boolean initialized;
 	private static boolean active;
 	private static boolean corruptionEverPlayed;
@@ -122,7 +127,7 @@ public final class AlphaLoadSessionController {
 		// Also covers the multiplayer paths the loading screen never gets to finish: a kick, a
 		// timeout or a server shutdown replaces the screen outright, so its own onClose is not a
 		// hook the corruption beds can rely on to be silenced.
-		AlphaCorruptionAudio.stopAll();
+		AlphaCorruptionAudio.fadeOutAll();
 		active = false;
 		corruptionInProgress = false;
 		resourceReloadFinished = true;
@@ -177,7 +182,11 @@ public final class AlphaLoadSessionController {
 		if (!shouldCorruptLoadingScreen()) return;
 		Minecraft client = Minecraft.getInstance();
 		if (client.getWindow() != null) {
-			applyVersionTitle(client, AlphaLoadTimeline.versionStage(screenTicks));
+			if (AlphaLoadTimeline.deadAirWindowTitle(screenTicks)) {
+				applyDeadAirTitle(client);
+			} else {
+				applyVersionTitle(client, AlphaLoadTimeline.versionStage(screenTicks));
+			}
 			if (screenTicks >= AlphaLoadTimeline.GLITCH_START_TICK && !javaIconApplied
 					&& applyJavaIcon(client)) {
 				javaIconApplied = true;
@@ -513,12 +522,27 @@ public final class AlphaLoadSessionController {
 
 	private static void applyVersionTitle(Minecraft client, int stage, boolean force) {
 		int resolved = Math.clamp(stage, 0, AlphaLoadTimeline.finalVersionStage());
-		String title = titleForStage(resolved);
-		// The corruption sequence asks for this every tick but the title only changes six times.
-		// Without the guard that is twenty GLFW calls a second to set a string the window already
-		// has. Callers that are recovering a title Minecraft may have overwritten pass force.
-		if (!force && resolved == appliedVersionStage && title.equals(appliedWindowTitle)) return;
 		appliedVersionStage = resolved;
+		setWindowTitle(client, titleForStage(resolved), force);
+	}
+
+	/**
+	 * Dead air on the one channel that survives it.
+	 *
+	 * <p>The picture is gone for these ticks, but the title bar the operating system draws is
+	 * not, and it is the only thing still reporting. It stops reporting a version, because at
+	 * this point in the sequence there is nothing left running that could name one.</p>
+	 */
+	private static void applyDeadAirTitle(Minecraft client) {
+		setWindowTitle(client, Component.translatable(
+				"window.thefourthfrequency.alpha_load.dead_air").getString(), false);
+	}
+
+	private static void setWindowTitle(Minecraft client, String title, boolean force) {
+		// The corruption sequence asks for a title every tick but it only changes a handful of
+		// times. Without the guard that is twenty GLFW calls a second to set a string the window
+		// already has. Callers recovering a title Minecraft may have overwritten pass force.
+		if (!force && title.equals(appliedWindowTitle)) return;
 		appliedWindowTitle = title;
 		client.getWindow().setTitle(appliedWindowTitle);
 	}

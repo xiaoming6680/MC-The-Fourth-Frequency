@@ -16,6 +16,7 @@ import net.minecraft.client.gui.screens.LevelLoadingScreen;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.resources.Identifier;
 import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 
 import java.util.Comparator;
 
@@ -34,6 +35,16 @@ public final class PursuitPresentationClient {
 	private static final int DESTINATION_FALLBACK_STABLE_TICKS = 12;
 	/** Four scans a second is well under the hysteresis band, so it cannot cause chain churn. */
 	private static final int PROXIMITY_SCAN_INTERVAL_TICKS = 5;
+	/**
+	 * Above one on purpose. Minecraft derives a positional sound's audible radius from its volume -
+	 * sixteen blocks times the volume squared, once the volume passes one - and then fades it
+	 * linearly to nothing at that radius. This puts the edge just past the forty-eight blocks the
+	 * heartbeat cadence is defined over, so the beat carries across the whole band the interval
+	 * describes and gets quieter honestly on the way out.
+	 */
+	private static final float HEARTBEAT_VOLUME = 1.75F;
+	/** How far out a corrector is still looked for; past this both spatial cues read as absent. */
+	private static final double CORRECTOR_SCAN_RADIUS = 96.0D;
 	private static Phase phase = Phase.IDLE;
 	private static String sessionId = "";
 	private static int form;
@@ -146,21 +157,41 @@ public final class PursuitPresentationClient {
 	}
 
 	/**
-	 * True for the whole pursuit, warning included. The warning is where the background score has to
-	 * start leaving: by the time the picture freezes there should already be nothing under it.
+	 * True once the mirror has arrived and until the run is over: the pursuit carries its own theme,
+	 * and it starts under the black screen rather than after it, so the track is already swelling by
+	 * the time there is anything to see.
+	 *
+	 * <p>It waits for the level rather than merely for the blackout because a dimension change stops
+	 * the music manager outright - {@code ClientPacketListener#handleRespawn} calls
+	 * {@code stopPlaying()} unconditionally, as part of every transfer. A track started on the near
+	 * side of the transfer is therefore cut mid-fade and restarted from the top the moment the
+	 * mirror lands, which is audible as the theme stuttering back to its first bar. Starting on the
+	 * far side costs nothing: the blackout covers the transfer and the loading screen alike, so the
+	 * fade-in still happens with the screen black.</p>
 	 */
-	public static boolean silencesMusic() {
-		return phase != Phase.IDLE || clearRequested;
+	public static boolean scoresMusic() {
+		if (clearRequested || phase != Phase.BLACKOUT && phase != Phase.RUNNING) return false;
+		Minecraft client = Minecraft.getInstance();
+		return client.level != null && PursuitDimensions.isMirror(client.level);
 	}
 
 	/**
-	 * True once the feed is gone, where the remains of a fading track would be a loose end rather
-	 * than a transition. The warning ahead of it lasts at least eight seconds, so the fade driven by
-	 * {@link #silencesMusic()} has already carried the track most of the way down by this point.
+	 * True for every part of a pursuit the theme does not cover: the warning, both resolutions, and
+	 * the return trip. The warning is where whatever was playing has to start leaving, so that the
+	 * blackout has nothing left of the overworld underneath it.
+	 */
+	public static boolean silencesMusic() {
+		return (phase != Phase.IDLE || clearRequested) && !scoresMusic();
+	}
+
+	/**
+	 * True at the two moments the feed is severed rather than faded: the blackout, and the capture.
+	 * The warning ahead of the blackout lasts at least eight seconds, so the fade driven by
+	 * {@link #silencesMusic()} has already carried the previous track most of the way down - the cut
+	 * is what removes the remainder, so the pursuit theme starts from real silence.
 	 */
 	public static boolean cutsMusic() {
-		return phase == Phase.BLACKOUT || phase == Phase.RUNNING
-				|| phase == Phase.CAPTURE_FREEZE || phase == Phase.ESCAPE_RESOLUTION;
+		return phase == Phase.BLACKOUT || phase == Phase.CAPTURE_FREEZE;
 	}
 
 	private static void accept(PursuitPresentationPayload payload) {
@@ -257,9 +288,8 @@ public final class PursuitPresentationClient {
 			installPostEffect(client);
 		}
 		if (phase == Phase.RUNNING) {
-			tickProximityGrade(client);
+			tickSpatialCues(client);
 			installPostEffect(client);
-			tickHeartbeat(client);
 		}
 		if (phase == Phase.CAPTURE_FREEZE && resolutionTicks++ < 60
 				&& resolutionTicks % 5 == 0) {
@@ -304,43 +334,58 @@ public final class PursuitPresentationClient {
 		transitionLoadingObserved = false;
 	}
 
-	private static void tickHeartbeat(Minecraft client) {
+	/**
+	 * Drives both spatial channels - the heartbeat and the mosaic band - off one lookup, because
+	 * both of them are asking the same question about the same entity. The scan is only paid for on
+	 * the ticks one of them is actually due, which at every cadence this timeline produces is far
+	 * less often than every tick.
+	 */
+	private static void tickSpatialCues(Minecraft client) {
 		if (client.level == null || client.player == null) return;
-		if (heartbeatCooldown-- > 0) return;
-		ReworkEntity closest = client.level.getEntitiesOfClass(ReworkEntity.class,
-						client.player.getBoundingBox().inflate(96.0D), ReworkEntity::isAlive)
-				.stream().min(Comparator.comparingDouble(client.player::distanceToSqr)).orElse(null);
-		if (closest == null) {
-			heartbeatCooldown = 10;
-			return;
+		boolean heartbeatDue = heartbeatCooldown-- <= 0;
+		boolean gradeDue = proximityScanCooldown-- <= 0;
+		if (!heartbeatDue && !gradeDue) return;
+		ReworkEntity corrector = closestCorrector(client);
+		// Double.MAX_VALUE when nothing is in range, which grades as DISTANT.
+		double distance = corrector == null ? Double.MAX_VALUE
+				: Math.sqrt(corrector.distanceToSqr(client.player));
+		if (gradeDue) {
+			// Re-grades how degraded the picture should be from the nearest corrector's distance.
+			// This is the only spatial cue that does not require hearing anything, so it matters for
+			// players with sound off, and it fits the fiction: the closer the thing gets, the less
+			// bandwidth the world has left to describe itself with.
+			proximityScanCooldown = PROXIMITY_SCAN_INTERVAL_TICKS;
+			proximityGrade = PursuitPresentationTimeline.proximityGrade(distance, proximityGrade);
 		}
-		double distance = Math.sqrt(closest.distanceToSqr(client.player));
-		heartbeatCooldown = PursuitPresentationTimeline.heartbeatIntervalTicks(distance);
-		float proximity = (float) (1.0D - Math.clamp((distance - 3.0D) / 45.0D, 0.0D, 1.0D));
-		play(client, SoundEvents.WARDEN_HEARTBEAT, 0.82F + proximity * 0.30F,
-				0.52F + proximity * 0.40F);
+		if (heartbeatDue) playHeartbeat(client, corrector, distance);
 	}
 
 	/**
-	 * Re-grades how degraded the picture should be from the nearest corrector's distance. This is
-	 * the only spatial cue that does not require hearing the heartbeat, so it matters for players
-	 * with sound off, and it fits the fiction: the closer the thing gets, the less bandwidth the
-	 * world has left to describe itself with.
+	 * Beats at the corrector's own position instead of inside the player's head. The interval
+	 * already carries how close it is; putting the sound in the world is what carries *where* it is,
+	 * and behind a black-and-white mosaic that has thrown most of the picture away, hearing is the
+	 * only channel left that can say "not that way". The engine's own panning and falloff do the
+	 * work, so nothing here fakes distance in the amplitude - only the pitch still tightens, which
+	 * is tension rather than information.
 	 */
-	private static void tickProximityGrade(Minecraft client) {
-		if (proximityScanCooldown-- > 0) return;
-		proximityScanCooldown = PROXIMITY_SCAN_INTERVAL_TICKS;
-		proximityGrade = PursuitPresentationTimeline.proximityGrade(
-				closestCorrectorDistance(client), proximityGrade);
+	private static void playHeartbeat(Minecraft client, ReworkEntity corrector, double distance) {
+		if (corrector == null) {
+			heartbeatCooldown = 10;
+			return;
+		}
+		heartbeatCooldown = PursuitPresentationTimeline.heartbeatIntervalTicks(distance);
+		float proximity = (float) (1.0D - Math.clamp((distance - 3.0D) / 45.0D, 0.0D, 1.0D));
+		client.level.playLocalSound(corrector.getX(), corrector.getEyeY(), corrector.getZ(),
+				SoundEvents.WARDEN_HEARTBEAT, SoundSource.HOSTILE, HEARTBEAT_VOLUME,
+				0.82F + proximity * 0.30F, false);
 	}
 
-	/** {@link Double#MAX_VALUE} when nothing is in range, which grades as DISTANT. */
-	private static double closestCorrectorDistance(Minecraft client) {
-		if (client.level == null || client.player == null) return Double.MAX_VALUE;
-		ReworkEntity closest = client.level.getEntitiesOfClass(ReworkEntity.class,
-						client.player.getBoundingBox().inflate(96.0D), ReworkEntity::isAlive)
+	/** Null when no corrector is within {@link #CORRECTOR_SCAN_RADIUS}. */
+	private static ReworkEntity closestCorrector(Minecraft client) {
+		return client.level.getEntitiesOfClass(ReworkEntity.class,
+						client.player.getBoundingBox().inflate(CORRECTOR_SCAN_RADIUS),
+						ReworkEntity::isAlive)
 				.stream().min(Comparator.comparingDouble(client.player::distanceToSqr)).orElse(null);
-		return closest == null ? Double.MAX_VALUE : Math.sqrt(closest.distanceToSqr(client.player));
 	}
 
 	private static Identifier postEffectForGrade() {

@@ -7,7 +7,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.level.Level;
 
-/** Locks view distance to 3/6/12 until a successful finale returns the player to the Overworld. */
+/** Locks view distance to 6/12/16 until a successful finale returns the player to the Overworld. */
 public final class DimensionViewDistanceController {
 	private static boolean initialized;
 	private static boolean stateLoaded;

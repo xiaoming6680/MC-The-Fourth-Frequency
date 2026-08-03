@@ -27,7 +27,7 @@ final class WorldInterfaceProtocolPersistenceTest {
 				ENCOUNTER_ID, ABOVE_SIGNED_INT_MAX + 1L, WorldInterfaceProtocol.Stage.PHASE_3.wireId(),
 				WorldInterfaceProtocol.Form.WORLD_INTERFACE.wireId(), UUID.fromString(
 						"a7fb1bc2-3e95-4330-a924-4ff1a3d3b160"), BlockPos.ZERO, 1_200.0F, 300.0F,
-				WorldInterfaceProtocol.ANCHOR_MASK, 4_000L, 600L, false, 9_000L,
+				WorldInterfaceProtocol.ANCHOR_MASK, 4_000L, false, 9_000L,
 				WorldInterfaceProtocol.GatewayState.PURPLE.wireId(),
 				List.of(new BlockPos(1, 70, 1), new BlockPos(-1, 70, -1)),
 				WorldInterfaceProtocol.Outcome.NONE.wireId(), 0.4F);

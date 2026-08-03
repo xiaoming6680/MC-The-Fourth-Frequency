@@ -31,6 +31,12 @@ public final class WorldInterfaceHud {
 	private static final float GHOST_HOLD_TICKS = 9.0F;
 	private static final float DAMAGE_FLASH_TICKS = 7.0F;
 	private static final float BAND_FLASH_TICKS = 26.0F;
+	/** How long a felled anchor's light takes to cross the gauge. */
+	private static final float ANCHOR_SWEEP_TICKS = 30.0F;
+	/** Half-width of the travelling band, as a fraction of the gauge. */
+	private static final float ANCHOR_SWEEP_REACH = 0.18F;
+	/** Pixels per drawn slice of the band. Fine enough to read as a gradient, coarse enough to be cheap. */
+	private static final int ANCHOR_SWEEP_SLICE = 4;
 
 	private static final int PANEL_PAD_X = 8;
 	private static final int PANEL_PAD_TOP = 6;
@@ -59,15 +65,19 @@ public final class WorldInterfaceHud {
 	private static final int READOUT = 0xFFF2E8FA;
 	private static final int ANCHOR_HUSK = 0xFF2A2130;
 	private static final int FAILURE_ACCENT = 0xFFD33B54;
+	/** Gold, because that is the colour the arena's own gateways take when the interface gives ground. */
+	private static final int ANCHOR_SWEEP_LIGHT = 0x00FFE0A0;
 
 	private static boolean initialized;
 	private static UUID trackedEncounterId;
 	private static int trackedBand = -1;
+	private static int trackedAnchorMask;
 	private static float displayedRatio = Float.NaN;
 	private static float ghostRatio = Float.NaN;
 	private static float ghostHold;
 	private static float damageFlash;
 	private static float bandFlash;
+	private static float anchorSweep;
 	private static double lastRenderTime = Double.NaN;
 
 	private WorldInterfaceHud() {
@@ -216,7 +226,36 @@ public final class WorldInterfaceHud {
 			// A one-pixel highlight along the top of each lit cell suggests a curved lens.
 			graphics.fill(cellLeft, y + 1, filledRight, y + 2, ARGB.srgbLerp(0.45F, lit, 0xFFFFFFFF));
 		}
+		drawAnchorSweep(graphics, left, y, barWidth);
 		drawPhaseThresholds(graphics, left, y, barWidth, band);
+	}
+
+	/**
+	 * A band of gold light crossing the gauge, played once for every anchor that falls.
+	 *
+	 * <p>Cutting an anchor lowers how hard the interface resists damage, which is the whole point of
+	 * leaving the fight to go and cut one - and until now it was invisible: the number that changed
+	 * lives on the server, and the anchor lamps in the footer only report how many are left, not what
+	 * losing one bought. The gauge is where the player is already looking when a hit lands, so that is
+	 * where the answer belongs. It reads as light passing over the instrument rather than as a value,
+	 * because the exact multiplier is not the point; "that hurt it more than the last one" is.</p>
+	 */
+	private static void drawAnchorSweep(GuiGraphics graphics, int left, int y, int barWidth) {
+		if (anchorSweep <= 0.0F) return;
+		// The band enters from off the left edge and leaves past the right one, so the light crosses
+		// the gauge instead of appearing and vanishing inside it.
+		float travel = 1.0F - anchorSweep / ANCHOR_SWEEP_TICKS;
+		float head = -ANCHOR_SWEEP_REACH + travel * (1.0F + 2.0F * ANCHOR_SWEEP_REACH);
+		for (int offset = 0; offset < barWidth; offset += ANCHOR_SWEEP_SLICE) {
+			int sliceWidth = Math.min(ANCHOR_SWEEP_SLICE, barWidth - offset);
+			float position = (offset + sliceWidth * 0.5F) / barWidth;
+			float reach = 1.0F - Math.abs(position - head) / ANCHOR_SWEEP_REACH;
+			if (reach <= 0.0F) continue;
+			int alpha = Math.round(200.0F * reach * reach);
+			if (alpha <= 0) continue;
+			graphics.fill(left + offset, y + 1, left + offset + sliceWidth, y + GAUGE_HEIGHT - 1,
+					alpha << 24 | ANCHOR_SWEEP_LIGHT);
+		}
 	}
 
 	/**
@@ -299,18 +338,26 @@ public final class WorldInterfaceHud {
 			WorldInterfaceClientState.Projection projection, WorldInterfaceSnapshotS2C encounter) {
 		float target = projection.healthRatio();
 		int band = WorldInterfacePalette.band(encounter.stage());
+		int aliveAnchors = encounter.anchorAliveMask();
 		if (!encounter.encounterId().equals(trackedEncounterId)) {
 			trackedEncounterId = encounter.encounterId();
 			trackedBand = band;
+			trackedAnchorMask = aliveAnchors;
 			displayedRatio = target;
 			ghostRatio = target;
 			ghostHold = 0.0F;
 			damageFlash = 0.0F;
 			bandFlash = 0.0F;
+			anchorSweep = 0.0F;
 			lastRenderTime = Double.NaN;
-		} else if (band != trackedBand) {
-			trackedBand = band;
-			bandFlash = BAND_FLASH_TICKS;
+		} else {
+			if (band != trackedBand) {
+				trackedBand = band;
+				bandFlash = BAND_FLASH_TICKS;
+			}
+			// Bits only ever leave this mask, and each one that does is an anchor the roster cut.
+			if ((trackedAnchorMask & ~aliveAnchors) != 0) anchorSweep = ANCHOR_SWEEP_TICKS;
+			trackedAnchorMask = aliveAnchors;
 		}
 		double now = client.level.getGameTime() + tickCounter.getGameTimeDeltaPartialTick(false);
 		float delta = Double.isNaN(lastRenderTime) ? 0.0F
@@ -332,6 +379,7 @@ public final class WorldInterfaceHud {
 		displayedRatio += (target - displayedRatio) * approach(HEALTH_EASE_RATE, delta);
 		damageFlash = Math.max(0.0F, damageFlash - delta);
 		bandFlash = Math.max(0.0F, bandFlash - delta);
+		anchorSweep = Math.max(0.0F, anchorSweep - delta);
 		if (ghostHold > 0.0F) ghostHold = Math.max(0.0F, ghostHold - delta);
 		else ghostRatio += (displayedRatio - ghostRatio) * approach(GHOST_EASE_RATE, delta);
 	}
@@ -359,11 +407,13 @@ public final class WorldInterfaceHud {
 	private static void resetBarState() {
 		trackedEncounterId = null;
 		trackedBand = -1;
+		trackedAnchorMask = 0;
 		displayedRatio = Float.NaN;
 		ghostRatio = Float.NaN;
 		ghostHold = 0.0F;
 		damageFlash = 0.0F;
 		bandFlash = 0.0F;
+		anchorSweep = 0.0F;
 		lastRenderTime = Double.NaN;
 	}
 

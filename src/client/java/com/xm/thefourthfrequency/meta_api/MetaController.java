@@ -11,6 +11,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
@@ -23,6 +24,7 @@ public final class MetaController {
 	private static com.xm.thefourthfrequency.meta_windows.WindowsAnomalyController anomalyController;
 	private static MetaExecution lastExecution;
 	private static KeyMapping toggleKey;
+	private static boolean toggleKeyHeld;
 
 	private MetaController() {
 	}
@@ -47,14 +49,29 @@ public final class MetaController {
 		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> restore());
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
 			if (anomalyController != null) anomalyController.tick(client);
+			// KeyMapping.click - the queue consumeClick drains - is only fed by KeyboardHandler while
+			// no screen is open. Recovery is needed precisely when one is: an ending leaves the player
+			// on the locked title screen, where the bound key would never register a single press.
 			while (toggleKey.consumeClick()) {
-				if (WorldInterfaceEndingClient.replayResetAvailable()) {
-					WorldInterfaceEndingClient.requestRecoveryConfirmation(client);
-				}
+				// Drained so held presses cannot pile up; the edge below is the one that acts.
 			}
+			boolean held = toggleKeyHeld(client);
+			if (held && !toggleKeyHeld && WorldInterfaceEndingClient.replayResetAvailable()) {
+				WorldInterfaceEndingClient.requestRecoveryConfirmation(client);
+			}
+			toggleKeyHeld = held;
 		});
 		TheFourthFrequency.LOGGER.info("Trusted Meta controller ready (enabled={}, adapter={})",
 				director.enabled(), primary.getClass().getSimpleName());
+	}
+
+	/** Polls the bound key directly, so the recovery shortcut survives any open screen. */
+	private static boolean toggleKeyHeld(Minecraft client) {
+		if (client == null || client.getWindow() == null) return false;
+		InputConstants.Key bound = KeyBindingHelper.getBoundKeyOf(toggleKey);
+		if (bound == null || bound.getType() != InputConstants.Type.KEYSYM
+				|| bound.getValue() == GLFW.GLFW_KEY_UNKNOWN) return false;
+		return InputConstants.isKeyDown(client.getWindow(), bound.getValue());
 	}
 
 	private static MetaContext context(Minecraft client) {

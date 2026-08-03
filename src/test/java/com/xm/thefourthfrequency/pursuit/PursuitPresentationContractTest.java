@@ -198,10 +198,10 @@ final class PursuitPresentationContractTest {
 				StandardCharsets.UTF_8);
 		assertTrue(entity.contains("PURSUIT_BREACH_STUCK_TICKS = 3"));
 		assertTrue(entity.contains("PURSUIT_BREACH_RETRY_TICKS = 1"));
-		assertTrue(entity.contains("PURSUIT_MOVEMENT_SPEED = 0.32"));
-		assertTrue(entity.contains("PURSUIT_NAVIGATION_SPEED = 1.42"));
-		assertTrue(entity.contains("PURSUIT_CAVE_MOVEMENT_SPEED = 0.27"));
-		assertTrue(entity.contains("PURSUIT_CAVE_NAVIGATION_SPEED = 1.10"));
+		assertTrue(entity.contains("PURSUIT_MOVEMENT_SPEED = 0.31"));
+		assertTrue(entity.contains("PURSUIT_NAVIGATION_SPEED = 1.32"));
+		assertTrue(entity.contains("PURSUIT_CAVE_MOVEMENT_SPEED = 0.25"));
+		assertTrue(entity.contains("PURSUIT_CAVE_NAVIGATION_SPEED = 1.04"));
 		assertTrue(entity.contains("movementSpeed.setBaseValue(PURSUIT_MOVEMENT_SPEED)"));
 		assertTrue(entity.contains("AnomalyConditions.caveLike(level, target.blockPosition())"));
 		assertTrue(entity.contains("updatePursuitCaveSlowdown(level, hostile)"));
@@ -237,6 +237,43 @@ final class PursuitPresentationContractTest {
 		assertTrue(payload.contains("ESCAPE_RESOLUTION = 5"));
 		assertTrue(client.contains("phase == Phase.CAPTURE_FREEZE"));
 		assertTrue(client.contains("resolutionTicks++ < 60"));
+	}
+
+	@Test
+	void pursuitHeartbeatIsPositionalAndTheChaseLightsThePlayersOwnEyes() throws Exception {
+		String client = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/PursuitPresentationClient.java"),
+				StandardCharsets.UTF_8);
+		// The beat has to arrive from where the corrector actually is. Behind a black-and-white
+		// mosaic it is the only channel left that can say "not that way", and forUI() - which is
+		// what this used to be - has no position at all, so its absence here is the real contract.
+		assertTrue(client.contains(
+				"playLocalSound(corrector.getX(), corrector.getEyeY(), corrector.getZ(),"));
+		assertTrue(client.contains("SoundEvents.WARDEN_HEARTBEAT, SoundSource.HOSTILE"));
+		assertFalse(client.contains("play(client, SoundEvents.WARDEN_HEARTBEAT"));
+		// Volume is what sets a positional sound's audible radius; drop it back under one and the
+		// beat stops reaching across the distance band its own cadence is defined over.
+		assertTrue(client.contains("HEARTBEAT_VOLUME = 1.75F"));
+
+		String vision = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/pursuit/PursuitVisionService.java"),
+				StandardCharsets.UTF_8);
+		String controller = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/pursuit/PursuitFormController.java"),
+				StandardCharsets.UTF_8);
+		String session = Files.readString(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/pursuit/PursuitSessionService.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(vision.contains("MobEffects.NIGHT_VISION"));
+		// Bounded and topped up rather than infinite: a teardown path that ever gets missed has to
+		// expire on its own instead of leaving the save permanently lit.
+		assertTrue(vision.contains("DURATION_TICKS = 600"));
+		assertTrue(vision.contains("REFRESH_BELOW_TICKS = 300"));
+		assertFalse(vision.contains("INFINITE_DURATION"));
+		assertTrue(controller.contains("PursuitVisionService.apply(player)"));
+		assertTrue(controller.contains("PursuitVisionService.maintain(player)"));
+		assertTrue(controller.contains("PursuitVisionService.clear(player)"));
+		assertTrue(session.contains("PursuitVisionService.clear(player)"));
 	}
 
 	@Test

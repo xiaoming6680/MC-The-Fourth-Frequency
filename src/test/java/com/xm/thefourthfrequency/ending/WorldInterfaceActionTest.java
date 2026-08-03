@@ -12,23 +12,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WorldInterfaceActionTest {
 	@Test
-	void exactlyNineAttacksHaveStableExplicitIds() {
-		assertEquals(9, WorldInterfaceAction.values().length);
-		for (int wireId = 1; wireId <= 9; wireId++) {
-			WorldInterfaceAction action = WorldInterfaceAction.values()[wireId - 1];
-			assertEquals(wireId, action.wireId());
-			assertEquals(action, WorldInterfaceAction.fromWireId(wireId));
+	void everyAttackHasAStableExplicitIdAndRetiredIdsStayRetired() {
+		assertEquals(8, WorldInterfaceAction.values().length);
+		int previous = 0;
+		for (WorldInterfaceAction action : WorldInterfaceAction.values()) {
+			// Ascending but not necessarily contiguous: ids are a wire contract, so a retired
+			// attack leaves a hole rather than shifting everything after it onto new ids.
+			assertTrue(action.wireId() > previous, "wire ids must ascend: " + action);
+			previous = action.wireId();
+			assertEquals(action, WorldInterfaceAction.fromWireId(action.wireId()));
 		}
 		assertThrows(IllegalArgumentException.class, () -> WorldInterfaceAction.fromWireId(0));
+		// 3 was the grab-slam. Nothing may claim it.
+		assertThrows(IllegalArgumentException.class, () -> WorldInterfaceAction.fromWireId(3));
 		assertThrows(IllegalArgumentException.class, () -> WorldInterfaceAction.fromWireId(10));
+		assertTrue(WorldInterfaceAction.fromWireIdOrEmpty(3).isEmpty(),
+				"a saved encounter naming a retired attack must resolve to nothing, not throw");
 	}
 
 	@Test
 	void actionsUnlockCumulativelyAcrossTheThreeCombatPhases() {
 		assertEquals(List.of(), WorldInterfaceAction.unlockedAt(WorldInterfaceStage.SUMMONING));
-		assertEquals(4, WorldInterfaceAction.unlockedAt(WorldInterfaceStage.PHASE_1).size());
-		assertEquals(7, WorldInterfaceAction.unlockedAt(WorldInterfaceStage.PHASE_2).size());
-		assertEquals(9, WorldInterfaceAction.unlockedAt(WorldInterfaceStage.PHASE_3).size());
+		assertEquals(3, WorldInterfaceAction.unlockedAt(WorldInterfaceStage.PHASE_1).size());
+		assertEquals(6, WorldInterfaceAction.unlockedAt(WorldInterfaceStage.PHASE_2).size());
+		assertEquals(8, WorldInterfaceAction.unlockedAt(WorldInterfaceStage.PHASE_3).size());
 		assertFalse(WorldInterfaceAction.FORCED_EVICTION.isUnlockedAt(WorldInterfaceStage.PHASE_2));
 		assertTrue(WorldInterfaceAction.FORCED_EVICTION.isUnlockedAt(WorldInterfaceStage.PHASE_3));
 	}
@@ -36,7 +43,6 @@ class WorldInterfaceActionTest {
 	@Test
 	void grabWeaponHotbarAndEvictionShareTheExclusiveControlLane() {
 		Set<WorldInterfaceAction> expected = Set.of(
-				WorldInterfaceAction.GRAB_SLAM,
 				WorldInterfaceAction.CHARGE_WEAPON_STEAL,
 				WorldInterfaceAction.GRAB_THROW,
 				WorldInterfaceAction.GAZE_HOTBAR_CLEAR,

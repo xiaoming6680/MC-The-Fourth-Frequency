@@ -4,6 +4,7 @@ import com.xm.thefourthfrequency.audio.ModSounds;
 import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
 import com.xm.thefourthfrequency.client_render.WorldInterfaceBeamBatchRenderer;
 import com.xm.thefourthfrequency.content.ModBlocks;
+import com.xm.thefourthfrequency.ending.WorldInterfacePolicy;
 import com.xm.thefourthfrequency.networking.BossActionS2C;
 import com.xm.thefourthfrequency.networking.WorldInterfaceProtocol;
 import com.xm.thefourthfrequency.networking.WorldInterfaceSnapshotS2C;
@@ -19,8 +20,10 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.UUID;
@@ -30,8 +33,16 @@ public final class WorldInterfacePresentationController {
 	private static final int AMBIENT_FADE_IN_TICKS = 20;
 	private static final int AMBIENT_FADE_OUT_TICKS = 16;
 	private static final long DAMAGE_FLASH_TICKS = 5L;
-	/** Horizontal reach of the visual-only failure erosion, and of the rebuild it needs. */
-	private static final int EROSION_RADIUS_BLOCKS = 160;
+	/**
+	 * Horizontal reach of the erosion, and of the rebuild it needs.
+	 *
+	 * <p>Taken from the policy rather than chosen here. The server commits the same disc to the
+	 * world when the fight ends, and a render that reached further simply un-drew itself the moment
+	 * the encounter cleared - the island visibly healed the outer four fifths of its damage.</p>
+	 */
+	private static final int EROSION_RADIUS_BLOCKS = WorldInterfacePolicy.EROSION_RADIUS_BLOCKS;
+	private static final int LOCK_ACCENT = 0x00C24BE0;
+	private static final int LOCK_TEXT = 0x00F0D2FA;
 	private static boolean initialized;
 	private static UUID trackedEncounterId;
 	private static UUID trackedBossId;
@@ -76,14 +87,24 @@ public final class WorldInterfacePresentationController {
 		// Read client.level exactly once: the main thread can null it out (disconnect, dimension
 		// change) between two separate reads, and this method may run on a chunk-build worker
 		// thread via the render mixins, so a re-read here was a real, if narrow, NPE race.
+		// Erosion re-skins what is already there; it must never conjure a solid face out of air.
+		if (original.isAir()) return original;
+		// End stone only, which is the same rule the server commits on.
+		//
+		// This used to re-skin every solid block inside the disc, so the ten obsidian pillars, their
+		// bedrock caps and the altar all dissolved into missing-texture along with the ground - while
+		// commitErosion, which decides what a lost encounter actually leaves behind, has always been
+		// end-stone-only. The island therefore showed a corruption it was never going to keep, and
+		// the landmarks a player navigates the arena by disappeared into it. The pillars keep their
+		// own material and stand out against the corrupted ground, which is what they are for.
+		if (!original.is(Blocks.END_STONE)) return original;
 		var level = Minecraft.getInstance().level;
 		WorldInterfaceSnapshotS2C encounter = failureEncounter(level);
 		if (encounter == null || level.dimension() != Level.END) return original;
 		long dx = pos.getX() - encounter.center().getX();
 		long dz = pos.getZ() - encounter.center().getZ();
 		if (dx * dx + dz * dz > (long) EROSION_RADIUS_BLOCKS * EROSION_RADIUS_BLOCKS) return original;
-		return erosionThreshold(encounter.encounterId().getMostSignificantBits()
-				^ encounter.encounterId().getLeastSignificantBits() ^ pos.asLong()) <= encounter.failureProgress()
+		return WorldInterfacePolicy.erodesAt(encounter.encounterId(), pos.asLong(), encounter.failureProgress())
 				? ModBlocks.MISSING_TEXTURE_PROXY.defaultBlockState() : original;
 	}
 
@@ -97,7 +118,7 @@ public final class WorldInterfacePresentationController {
 				|| path.contains("player_skin"))) return false;
 		long textureSeed = ((long) id.getNamespace().hashCode() << 32) ^ path.hashCode()
 				^ encounter.encounterId().getLeastSignificantBits();
-		return erosionThreshold(textureSeed) <= encounter.failureProgress();
+		return WorldInterfacePolicy.erosionThreshold(textureSeed) <= encounter.failureProgress();
 	}
 
 	/**
@@ -109,16 +130,6 @@ public final class WorldInterfacePresentationController {
 		if (level == null) return null;
 		WorldInterfaceSnapshotS2C encounter = WorldInterfaceClientState.snapshot().encounter();
 		return encounter != null && encounter.failureProgress() > 0.0F ? encounter : null;
-	}
-
-	private static float erosionThreshold(long value) {
-		long mixed = value;
-		mixed ^= mixed >>> 33;
-		mixed *= 0xff51afd7ed558ccdl;
-		mixed ^= mixed >>> 33;
-		mixed *= 0xc4ceb9fe1a85ec53l;
-		mixed ^= mixed >>> 33;
-		return (mixed >>> 40) / (float) 0xFFFFFF;
 	}
 
 	private static void resetPresentationState() {
@@ -295,43 +306,78 @@ public final class WorldInterfacePresentationController {
 				|| !projection.actionTargets(client.player.getUUID())) return;
 		BossActionS2C action = projection.action();
 		long elapsed = client.level.getGameTime() - action.startTick();
-		switch (action.action()) {
-			case MENTAL_ATTACK -> renderMentalAttack(graphics, action, elapsed);
-			case FORCED_EXPULSION -> renderForcedExpulsion(graphics, action, elapsed);
-			default -> {
-				// Other actions are represented by entity animation and spatial warnings.
-			}
-		}
-	}
-
-	private static void renderMentalAttack(GuiGraphics graphics, BossActionS2C action, long elapsed) {
-		int width = graphics.guiWidth();
-		int height = graphics.guiHeight();
-		if (elapsed < 40L) {
-			int radius = 14 + (int) elapsed / 3;
-			int alpha = 80 + (int) elapsed * 3;
-			int color = (Math.min(220, alpha) << 24) | 0x00B449D1;
-			graphics.renderOutline(width / 2 - radius, height / 2 - radius, radius * 2, radius * 2, color);
-			graphics.drawCenteredString(Minecraft.getInstance().font, Component.translatable(
-					"hud.thefourthfrequency.world_interface.action.mental_lock"),
-					width / 2, height / 2 + radius + 6, 0xFFD59ADF);
+		if (action.action() == WorldInterfaceProtocol.BossAction.FORCED_EXPULSION) {
+			renderForcedExpulsion(graphics, action, elapsed);
 			return;
 		}
-		int intensity = Math.clamp((int) (elapsed - 40L), 0, 80);
-		// The peak post-effect chain now supplies the violet cast and the blur; keeping the old
-		// opaque veil on top of it only crushed the scene into unreadable mud.
-		graphics.fill(0, 0, width, height, ((18 + intensity / 3) << 24) | 0x000B0010);
-		String glyphs = "0101/空/见/频/我/你";
-		for (int index = 0; index < 18; index++) {
-			long mixed = action.seed() ^ action.sequence() * 0x9E3779B97F4A7C15L
-					^ (elapsed / 2L) * 0xC2B2AE3D27D4EB4FL ^ index * 0x165667B19E3779F9L;
-			int x = Math.floorMod(Long.hashCode(mixed), Math.max(1, width - 54));
-			int y = Math.floorMod(Long.hashCode(mixed >>> 17), Math.max(1, height - 12));
-			int start = Math.floorMod(Long.hashCode(mixed >>> 31), glyphs.length());
-			String glyph = glyphs.substring(start, Math.min(glyphs.length(), start + 1));
-			graphics.drawString(Minecraft.getInstance().font, Component.literal(glyph), x, y,
-					0xBFCB64E6, false);
+		renderLockWarning(graphics, action, elapsed);
+	}
+
+	/**
+	 * The screen half of a lock, for every action that has one.
+	 *
+	 * <p>These attacks are all dodgeable now - the laser trails its target, the lance falls on a
+	 * fixed mark, the grab and the purge take a beat to close - and none of that is playable if
+	 * being singled out is only legible from a particle on the ground behind you.</p>
+	 *
+	 * <p>Deliberately small. This started as a closing full-screen frame, which read as an
+	 * interface failure rather than as a warning and covered the arena at the exact moment the
+	 * player needs to see it. What is left is the smallest thing that answers the two questions
+	 * being locked actually raises: <em>am I the one</em>, and <em>how long have I got</em>. Both
+	 * live near the crosshair, where the player is already looking, and both run on the server's
+	 * own warning clock so the screen never promises time the encounter will not give.</p>
+	 */
+	private static void renderLockWarning(GuiGraphics graphics, BossActionS2C action, long elapsed) {
+		int warning = WorldInterfaceProtocol.lockWarningTicks(action.action());
+		if (warning <= 0 || elapsed < 0L || elapsed >= warning) return;
+		float progress = Math.clamp(elapsed / (float) warning, 0.0F, 1.0F);
+		int centerX = graphics.guiWidth() / 2;
+		int centerY = graphics.guiHeight() / 2;
+		// Fades up over the first few ticks instead of snapping on, so the lock arrives rather
+		// than flashing.
+		int alpha = Math.round(Mth.lerp(Math.min(1.0F, elapsed / 6.0F), 0.0F,
+				Mth.lerp(progress, 130.0F, 220.0F)));
+		if (alpha <= 2) return;
+		int accent = (alpha << 24) | LOCK_ACCENT;
+
+		// Four short ticks converging on the crosshair. No frame, no ring, nothing across the
+		// middle: the closing gap alone carries how much of the window is left.
+		int reach = Math.round(Mth.lerp(progress, 34.0F, 13.0F));
+		int arm = 6;
+		for (int sx = -1; sx <= 1; sx += 2) {
+			for (int sy = -1; sy <= 1; sy += 2) {
+				int cornerX = centerX + sx * reach;
+				int cornerY = centerY + sy * reach;
+				graphics.fill(Math.min(cornerX, cornerX - sx * arm), cornerY,
+						Math.max(cornerX, cornerX - sx * arm), cornerY + 1, accent);
+				graphics.fill(cornerX, Math.min(cornerY, cornerY - sy * arm),
+						cornerX + 1, Math.max(cornerY, cornerY - sy * arm), accent);
+			}
 		}
+
+		// A thin bar under the reticle, and the attack's name under that. The bar is the answer to
+		// "how long"; the name is only there so the first lock of a given kind teaches what it is.
+		int barWidth = 54;
+		int barLeft = centerX - barWidth / 2;
+		int barTop = centerY + reach + 10;
+		graphics.fill(barLeft, barTop, barLeft + barWidth, barTop + 1, (alpha / 3) << 24);
+		graphics.fill(barLeft, barTop, barLeft + Math.round(barWidth * (1.0F - progress)), barTop + 1,
+				accent);
+		graphics.drawCenteredString(Minecraft.getInstance().font,
+				Component.translatable(lockLabelKey(action.action())),
+				centerX, barTop + 5, (alpha << 24) | LOCK_TEXT);
+	}
+
+	private static String lockLabelKey(WorldInterfaceProtocol.BossAction action) {
+		return "hud.thefourthfrequency.world_interface.lock." + switch (action) {
+			case LASER_SWEEP -> "laser";
+			case SKY_LANCE -> "sky_lance";
+			case GRAB_THROW -> "grab_throw";
+			case WEAPON_CHARGE -> "weapon";
+			case HOTBAR_PURGE -> "hotbar";
+			case TENDRIL_LASH -> "tendril";
+			default -> "generic";
+		};
 	}
 
 	private static void renderForcedExpulsion(GuiGraphics graphics, BossActionS2C action, long elapsed) {

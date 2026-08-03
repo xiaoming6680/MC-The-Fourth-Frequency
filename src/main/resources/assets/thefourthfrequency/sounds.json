@@ -222,6 +222,43 @@
     "subtitle": "subtitles.thefourthfrequency.world_interface.ambient_3",
     "sounds": [{"name":"thefourthfrequency:world_interface/ambient_form_3/01","stream":false,"volume":0.5}]
   },
+  "world_interface_hurt": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.hurt",
+    "sounds": [
+      "thefourthfrequency:world_interface/hurt/01",
+      "thefourthfrequency:world_interface/hurt/02",
+      "thefourthfrequency:world_interface/hurt/03"
+    ]
+  },
+  "world_interface_death": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.death",
+    "sounds": [
+      "thefourthfrequency:world_interface/death/01"
+    ]
+  },
+  "world_interface_laser_fire": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.laser_fire",
+    "sounds": [
+      "thefourthfrequency:world_interface/laser_fire/01",
+      "thefourthfrequency:world_interface/laser_fire/02",
+      "thefourthfrequency:world_interface/laser_fire/03"
+    ]
+  },
+  "world_interface_impact": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.impact",
+    "sounds": [
+      "thefourthfrequency:world_interface/impact/01",
+      "thefourthfrequency:world_interface/impact/02",
+      "thefourthfrequency:world_interface/impact/03"
+    ]
+  },
+  "world_interface_form_shift": {
+    "subtitle": "subtitles.thefourthfrequency.world_interface.form_shift",
+    "sounds": [
+      "thefourthfrequency:world_interface/form_shift/01",
+      "thefourthfrequency:world_interface/form_shift/02"
+    ]
+  },
   "world_interface_morph": {
     "subtitle": "subtitles.thefourthfrequency.world_interface.morph",
     "sounds": [
@@ -300,12 +337,35 @@
     "sounds": [
       {"name":"thefourthfrequency:music/game/millennium_dream","stream":true},
       {"name":"thefourthfrequency:music/game/are_you_lost","stream":true},
-      {"name":"thefourthfrequency:music/game/hi","stream":true}
+      {"name":"thefourthfrequency:music/game/hi","stream":true},
+      {"name":"thefourthfrequency:music/game/tenshi","stream":true},
+      {"name":"thefourthfrequency:music/game/school_rooftop","stream":true},
+      {"name":"thefourthfrequency:music/game/comfort_chain","stream":true}
+    ]
+  },
+  "music_pursuit": {
+    "sounds": [
+      {"name":"thefourthfrequency:music/pursuit/level","stream":true}
+    ]
+  },
+  "music_encounter": {
+    "sounds": [
+      {"name":"thefourthfrequency:music/encounter/ncpd_prowl","stream":true}
+    ]
+  },
+  "music_encounter_final": {
+    "sounds": [
+      {"name":"thefourthfrequency:music/encounter/wake_up","stream":true}
     ]
   },
   "music_ending": {
     "sounds": [
       {"name":"thefourthfrequency:music/ending/reverie","stream":true}
+    ]
+  },
+  "music_ending_failure": {
+    "sounds": [
+      {"name":"thefourthfrequency:music/ending/fallen_down","stream":true}
     ]
   }
 }

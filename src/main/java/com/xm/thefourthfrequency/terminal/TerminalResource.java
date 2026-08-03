@@ -5,6 +5,8 @@ public enum TerminalResource {
 	COAL(4, "coal"),
 	GOLD(5, "gold"),
 	DIAMOND(2, "diamond"),
+	/** Wire id 1 was never issued, so emerald could join without renumbering the others. */
+	EMERALD(1, "emerald"),
 	NONE(3, "unresolved");
 
 	private final int wireId;
@@ -35,13 +37,5 @@ public enum TerminalResource {
 
 	public static boolean isSelectableWire(int value) {
 		return false;
-	}
-
-	public static TerminalResource weightedRoll(int roll) {
-		int value = Math.floorMod(roll, 100);
-		if (value < 50) return IRON;
-		if (value < 80) return COAL;
-		if (value < 90) return GOLD;
-		return DIAMOND;
 	}
 }

@@ -3,6 +3,7 @@ package com.xm.thefourthfrequency.content;
 import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.correction.ReworkCollisionProfile;
 import com.xm.thefourthfrequency.entity.ReworkEntity;
+import com.xm.thefourthfrequency.entity.HimEntity;
 import com.xm.thefourthfrequency.entity.WatcherEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEnergyOrbEntity;
@@ -22,6 +23,8 @@ public final class ModEntities {
 			Registries.ENTITY_TYPE, Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "rework_body"));
 	private static final ResourceKey<EntityType<?>> WATCHER_KEY = ResourceKey.create(
 			Registries.ENTITY_TYPE, Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "watcher"));
+	private static final ResourceKey<EntityType<?>> HIM_KEY = ResourceKey.create(
+			Registries.ENTITY_TYPE, Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "him"));
 	private static final ResourceKey<EntityType<?>> WORLD_INTERFACE_KEY = ResourceKey.create(
 			Registries.ENTITY_TYPE, Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "world_interface"));
 	private static final ResourceKey<EntityType<?>> WORLD_INTERFACE_PART_KEY = ResourceKey.create(
@@ -48,6 +51,23 @@ public final class ModEntities {
 					.clientTrackingRange(10)
 					.updateInterval(2)
 					.build(WATCHER_KEY));
+
+	/**
+	 * Player-proportioned on purpose: the whole read is "that was a person standing there", and any
+	 * silhouette that is not exactly Steve-shaped gives it away as something else before the fifth
+	 * of a second is up. Tracked far out because it is placed twenty to forty blocks away and has
+	 * to already be on the client when the player turns round.
+	 */
+	public static final EntityType<HimEntity> HIM = Registry.register(
+			BuiltInRegistries.ENTITY_TYPE,
+			HIM_KEY,
+			EntityType.Builder.of(HimEntity::new, MobCategory.MONSTER)
+					.sized(0.6F, 1.8F)
+					.eyeHeight(1.62F)
+					.clientTrackingRange(6)
+					.updateInterval(2)
+					.noSummon()
+					.build(HIM_KEY));
 
 	public static final EntityType<WorldInterfaceEntity> WORLD_INTERFACE = Registry.register(
 			BuiltInRegistries.ENTITY_TYPE,
@@ -89,6 +109,7 @@ public final class ModEntities {
 	public static void initialize() {
 		FabricDefaultAttributeRegistry.register(REWORK_BODY, ReworkEntity.createAttributes());
 		FabricDefaultAttributeRegistry.register(WATCHER, WatcherEntity.createAttributes());
+		FabricDefaultAttributeRegistry.register(HIM, HimEntity.createAttributes());
 		FabricDefaultAttributeRegistry.register(WORLD_INTERFACE, WorldInterfaceEntity.createAttributes());
 		TheFourthFrequency.LOGGER.info("Registered rework, watcher, and world-interface entities");
 	}

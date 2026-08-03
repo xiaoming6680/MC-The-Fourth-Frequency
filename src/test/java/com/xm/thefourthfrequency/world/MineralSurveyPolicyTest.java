@@ -17,13 +17,22 @@ final class MineralSurveyPolicyTest {
 	}
 
 	@Test
-	void revealChanceIsExactlyThirtyPercentOfAOneHundredPointRoll() {
-		assertTrue(MineralSurveyPolicy.shouldReveal(0));
-		assertTrue(MineralSurveyPolicy.shouldReveal(29));
-		assertFalse(MineralSurveyPolicy.shouldReveal(30));
-		assertFalse(MineralSurveyPolicy.shouldReveal(99));
-		assertFalse(MineralSurveyPolicy.shouldReveal(-1));
-		assertFalse(MineralSurveyPolicy.shouldReveal(100));
+	void theSurveyOnlyNoticesOreWorthInterruptingFor() {
+		assertTrue(MineralSurveyPolicy.surveyable(TerminalResource.DIAMOND));
+		assertTrue(MineralSurveyPolicy.surveyable(TerminalResource.EMERALD));
+		assertFalse(MineralSurveyPolicy.surveyable(TerminalResource.IRON));
+		assertFalse(MineralSurveyPolicy.surveyable(TerminalResource.COAL));
+		assertFalse(MineralSurveyPolicy.surveyable(TerminalResource.GOLD));
+		assertFalse(MineralSurveyPolicy.surveyable(TerminalResource.NONE));
+	}
+
+	@Test
+	void emeraldOutranksEveryOtherReading() {
+		for (TerminalResource other : TerminalResource.values()) {
+			if (other == TerminalResource.EMERALD) continue;
+			assertTrue(MineralSurveyPolicy.reportPriority(TerminalResource.EMERALD)
+					> MineralSurveyPolicy.reportPriority(other), "emerald over " + other);
+		}
 	}
 
 	@Test

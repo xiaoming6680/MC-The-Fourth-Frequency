@@ -12,4 +12,13 @@ public final class AnomalySelectionRules {
 	public static boolean caveLike(boolean directSky, int skyLight, int enclosedDirections) {
 		return !directSky && skyLight <= 4 && enclosedDirections >= 4;
 	}
+
+	/**
+	 * Night as the story already counts it in StoryProgressService: full dark, excluding the sunset
+	 * and sunrise ramps where the sky still does the lighting.
+	 */
+	public static boolean night(long dayTime) {
+		long day = Math.floorMod(dayTime, 24_000L);
+		return day >= 13_000L && day <= 23_000L;
+	}
 }

@@ -84,7 +84,7 @@ public final class WindowsAnomalyController {
 			Files.writeString(ownedTyperScript, ownedUnicodeTyperScript(), StandardCharsets.UTF_8,
 					StandardOpenOption.CREATE_NEW);
 			notepad = new ProcessBuilder("notepad.exe", ownedNote.toString()).start();
-			startOwnedUnicodeTyper(notepad.pid(), noteText);
+			startOwnedUnicodeTyper(notepad.pid(), noteText, notePlacement(area));
 			return true;
 		} catch (Exception failure) {
 			TheFourthFrequency.LOGGER.warn("Desktop presence safely downgraded: owned Notepad was unavailable");
@@ -216,7 +216,20 @@ public final class WindowsAnomalyController {
 		return clamped * clamped * (3.0D - 2.0D * clamped);
 	}
 
-	private void startOwnedUnicodeTyper(long rootPid, String text) throws java.io.IOException {
+	/**
+	 * Where the note is put. The game window has just been shrunk to the middle of the work area,
+	 * so the note takes the upper-left quarter: on screen beside it, never on top of it, and never
+	 * the whole desktop.
+	 */
+	private static WindowRect notePlacement(WorkArea area) {
+		int width = Math.clamp(Math.round(area.width * 0.34F), 420, area.width);
+		int height = Math.clamp(Math.round(area.height * 0.44F), 320, area.height);
+		return new WindowRect(area.x + Math.round(area.width * 0.04F),
+				area.y + Math.round(area.height * 0.06F), width, height);
+	}
+
+	private void startOwnedUnicodeTyper(long rootPid, String text, WindowRect placement)
+			throws java.io.IOException {
 		String encoded = Base64.getEncoder().encodeToString(text.getBytes(StandardCharsets.UTF_8));
 		Path windows = Path.of(System.getenv().getOrDefault("WINDIR", "C:\\Windows"))
 				.toAbsolutePath().normalize();
@@ -225,7 +238,8 @@ public final class WindowsAnomalyController {
 			throw new java.io.IOException("Trusted Windows PowerShell was unavailable");
 		typer = new ProcessBuilder(powershell.toString(), "-NoLogo", "-NoProfile", "-NonInteractive",
 				"-ExecutionPolicy", "Bypass", "-File", ownedTyperScript.toString(),
-				Long.toString(rootPid), encoded).start();
+				Long.toString(rootPid), encoded, Integer.toString(placement.x), Integer.toString(placement.y),
+				Integer.toString(placement.width), Integer.toString(placement.height)).start();
 	}
 
 	private boolean applyEyeIcon(Minecraft client) {
@@ -251,7 +265,7 @@ public final class WindowsAnomalyController {
 
 	private static String ownedUnicodeTyperScript() {
 		return """
-				param([int]$RootPid, [string]$TextBase64)
+				param([int]$RootPid, [string]$TextBase64, [int]$X, [int]$Y, [int]$Width, [int]$Height)
 				$ErrorActionPreference = 'Stop'
 				Add-Type -TypeDefinition @'
 				using System;
@@ -266,6 +280,8 @@ public final class WindowsAnomalyController {
 				  const ushort VK_CONTROL = 0x11;
 				  const ushort VK_SHIFT = 0x10;
 				  const ushort VK_OEM_PLUS = 0xBB;
+				  const int SW_SHOW = 5;
+				  const int SW_RESTORE = 9;
 				  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
 				  struct PROCESSENTRY32 { public uint dwSize; public uint cntUsage; public uint th32ProcessID; public IntPtr th32DefaultHeapID; public uint th32ModuleID; public uint cntThreads; public uint th32ParentProcessID; public int pcPriClassBase; public uint dwFlags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst=260)] public string szExeFile; }
 				  [StructLayout(LayoutKind.Sequential)] struct MOUSEINPUT { public int dx,dy; public uint mouseData,dwFlags,time; public UIntPtr dwExtraInfo; }
@@ -286,6 +302,7 @@ public final class WindowsAnomalyController {
 				  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
 				  [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr hWnd);
 				  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int command);
+				  [DllImport("user32.dll")] static extern bool MoveWindow(IntPtr hWnd, int x, int y, int width, int height, bool repaint);
 				  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint first, uint second, bool attach);
 				  [DllImport("user32.dll", SetLastError=true)] static extern uint SendInput(uint count, INPUT[] inputs, int size);
 				  static HashSet<uint> OwnedTree(uint root) {
@@ -314,9 +331,18 @@ public final class WindowsAnomalyController {
 				    IntPtr previous = GetForegroundWindow(); uint ignored; uint foregroundThread = previous == IntPtr.Zero ? 0 : GetWindowThreadProcessId(previous, out ignored);
 				    bool attachTarget = targetThread != 0 && targetThread != currentThread && AttachThreadInput(currentThread, targetThread, true);
 				    bool attachForeground = foregroundThread != 0 && foregroundThread != currentThread && foregroundThread != targetThread && AttachThreadInput(currentThread, foregroundThread, true);
-				    try { ShowWindow(window, 5); BringWindowToTop(window); SetForegroundWindow(window); Thread.Sleep(80); }
+				    try { ShowWindow(window, SW_SHOW); BringWindowToTop(window); SetForegroundWindow(window); Thread.Sleep(80); }
 				    finally { if (attachForeground) AttachThreadInput(currentThread, foregroundThread, false); if (attachTarget) AttachThreadInput(currentThread, targetThread, false); }
 				    return GetForegroundWindow() == window && OwnedWindow(owned, window);
+				  }
+				  // Notepad reopens at whatever placement it was last closed at, so on a machine where
+				  // it was ever maximised the note arrives covering the whole screen - which buries the
+				  // deliberately shrunken game window the effect is supposed to be sitting beside.
+				  // Restore it out of maximised state and put it where the caller asked for it.
+				  static void PlaceOwnedWindow(HashSet<uint> owned, IntPtr window, int x, int y, int width, int height) {
+				    if (!OwnedWindow(owned, window)) return;
+				    ShowWindow(window, SW_RESTORE);
+				    MoveWindow(window, x, y, width, height, true);
 				  }
 				  static INPUT VirtualKey(ushort key, bool release) {
 				    var input = new INPUT(); input.type = INPUT_KEYBOARD; input.U.ki.wVk = key;
@@ -333,11 +359,12 @@ public final class WindowsAnomalyController {
 				    }
 				    return true;
 				  }
-				  public static int FocusAndType(int rootPid, string text) {
+				  public static int FocusAndType(int rootPid, string text, int x, int y, int width, int height) {
 				    uint root = (uint)rootPid; IntPtr window = IntPtr.Zero; HashSet<uint> owned = null;
 				    DateTime deadline = DateTime.UtcNow.AddSeconds(8);
 				    while (DateTime.UtcNow < deadline && window == IntPtr.Zero) { owned = OwnedTree(root); window = FindWindow(owned); if (window == IntPtr.Zero) Thread.Sleep(100); }
 				    if (window == IntPtr.Zero || owned == null || !OwnedWindow(owned, window)) return 1;
+				    PlaceOwnedWindow(owned, window, x, y, width, height);
 				    if (!FocusOwned(owned, window)) return 2;
 				    if (!ZoomToMaximum(owned, window)) return 5;
 				    foreach (char character in text) {
@@ -353,7 +380,7 @@ public final class WindowsAnomalyController {
 				}
 				'@
 				$text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($TextBase64))
-				exit [OwnedUnicode]::FocusAndType($RootPid, $text)
+				exit [OwnedUnicode]::FocusAndType($RootPid, $text, $X, $Y, $Width, $Height)
 				""";
 	}
 

@@ -11,19 +11,104 @@ public final class WorldInterfaceProtocol {
 	public static final int MAX_PARTICIPANTS = 8;
 	public static final int MAX_GATEWAYS = 20;
 	public static final int ANCHOR_MASK = 0x03FF;
-	public static final long COLLAPSE_DURATION_TICKS = 12_000L;
+	public static final long COLLAPSE_DURATION_TICKS = 7_200L;
 	/**
-	 * Ticks the laser spends aiming before it fires. Shared so the client beam can widen against the
-	 * exact same clock the server damages on, instead of guessing from the action duration.
+	 * Ticks the laser spends locked on a player before the sweep starts. Shared so the client beam
+	 * can widen against the exact same clock the server damages on, instead of guessing from the
+	 * action duration.
 	 */
-	public static final int LASER_WARNING_TICKS = 45;
+	public static final int LASER_WARNING_TICKS = 90;
 	/** Ticks the fired laser keeps glowing after the action envelope has already completed. */
-	public static final int LASER_AFTERGLOW_TICKS = 6;
 	/**
-	 * Ticks the mental assault spends closing in before it lands. Shared so the client can escalate
-	 * its screen treatment on the same clock rather than a duplicated literal.
+	 * Render-only. At six ticks the fired beam faded from its very first frame, so the shot itself
+	 * was a sub-third-of-a-second flash that players read as the telegraph simply vanishing. The
+	 * beam now holds before it decays; see WorldInterfaceBeamBatchRenderer#extractLaser.
 	 */
-	public static final int MENTAL_WARNING_TICKS = 40;
+	public static final int LASER_AFTERGLOW_TICKS = 16;
+	/** Ticks the laser keeps sweeping after the lock resolves. */
+	public static final int LASER_SWEEP_TICKS = 40;
+	/**
+	 * How far behind its target the sweeping beam trails, in ticks. This is the whole mechanic: a
+	 * player who keeps moving outruns the beam, and a player who stands still does not. Client and
+	 * server both resolve the aim point from this lag, so the shaft that is drawn is the shaft that
+	 * burns.
+	 *
+	 * <p>The lag has to beat the burn radius or running is not actually an escape, only a slower
+	 * death. Half a second of sprint is about 2.8 blocks against a 2.2-block burn, which leaves the
+	 * beam visibly chasing a moving player and landing squarely on a stationary one.</p>
+	 */
+	public static final int LASER_TRACKING_LAG_TICKS = 10;
+	/**
+	 * Ticks the interface spends charging the breath weapon before the bolt actually leaves the core.
+	 *
+	 * <p>The bolt travels at nearly two blocks a tick and is aimed once, at launch, which makes the
+	 * launch the only readable moment in its whole flight - and it used to happen on the same tick
+	 * the action started, with no tell at all. Whoever it had picked found out when it hit them. The
+	 * charge is short by this fight's standards, because the shot still has to be dodged after it is
+	 * fired rather than instead of being fired.</p>
+	 */
+	public static final int ORB_WARNING_TICKS = 40;
+	/** Ticks the sky lance spends picking and marking its impact before it starts charging. */
+	public static final int SKY_LANCE_LOCK_TICKS = 60;
+	/**
+	 * Charge on a marked, no-longer-moving impact: the window to run out of it.
+	 *
+	 * <p>Ten ticks was not a window. The mark is 3.6 blocks across and half a second of sprinting
+	 * covers under three, so the lance was landing on anyone it picked no matter what they did.</p>
+	 */
+	public static final int SKY_LANCE_CHARGE_TICKS = 30;
+	/** Ticks the fallen lance keeps burning at the impact. */
+	public static final int SKY_LANCE_STRIKE_TICKS = 20;
+	/**
+	 * Ticks the column actually spends falling, at the very end of the charge.
+	 *
+	 * <p>Render-only, and deliberately a fraction of the charge. Spreading the descent across the
+	 * whole window meant seventy blocks covered in a second and a half - a lance drifting down
+	 * slowly enough to watch without concern. The charge is the warning and the mark on the ground
+	 * carries it; the fall is the hit, and a hit that takes a quarter of a second has weight the
+	 * same distance stretched over six times as long does not.</p>
+	 */
+	public static final int SKY_LANCE_FALL_TICKS = 5;
+	/** Ticks the tendrils rear up before the first lash lands. */
+	public static final int TENDRIL_WARNING_TICKS = 45;
+	/**
+	 * Ticks between successive lashes once the flurry has started.
+	 *
+	 * <p>Has to stay above {@link #TENDRIL_STRIKE_TELEGRAPH_TICKS}: the mark and the landing share
+	 * one cycle, so the interval is the telegraph plus whatever recovery is left before the next
+	 * limb commits. Raised alongside the telegraph to keep that recovery beat intact.</p>
+	 */
+	public static final int TENDRIL_STRIKE_INTERVAL_TICKS = 45;
+	/**
+	 * Ticks each individual lash spends marked on the ground before it lands.
+	 *
+	 * <p>The flurry used to pick whoever was nearest at the instant it struck and land on top of
+	 * them, which is not an attack anyone can answer - the landing followed the player. Each lash
+	 * now commits to a spot and telegraphs it, and this is what sprinting out of the marked radius
+	 * actually costs.</p>
+	 *
+	 * <p>A flat second was enough to leave the circle and not enough to notice it first. The mark
+	 * has to be seen, read as a mark, and then acted on, and the first two of those cost most of a
+	 * second on their own when there are three limbs, a laser and a halo all moving at once. At
+	 * thirty-two the window is still short enough that standing still is fatal, which is the only
+	 * thing it has to keep being.</p>
+	 */
+	public static final int TENDRIL_STRIKE_TELEGRAPH_TICKS = 32;
+	public static final int TENDRIL_STRIKE_COUNT = 3;
+	/**
+	 * Ticks the interface spends reaching before a held tool is actually taken.
+	 *
+	 * <p>Shorter than the rest, but not by much. Every other lock is a warning you can act on by
+	 * moving and this one is not - the tool is going whatever you do - so it does not need the full
+	 * window. It does need long enough to read: at thirty ticks the notice was gone before players
+	 * had worked out what had just been taken.</p>
+	 */
+	public static final int WEAPON_WARNING_TICKS = 45;
+	/** Ticks the gaze holds a hotbar before it starts emptying it. */
+	public static final int HOTBAR_WARNING_TICKS = 60;
+	/** Ticks the grab spends telegraphing, then lifting, before the victim leaves the ground. */
+	public static final int GRAB_WARNING_TICKS = 50;
+	public static final int GRAB_LIFT_TICKS = 14;
 
 	private WorldInterfaceProtocol() {
 	}
@@ -48,6 +133,8 @@ public final class WorldInterfaceProtocol {
 		private final int wireId;
 		Stage(int wireId) { this.wireId = wireId; }
 		@Override public int wireId() { return wireId; }
+		/** Mirrors {@code WorldInterfaceStage#isCombat}, for client code that only has the wire enum. */
+		public boolean isCombat() { return this == PHASE_1 || this == PHASE_2 || this == PHASE_3; }
 		public static Stage fromWireId(int wireId) { return decode(values(), wireId, "stage"); }
 	}
 
@@ -151,12 +238,12 @@ public final class WorldInterfaceProtocol {
 		NONE(0),
 		LASER_SWEEP(1),
 		ENERGY_ORB(2),
-		GRAB_SLAM(3),
-		MENTAL_ATTACK(4),
+		// 3 is retired: the grab-slam is gone and the id is deliberately not reassigned.
+		SKY_LANCE(4),
 		WEAPON_CHARGE(5),
 		GRAB_THROW(6),
 		HOTBAR_PURGE(7),
-		ARROW_REFLECTION(8),
+		TENDRIL_LASH(8),
 		FORCED_EXPULSION(9),
 		SUMMONING(10),
 		MORPH_TO_SECOND(11),
@@ -178,6 +265,24 @@ public final class WorldInterfaceProtocol {
 		PoemCompletion(int wireId) { this.wireId = wireId; }
 		@Override public int wireId() { return wireId; }
 		public static PoemCompletion fromWireId(int wireId) { return decode(values(), wireId, "poem completion"); }
+	}
+
+	/**
+	 * Ticks a targeted player has between being locked and the action landing, or 0 for actions that
+	 * do not lock. Shared so the screen treatment, the HUD warning and the server's own particle and
+	 * audio tell all count down the same window instead of three separate literals drifting apart.
+	 */
+	public static int lockWarningTicks(BossAction action) {
+		return action == null ? 0 : switch (action) {
+			case LASER_SWEEP -> LASER_WARNING_TICKS;
+			case ENERGY_ORB -> ORB_WARNING_TICKS;
+			case SKY_LANCE -> SKY_LANCE_LOCK_TICKS;
+			case GRAB_THROW -> GRAB_WARNING_TICKS;
+			case WEAPON_CHARGE -> WEAPON_WARNING_TICKS;
+			case HOTBAR_PURGE -> HOTBAR_WARNING_TICKS;
+			case TENDRIL_LASH -> TENDRIL_WARNING_TICKS;
+			default -> 0;
+		};
 	}
 
 	static void requireVersion(int protocolVersion) {

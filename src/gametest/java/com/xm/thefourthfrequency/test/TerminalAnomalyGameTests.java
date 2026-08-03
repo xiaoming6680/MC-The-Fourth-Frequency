@@ -5,7 +5,6 @@ import com.xm.thefourthfrequency.content.ModItems;
 import com.xm.thefourthfrequency.terminal.AnomalyCompletionStatus;
 import com.xm.thefourthfrequency.terminal.AnomalyConditions;
 import com.xm.thefourthfrequency.terminal.AnomalyGameTestBridge;
-import com.xm.thefourthfrequency.terminal.AnomalyLeaseService;
 import com.xm.thefourthfrequency.terminal.AnomalyRuntimeService;
 import com.xm.thefourthfrequency.terminal.AnomalyServerEffects;
 import com.xm.thefourthfrequency.terminal.AmbientAnomalyService;
@@ -408,6 +407,8 @@ public final class TerminalAnomalyGameTests implements CustomTestMethodInvoker {
 	public void lightDropoutExtinguishesAllNearbyLightsAndRestoresThem(GameTestHelper helper) {
 		ServerPlayer player = helper.makeMockServerPlayerInLevel();
 		AnomalyRuntimeService.interrupt(player, false);
+		// The dropout only starts at night; without this the precondition rejects the whole test.
+		helper.getLevel().setDayTime(18_000L);
 		// Isolate this real-light test vertically from protected stations and neighboring parallel structures.
 		BlockPos origin = player.blockPosition().above(40);
 		player.snapTo(origin.getX() + 0.5D, origin.getY(), origin.getZ() + 0.5D, 0.0F, 0.0F);

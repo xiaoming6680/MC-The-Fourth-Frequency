@@ -131,9 +131,9 @@ public final class TerminalToolService {
 		if (!readingHere) mineralReadingKind = ResourceGuidanceService.READING_NONE;
 		boolean mineralSurveyNearby = tag.getBooleanOr(TerminalData.MINERAL_SURVEY_NEARBY, false)
 				&& !disabled && (available & bit(TerminalTool.MINERALS)) != 0;
-		boolean navigationCompletion = StructureNavigationService.navigationCompletionAvailable(tag);
-		int navigationCompletionDirection = navigationCompletion
-				? StructureNavigationService.navigationCompletionDirection(player, tag) : 0;
+		// Retired: arrival now speaks once through the notice stack instead of leaving a card.
+		boolean navigationCompletion = false;
+		int navigationCompletionDirection = 0;
 		String objective = StoryProgressService.objective(tag, data).id();
 		TerminalGuidancePolicy.Recommendations recommendations = TerminalGuidancePolicy.recommendations(
 				objective, available, guidance, home.known(), dayTime, disabled, hintTier);
@@ -271,22 +271,9 @@ public final class TerminalToolService {
 				|| (availableToolsMask(player, tag) & 1 << toolValue) == 0) {
 			return false;
 		}
-		if (tool == TerminalTool.MINERALS && !hasGuidanceTarget(player, tag, tool)) {
-			ResourceGuidanceService.SurveyTarget surveyed = ResourceGuidanceService.automaticSurveyTarget(player, tag);
-			if (!surveyed.located()) return false;
-			long now = player.level().getGameTime();
-			FrequencyWorldData.get(player.level().getServer()).updateTerminalRecord(player.getUUID(), record -> {
-				record.putInt(TerminalData.SELECTED_RESOURCE, surveyed.resource().wireId());
-				// Promoted survey targets become ordinary exact readings, which is what gives them
-				// the stale-block and arrival upkeep that only runs for a recorded reading.
-				record.putInt(TerminalData.MINERAL_READING_KIND, ResourceGuidanceService.READING_EXACT);
-				record.putString(TerminalData.MINERAL_READING_DIMENSION, surveyed.dimension());
-				new NavigationState(surveyed.resource().id(), resourceItem(surveyed.resource()), true,
-						surveyed.blockId(), surveyed.position().asLong(), surveyed.dimension(), now).writeTo(record);
-			});
-			tag = record(player);
-		}
-		if (tag == null || !hasGuidanceTarget(player, tag, tool)) return false;
+		// No survey-target promotion here any more: the passive survey now writes the same exact
+		// reading a probe does, so by the time this runs the target is already a located one.
+		if (!hasGuidanceTarget(player, tag, tool)) return false;
 		FrequencyWorldData.get(player.level().getServer()).updateTerminalRecord(player.getUUID(), record -> {
 			StructureNavigationService.clearCompletion(record);
 			record.putInt(TerminalData.ACTIVE_GUIDANCE_TOOL, toolValue);

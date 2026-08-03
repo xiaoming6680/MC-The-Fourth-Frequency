@@ -1,5 +1,6 @@
 package com.xm.thefourthfrequency.entity;
 
+import com.xm.thefourthfrequency.audio.ModSounds;
 import com.xm.thefourthfrequency.ending.EndBossEncounterService;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
@@ -14,8 +15,10 @@ import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.level.Level;
+import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.UUID;
@@ -49,7 +52,30 @@ public final class WorldInterfaceEntity extends Monster {
 		super(type, level);
 		xpReward = 0;
 		setNoGravity(true);
+		// The box is seven to sixteen blocks across and now rides low enough over a hunted player
+		// for the island's own relief to reach into it. The encounter service owns the position
+		// outright, so terrain collision can only fight it: a storm does not get stopped by a hill.
+		noPhysics = true;
 		setPersistenceRequired();
+	}
+
+	/**
+	 * Without these the boss took 1024 points of damage in total silence, so a landed hit was
+	 * indistinguishable from a missed one at any range where the health bar is the only feedback.
+	 */
+	@Override
+	protected SoundEvent getHurtSound(DamageSource source) {
+		return ModSounds.WORLD_INTERFACE_HURT;
+	}
+
+	@Override
+	protected SoundEvent getDeathSound() {
+		return ModSounds.WORLD_INTERFACE_DEATH;
+	}
+
+	@Override
+	protected float getSoundVolume() {
+		return 1.0F;
 	}
 
 	public static AttributeSupplier.Builder createAttributes() {
@@ -92,6 +118,7 @@ public final class WorldInterfaceEntity extends Monster {
 	protected void customServerAiStep(ServerLevel level) {
 		super.customServerAiStep(level);
 		setNoGravity(true);
+		noPhysics = true;
 		fallDistance = 0.0F;
 		EndBossEncounterService.tickBossEntity(level, this);
 	}
@@ -137,13 +164,36 @@ public final class WorldInterfaceEntity extends Monster {
 		showAction(0, 0L, 0);
 	}
 
+	/**
+	 * The box is derived from the drawn mass rather than restated, so a form can never again be
+	 * visibly wider than the thing a player is allowed to hit. The eye sits at the glowing core,
+	 * which is where the interface reads as looking from.
+	 */
 	@Override
 	protected EntityDimensions getDefaultDimensions(Pose pose) {
-		return switch (form()) {
-			case FORM_CONSUMING -> EntityDimensions.fixed(10.0F, 28.0F).withEyeHeight(20.0F);
-			case FORM_INTERFACE -> EntityDimensions.fixed(16.0F, 44.0F).withEyeHeight(30.0F);
-			default -> EntityDimensions.fixed(7.0F, 16.0F).withEyeHeight(11.0F);
-		};
+		int form = form();
+		return EntityDimensions
+				.fixed(WorldInterfaceAnatomy.hitboxWidth(form), WorldInterfaceAnatomy.hitboxHeight(form))
+				.withEyeHeight((float) WorldInterfaceAnatomy.coreLift(form));
+	}
+
+	/**
+	 * The one entity here whose box does not stand on its own position.
+	 *
+	 * <p>Vanilla boxes grow upward from the feet, which is right for something that walks. This
+	 * floats: the model puts the mass {@link WorldInterfaceAnatomy#massBottomLift} blocks overhead
+	 * and hangs its limbs the other way, so a box anchored at the position spent its bottom eight
+	 * and a half blocks - at third form - covering air nobody can see anything in, while arrows that
+	 * visibly passed under the body registered as hits. Lifting the box by that offset makes the
+	 * hittable volume and the silhouette the same volume.</p>
+	 */
+	@Override
+	protected AABB makeBoundingBox(Vec3 position) {
+		int form = form();
+		double half = WorldInterfaceAnatomy.massRadius(form);
+		double bottom = position.y + WorldInterfaceAnatomy.massBottomLift(form);
+		return new AABB(position.x - half, bottom, position.z - half,
+				position.x + half, bottom + half * 2.0D, position.z + half);
 	}
 
 	@Override

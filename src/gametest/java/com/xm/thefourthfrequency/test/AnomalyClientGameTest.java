@@ -200,6 +200,8 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 		switch (scenario.fixture()) {
 			case CAVE -> prepareCave(level, player, state);
 			case LIGHTS -> {
+				// The dropout is gated to night, so the fixture has to supply one.
+				level.setDayTime(18_000L);
 				state.light = player.blockPosition().offset(4, 1, 0);
 				level.setBlockAndUpdate(state.light, Blocks.GLOWSTONE.defaultBlockState());
 				state.rememberBlock(level, state.light);

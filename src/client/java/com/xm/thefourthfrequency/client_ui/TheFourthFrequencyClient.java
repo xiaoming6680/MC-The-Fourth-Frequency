@@ -7,16 +7,25 @@ import net.minecraft.world.InteractionResult;
 import com.xm.thefourthfrequency.content.ModItems;
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.content.ModEntities;
+import com.xm.thefourthfrequency.content.WorldInterfaceBlockEntities;
+import com.xm.thefourthfrequency.content.WorldInterfaceExitPortalBlockEntity;
 import com.xm.thefourthfrequency.client_render.ReworkBodyModel;
 import com.xm.thefourthfrequency.client_render.ReworkBodyRenderer;
+import com.xm.thefourthfrequency.client_render.HimModel;
+import com.xm.thefourthfrequency.client_render.HimRenderer;
 import com.xm.thefourthfrequency.client_render.WatcherRenderer;
 import com.xm.thefourthfrequency.client_render.WatcherModel;
 import com.xm.thefourthfrequency.client_render.WorldInterfaceModel;
 import com.xm.thefourthfrequency.client_render.WorldInterfaceEnergyOrbRenderer;
 import com.xm.thefourthfrequency.client_render.WorldInterfaceRenderer;
 import com.xm.thefourthfrequency.meta_api.MetaController;
+import net.fabricmc.fabric.api.client.rendering.v1.BlockEntityRendererRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityModelLayerRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
+import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
+import net.minecraft.client.renderer.blockentity.TheEndPortalRenderer;
+import net.minecraft.client.renderer.blockentity.state.EndPortalRenderState;
+import net.minecraft.world.level.block.entity.TheEndPortalBlockEntity;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import com.xm.thefourthfrequency.networking.TerminalOpenPayload;
 import net.minecraft.client.renderer.entity.NoopRenderer;
@@ -41,12 +50,22 @@ public final class TheFourthFrequencyClient implements ClientModInitializer {
 		EntityRendererRegistry.register(ModEntities.REWORK_BODY, ReworkBodyRenderer::new);
 		EntityModelLayerRegistry.registerModelLayer(WatcherRenderer.MODEL_LAYER, WatcherModel::createBodyLayer);
 		EntityRendererRegistry.register(ModEntities.WATCHER, WatcherRenderer::new);
+		EntityModelLayerRegistry.registerModelLayer(HimRenderer.MODEL_LAYER, HimModel::createBodyLayer);
+		EntityRendererRegistry.register(ModEntities.HIM, HimRenderer::new);
 		EntityModelLayerRegistry.registerModelLayer(WorldInterfaceRenderer.MODEL_LAYER,
 				WorldInterfaceModel::createLayer);
 		EntityRendererRegistry.register(ModEntities.WORLD_INTERFACE, WorldInterfaceRenderer::new);
 		EntityRendererRegistry.register(ModEntities.WORLD_INTERFACE_PART, NoopRenderer::new);
 		EntityRendererRegistry.register(ModEntities.WORLD_INTERFACE_ENERGY_ORB,
 				WorldInterfaceEnergyOrbRenderer::new);
+		// Vanilla's own portal renderer, unmodified. BlockEntityRenderers#register is not public and
+		// this mod pulls in no access wideners, so the deprecated Fabric helper is the way in. The
+		// provider is bound to the vanilla supertype explicitly: inferring it from the exit's own
+		// block entity type gives the wildcard an equality constraint it cannot satisfy.
+		BlockEntityRendererProvider<TheEndPortalBlockEntity, EndPortalRenderState> exitPortalRenderer =
+				context -> new TheEndPortalRenderer();
+		BlockEntityRendererRegistry.<WorldInterfaceExitPortalBlockEntity, EndPortalRenderState>register(
+				WorldInterfaceBlockEntities.EXIT_PORTAL, exitPortalRenderer);
 		EmptySegmentClient.initialize();
 		PrivateAnomalyClient.initialize();
 		FirstRunNoticeController.initialize();

@@ -36,7 +36,9 @@ public final class TerminalGuidancePolicy {
 		if (!SurvivalMilestone.MINED_LOGS.present(milestones)) return 0;
 		int mask = bit(TerminalResource.IRON) | bit(TerminalResource.COAL);
 		if (SurvivalMilestone.IRON.present(milestones)) mask |= bit(TerminalResource.GOLD);
-		if (SurvivalMilestone.ENTERED_NETHER.present(milestones)) mask |= bit(TerminalResource.DIAMOND);
+		if (SurvivalMilestone.ENTERED_NETHER.present(milestones)) {
+			mask |= bit(TerminalResource.DIAMOND) | bit(TerminalResource.EMERALD);
+		}
 		return mask;
 	}
 

@@ -32,6 +32,7 @@ public record TerminalNavigationPayload(
 	public static final int BASTION = 13;
 	public static final int COAL = 14;
 	public static final int GOLD = 15;
+	public static final int EMERALD = 16;
 	public static final Type<TerminalNavigationPayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(
 			TheFourthFrequency.MOD_ID, "terminal_navigation"));
 	public static final StreamCodec<RegistryFriendlyByteBuf, TerminalNavigationPayload> CODEC = StreamCodec.of(
@@ -59,6 +60,6 @@ public record TerminalNavigationPayload(
 	}
 
 	public static boolean isMineral(int kind) {
-		return kind == IRON || kind == COAL || kind == GOLD || kind == DIAMOND;
+		return kind == IRON || kind == COAL || kind == GOLD || kind == DIAMOND || kind == EMERALD;
 	}
 }

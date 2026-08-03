@@ -8,7 +8,7 @@ This directory contains project-bound reference art and the exact UV guide for t
 |---|---|---|
 | `watcher_orthographic_concept.png` | Front, three-quarter, and back character reference | `8CEC18F131851968E331039E784F868976EDD914E63578A7159DDB37EE8D4EF7` |
 | `watcher_material_reference.png` | Charred skin, fascia, old blood, and eye material board | `9F23736736DCD570C3F192B655184C261F76F0F23B81A438808407652AFA7DFA` |
-| `watcher_uv_template.png` | Numbered 256×256 guide exported from the model's exact cuboid UV contract | `BEBF7FD052DF522902657385A936C5B2AA1F9DAF79BF084C305C1F9C23F8DE64` |
+| `watcher_uv_template.png` | Numbered 256×256 guide exported from the model's exact cuboid UV contract | `BFD735163421369E504C6F248A245EDFFD8D24590AC9506704E84665B0A5E703` |
 
 The two concept images were generated with the built-in image generation tool in `stylized-concept` mode. The runtime assets are generated deterministically by `tools/prepare_watcher_textures.py` from hand-selected colors, crack/fascia patterns, and the exact cuboid coordinates in `WatcherModel`; they do not sample or resize the generated reference images.
 
@@ -50,10 +50,11 @@ Constraints: no full creature, no face, no nose, no mouth, no ears, no organs, n
 
 Current runtime audit:
 
-- `watcher.png`: 256×256 RGBA, every pixel Alpha 255, SHA-256 `D10C8FF184683710D39B6F5E56537EB80C8F6CB910008F1A9318B05F4364F0E1`.
-- `watcher_emissive.png`: 256×256 RGBA, 439 non-transparent pixels (0.67%), maximum Alpha 120, SHA-256 `06E5B4ED34E282F488FFE5624E9E4C32221309FD39CC9D7A0AFE1CC0F1652C0F`.
-- Non-transparent emissive pixels are restricted to the two sclera cuboids and the iris cuboid. The pupil UV is transparent in the emissive image and near-black in the base image.
-- The render layer applies a 0.94–1.00 alpha tint and a 0.96–1.00 bone-white strength pulse. This keeps the sparse mask legible against a black night sky without adding block light or expanding emission beyond the eye UV.
+- `watcher.png`: 256×256 RGBA, every pixel Alpha 255, SHA-256 `6F0482697DF109F264FCF6FDDA46DC0BD0D8160E7B7CCD0F743EED4647A63725`.
+- `watcher_emissive.png`: 256×256 RGBA, 33 non-transparent pixels (0.05%), maximum Alpha 118, SHA-256 `D2D1FE2060357088AD49BC4FCF29875A1BB61792F8954541E38E6FBFC11567C8`.
+- Non-transparent emissive pixels are restricted to the **north (front) faces** of the two sclera cuboids and the four iris annulus cuboids, and all of them fall inside the frozen window x ∈ [160, 240), y < 16. The pupil UV is transparent in the emissive image and near-black in the base image. Earlier revisions outlined every face of each eye cuboid, which read in the dark as a glowing rectangle and gave the box away; the sclera now carries only a shallow U along its lower rim, and the iris bars stop short of one another so the aperture's four corners fall back to the sclera instead of closing into a lit box.
+- The base texture is lit by the texture rather than by the world. `fill_material` paints each face at full value and `apply_relief` then multiplies by a per-face factor (up 1.42, north 1.00, west/east 0.74, south 0.58, down 0.40), a top-to-bottom falloff of 1.15 → 0.62 on the four upright faces, and a one-texel ×0.55 ambient-occlusion border on any face larger than 2×2. Without that split every cuboid collapsed into one flat silhouette and the modeled spine, scapulae and orbit were invisible in game.
+- The render layer scales the emissive alpha by the client-side gaze ramp in `WatcherRenderer`, so an unobserved Watcher has no lit eye at all and reads as a faceless silhouette. The 0.94–1.00 alpha tint and 0.96–1.00 bone-white strength pulse still ride on top once the reveal completes.
 
 Regenerate from the repository root with a Python environment that contains Pillow:
 

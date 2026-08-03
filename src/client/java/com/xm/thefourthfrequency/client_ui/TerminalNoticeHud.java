@@ -62,6 +62,18 @@ public final class TerminalNoticeHud {
 	private static final int DENIED_BACKGROUND = 0x3A2412;
 	private static final int DENIED_BORDER = 0xC98A3C;
 	private static final int DENIED_TEXT = 0xF5DDBA;
+	// The finale's three voices. Each is far enough from the others - and from the four above - to
+	// be told apart at a glance while a fight is happening, which is the whole point of moving these
+	// lines out of the chat log.
+	private static final int ENCOUNTER_BACKGROUND = 0x2A1044;
+	private static final int ENCOUNTER_BORDER = 0xB565F0;
+	private static final int ENCOUNTER_TEXT = 0xEAD6FF;
+	private static final int ANCHOR_BACKGROUND = 0x4A3505;
+	private static final int ANCHOR_BORDER = 0xFFC53D;
+	private static final int ANCHOR_TEXT = 0xFFEFC2;
+	private static final int DRAGON_BACKGROUND = 0x0B3D3A;
+	private static final int DRAGON_BORDER = 0x4FD8C8;
+	private static final int DRAGON_TEXT = 0xD3FBF5;
 	private static final NoticeEntry PURSUIT_STATUS = new NoticeEntry(
 			Component.translatable("message.thefourthfrequency.pursuit.try_escape"),
 			TerminalNoticePayload.TONE_PURSUIT_WARNING);
@@ -204,9 +216,14 @@ public final class TerminalNoticeHud {
 	private static int priority(int tone) {
 		return switch (tone) {
 			case TerminalNoticePayload.TONE_PURSUIT_WARNING -> 3;
+			// An anchor falling changes what the fight is doing to everyone, so it rides at the top
+			// with the pursuit rather than queueing behind ordinary progress lines.
+			case TerminalNoticePayload.TONE_ANCHOR -> 3;
 			// A refused action is direct feedback on what the player just did, so it outranks narration.
 			case TerminalNoticePayload.TONE_DENIED -> 2;
 			case TerminalNoticePayload.TONE_TASK_COMPLETE -> 2;
+			case TerminalNoticePayload.TONE_ENCOUNTER -> 2;
+			case TerminalNoticePayload.TONE_DRAGON -> 1;
 			case TerminalNoticePayload.TONE_UNREAD -> 1;
 			default -> 0;
 		};
@@ -306,17 +323,26 @@ public final class TerminalNoticeHud {
 			case TerminalNoticePayload.TONE_PURSUIT_WARNING -> PURSUIT_BACKGROUND;
 			case TerminalNoticePayload.TONE_DENIED -> DENIED_BACKGROUND;
 			case TerminalNoticePayload.TONE_TASK_COMPLETE -> TASK_BACKGROUND;
+			case TerminalNoticePayload.TONE_ENCOUNTER -> ENCOUNTER_BACKGROUND;
+			case TerminalNoticePayload.TONE_ANCHOR -> ANCHOR_BACKGROUND;
+			case TerminalNoticePayload.TONE_DRAGON -> DRAGON_BACKGROUND;
 			default -> DEFAULT_BACKGROUND;
 		};
 		int borderColor = switch (entry.tone) {
 			case TerminalNoticePayload.TONE_PURSUIT_WARNING -> PURSUIT_BORDER;
 			case TerminalNoticePayload.TONE_DENIED -> DENIED_BORDER;
 			case TerminalNoticePayload.TONE_TASK_COMPLETE -> TASK_BORDER;
+			case TerminalNoticePayload.TONE_ENCOUNTER -> ENCOUNTER_BORDER;
+			case TerminalNoticePayload.TONE_ANCHOR -> ANCHOR_BORDER;
+			case TerminalNoticePayload.TONE_DRAGON -> DRAGON_BORDER;
 			default -> DEFAULT_BORDER;
 		};
 		int textColor = switch (entry.tone) {
 			case TerminalNoticePayload.TONE_PURSUIT_WARNING -> PURSUIT_TEXT;
 			case TerminalNoticePayload.TONE_DENIED -> DENIED_TEXT;
+			case TerminalNoticePayload.TONE_ENCOUNTER -> ENCOUNTER_TEXT;
+			case TerminalNoticePayload.TONE_ANCHOR -> ANCHOR_TEXT;
+			case TerminalNoticePayload.TONE_DRAGON -> DRAGON_TEXT;
 			default -> DEFAULT_TEXT;
 		};
 		graphics.fill(left, top, left + panelWidth, bottom, alpha << 24 | backgroundColor);

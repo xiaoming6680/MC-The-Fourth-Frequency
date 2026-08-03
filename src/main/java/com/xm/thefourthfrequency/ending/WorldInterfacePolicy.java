@@ -5,15 +5,37 @@ public final class WorldInterfacePolicy {
 	public static final int MIN_ROSTER_SIZE = 1;
 	public static final int MAX_ROSTER_SIZE = 8;
 	public static final int TOTAL_ANCHORS = 10;
-	public static final int COLLAPSE_DURATION_TICKS = 12_000;
-	public static final int PENALTY_TICKS_PER_DESTROYED_ANCHOR = 600;
-	public static final int MAX_ANCHOR_PENALTY_TICKS = 6_000;
-	public static final int MAX_PERMANENT_TERRAIN_EDITS = 2_048;
-	public static final int MAX_TERRAIN_EDITS_PER_TICK = 8;
+	/**
+	 * Six minutes, and the only clock the fight runs on.
+	 *
+	 * <p>Cutting an anchor used to spend a slice of this, which made the one action the encounter
+	 * is built around read as a cost: the reward for opening the interface up was less time to use
+	 * it in, and a roster that cut all ten had halved the fight before landing a hit. The deadline
+	 * is now fixed, and what an anchor buys is stated in the one place the player is already
+	 * looking - the gauge flares when the interface stops resisting damage as hard.</p>
+	 */
+	public static final int COLLAPSE_DURATION_TICKS = 7_200;
+	public static final int MAX_PERMANENT_TERRAIN_EDITS = 8_192;
+	public static final int MAX_TERRAIN_EDITS_PER_TICK = 32;
 
 	private static final double HEALTH_PER_PLAYER = 600.0D;
-	private static final double DAMAGE_MULTIPLIER_LOSS_PER_ANCHOR = 0.09D;
-	private static final double HEALING_PER_SECOND_PER_ANCHOR = 0.0001D;
+	/**
+	 * How much of the interface's damage resistance each fallen anchor takes with it.
+	 *
+	 * <p>At nine percent, tearing down all ten left the interface taking a tenth of every hit -
+	 * a ninety percent reduction, which made the whole board of anchors an argument nobody could
+	 * win by pulling. Five percent bottoms out at half damage: still a real wall, still worth the
+	 * trip out to break them, and no longer a number that decides the fight on its own.</p>
+	 */
+	private static final double DAMAGE_MULTIPLIER_LOSS_PER_ANCHOR = 0.05D;
+	/**
+	 * Fraction of maximum health each surviving anchor returns per second.
+	 *
+	 * <p>Raised: at a hundredth of a percent the healing was arithmetically real and practically
+	 * invisible, so leaving the anchors up cost nothing a table could feel. It has to be a rate the
+	 * damage log argues with, or "break them or don't" is not a decision.</p>
+	 */
+	private static final double HEALING_PER_SECOND_PER_ANCHOR = 0.00025D;
 	private static final double BASE_MOVEMENT_MULTIPLIER = 0.55D;
 	private static final double MOVEMENT_GAIN_PER_ANCHOR = 0.045D;
 	private static final double BASE_ATTACK_COOLDOWN_MULTIPLIER = 1.50D;
@@ -59,22 +81,10 @@ public final class WorldInterfacePolicy {
 		return BASE_ATTACK_COOLDOWN_MULTIPLIER - ATTACK_COOLDOWN_LOSS_PER_ANCHOR * destroyedAnchors;
 	}
 
-	public static int anchorPenaltyTicks(int destroyedAnchors) {
-		requireDestroyedAnchors(destroyedAnchors);
-		return Math.min(MAX_ANCHOR_PENALTY_TICKS,
-				destroyedAnchors * PENALTY_TICKS_PER_DESTROYED_ANCHOR);
-	}
-
-	public static long effectiveCollapseTicks(long elapsedTicks, int destroyedAnchors) {
-		if (elapsedTicks < 0L) throw new IllegalArgumentException("Elapsed ticks cannot be negative");
-		long penalty = anchorPenaltyTicks(destroyedAnchors);
-		return elapsedTicks > Long.MAX_VALUE - penalty ? Long.MAX_VALUE : elapsedTicks + penalty;
-	}
-
 	/** Returns collapse progress clamped to the HUD domain [0, 1]. */
-	public static double collapseProgress(long elapsedTicks, int destroyedAnchors) {
-		return Math.min(1.0D,
-				effectiveCollapseTicks(elapsedTicks, destroyedAnchors) / (double) COLLAPSE_DURATION_TICKS);
+	public static double collapseProgress(long elapsedTicks) {
+		if (elapsedTicks < 0L) throw new IllegalArgumentException("Elapsed ticks cannot be negative");
+		return Math.min(1.0D, elapsedTicks / (double) COLLAPSE_DURATION_TICKS);
 	}
 
 	/** Collapse fraction below which combat shows no erosion at all. */
@@ -89,12 +99,11 @@ public final class WorldInterfacePolicy {
 	/**
 	 * How far the world has visibly stopped being able to describe itself, in [0, 1].
 	 *
-	 * <p>This used to key off the failure resolution clock alone, which meant the entire ten
-	 * minute fight rendered at exactly zero and only a lost encounter ever showed the erosion -
-	 * for six seconds, after the outcome was already decided. Winning players never saw it at all.
-	 * Driving it from the collapse timer instead turns the countdown from a number into something
-	 * visible: the island degrades as the deadline approaches, which is the pressure the fight was
-	 * missing.</p>
+	 * <p>This used to key off the failure resolution clock alone, which meant the whole fight
+	 * rendered at exactly zero and only a lost encounter ever showed the erosion - for six seconds,
+	 * after the outcome was already decided. Winning players never saw it at all. Driving it from
+	 * the collapse timer instead turns the countdown from a number into something visible: the
+	 * island degrades as the deadline approaches, which is the pressure the fight was missing.</p>
 	 *
 	 * <p>Erosion holds at zero until {@link #EROSION_START_COLLAPSE} so the opening minutes stay
 	 * clean, then accelerates quadratically to {@link #COMBAT_EROSION_CEILING}. A lost fight
@@ -102,7 +111,7 @@ public final class WorldInterfacePolicy {
 	 * to zero on the spot, so cutting the interface visibly restores the world's materials.</p>
 	 */
 	public static float presentationErosionProgress(WorldInterfaceStage stage, long elapsedTicks,
-			int destroyedAnchors, long resolutionTick, long gameTime, int durationTicks) {
+			long resolutionTick, long gameTime, int durationTicks) {
 		if (stage == null) throw new IllegalArgumentException("Stage cannot be null");
 		if (durationTicks <= 0) throw new IllegalArgumentException("Presentation duration must be positive");
 		if (stage == WorldInterfaceStage.FAILURE_RESOLUTION) {
@@ -112,19 +121,20 @@ public final class WorldInterfacePolicy {
 			return COMBAT_EROSION_CEILING + (1.0F - COMBAT_EROSION_CEILING) * completion;
 		}
 		if (!stage.isCombat()) return 0.0F;
-		double collapse = collapseProgress(Math.max(0L, elapsedTicks), destroyedAnchors);
+		double collapse = collapseProgress(Math.max(0L, elapsedTicks));
 		if (collapse <= EROSION_START_COLLAPSE) return 0.0F;
 		double advance = (collapse - EROSION_START_COLLAPSE) / (1.0D - EROSION_START_COLLAPSE);
 		return (float) (COMBAT_EROSION_CEILING * advance * advance);
 	}
 
-	public static int remainingCollapseTicks(long elapsedTicks, int destroyedAnchors) {
-		long remaining = COLLAPSE_DURATION_TICKS - effectiveCollapseTicks(elapsedTicks, destroyedAnchors);
-		return (int) Math.max(0L, remaining);
+	public static int remainingCollapseTicks(long elapsedTicks) {
+		if (elapsedTicks < 0L) throw new IllegalArgumentException("Elapsed ticks cannot be negative");
+		return (int) Math.max(0L, COLLAPSE_DURATION_TICKS - elapsedTicks);
 	}
 
-	public static boolean hasTimedOut(long elapsedTicks, int destroyedAnchors) {
-		return effectiveCollapseTicks(elapsedTicks, destroyedAnchors) >= COLLAPSE_DURATION_TICKS;
+	public static boolean hasTimedOut(long elapsedTicks) {
+		if (elapsedTicks < 0L) throw new IllegalArgumentException("Elapsed ticks cannot be negative");
+		return elapsedTicks >= COLLAPSE_DURATION_TICKS;
 	}
 
 	/** The server calls this once per running tick; all-offline frozen rosters pause the timer. */
@@ -138,10 +148,10 @@ public final class WorldInterfacePolicy {
 
 	/**
 	 * Failure is evaluated before lethal damage on the same tick. A kill is successful only while
-	 * effective progress is strictly below 100%.
+	 * the clock is strictly below 100%.
 	 */
-	public static TickVerdict resolveTick(long elapsedTicks, int destroyedAnchors, boolean lethalDamage) {
-		if (hasTimedOut(elapsedTicks, destroyedAnchors)) return TickVerdict.FAILURE;
+	public static TickVerdict resolveTick(long elapsedTicks, boolean lethalDamage) {
+		if (hasTimedOut(elapsedTicks)) return TickVerdict.FAILURE;
 		return lethalDamage ? TickVerdict.SUCCESS : TickVerdict.ONGOING;
 	}
 
@@ -152,6 +162,49 @@ public final class WorldInterfacePolicy {
 		}
 		if (islandParticipantCount < 3) return 0;
 		return (islandParticipantCount * 3 + 9) / 10;
+	}
+
+	/**
+	 * Horizontal reach of the failure erosion, for both the client's render-time replacement and the
+	 * server's durable commit.
+	 *
+	 * <p>These were two different numbers - a hundred and sixty blocks of rendering over forty
+	 * blocks of committed world - so the moment the encounter cleared and the render stopped, the
+	 * outer four fifths of the damage evaporated and the island visibly healed itself. What a losing
+	 * table watched spread has to be what a losing table is left with, which means one radius.</p>
+	 *
+	 * <p>A hundred and sixty is what the render always showed. The commit reaches it by running
+	 * across the whole fight instead of the resolution, and by only ever touching end stone.</p>
+	 */
+	public static final int EROSION_RADIUS_BLOCKS = 160;
+	/** Surface layers the erosion reaches down each column. */
+	public static final int EROSION_DEPTH = 6;
+
+	/**
+	 * The failure erosion's per-position threshold, shared by the client's render-time replacement
+	 * and the server's durable commit.
+	 *
+	 * <p>Both sides have to agree exactly. The client has been showing this erosion since the
+	 * collapse timer started moving; when the loss is finally locked, the server writes the same
+	 * set of positions for real. If the two used different hashes the world would visibly rearrange
+	 * itself at the moment of failure, and the damage a player watched spread would not be the
+	 * damage they were left with.</p>
+	 */
+	public static float erosionThreshold(long value) {
+		long mixed = value;
+		mixed ^= mixed >>> 33;
+		mixed *= 0xff51afd7ed558ccdL;
+		mixed ^= mixed >>> 33;
+		mixed *= 0xc4ceb9fe1a85ec53L;
+		mixed ^= mixed >>> 33;
+		return (mixed >>> 40) / (float) 0xFFFFFF;
+	}
+
+	/** Whether a block position is eroded at the given progress, for one encounter. */
+	public static boolean erodesAt(java.util.UUID encounterId, long packedPosition, float progress) {
+		if (encounterId == null) return false;
+		return erosionThreshold(encounterId.getMostSignificantBits()
+				^ encounterId.getLeastSignificantBits() ^ packedPosition) <= progress;
 	}
 
 	public static int terrainEditBudgetThisTick(int permanentEditsSoFar) {

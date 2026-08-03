@@ -63,4 +63,20 @@ final class AnomalyScriptTest {
 		assertFalse(AnomalySelectionRules.caveLike(false, 5, 6));
 		assertFalse(AnomalySelectionRules.caveLike(false, 0, 3));
 	}
+
+	@Test
+	void nightCoversFullDarkAndExcludesTheSunsetAndSunriseRamps() {
+		assertTrue(AnomalySelectionRules.night(13_000L));
+		assertTrue(AnomalySelectionRules.night(18_000L));
+		assertTrue(AnomalySelectionRules.night(23_000L));
+		// Dusk still has usable sky light, so a torch going out there is not the loss the anomaly is.
+		assertFalse(AnomalySelectionRules.night(12_999L));
+		assertFalse(AnomalySelectionRules.night(23_001L));
+		assertFalse(AnomalySelectionRules.night(0L));
+		assertFalse(AnomalySelectionRules.night(6_000L));
+		// Day time keeps counting up across in-game days, and can be set negative by commands.
+		assertTrue(AnomalySelectionRules.night(24_000L * 7L + 18_000L));
+		assertTrue(AnomalySelectionRules.night(-6_000L));
+		assertFalse(AnomalySelectionRules.night(-18_000L));
+	}
 }

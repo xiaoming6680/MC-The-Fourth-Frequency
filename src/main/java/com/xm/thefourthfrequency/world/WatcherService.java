@@ -11,13 +11,21 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.EntitySpawnReason;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
 public final class WatcherService {
+	/** Raised from 24: two extra placement rules reject more columns, so more are sampled. */
+	private static final int POSITION_ATTEMPTS = 48;
+	/** How far behind it something solid has to stand for the figure to read as framed. */
+	private static final double BACKDROP_RANGE = 6.0;
 	private static final Map<UUID, Long> NEXT_ATTEMPT = new HashMap<>();
 	private static boolean initialized;
 	private WatcherService() { }
@@ -47,8 +55,8 @@ public final class WatcherService {
 		if (position == null) return null;
 		WatcherEntity watcher = ModEntities.WATCHER.create(level, EntitySpawnReason.EVENT);
 		if (watcher == null) return null;
-		watcher.snapTo(position.getX() + 0.5, position.getY(), position.getZ() + 0.5,
-				Mth.wrapDegrees(player.getYRot() + 180.0F), 0.0F);
+		// The anomaly beat is "a glowing eye in the dark", so this one squares up to the player.
+		orient(watcher, position, player, 0.0F);
 		watcher.observe(player, Math.min(400, Math.max(20, lifetimeTicks)));
 		return level.addFreshEntity(watcher) ? watcher : null;
 	}
@@ -73,15 +81,28 @@ public final class WatcherService {
 		if (position == null) return false;
 		WatcherEntity watcher = ModEntities.WATCHER.create(level, EntitySpawnReason.EVENT);
 		if (watcher == null) return false;
-		watcher.snapTo(position.getX() + 0.5, position.getY(), position.getZ() + 0.5,
-				Mth.wrapDegrees(player.getYRot() + 180.0F), 0.0F);
+		// Standing at an angle so the torso reads as facing elsewhere while the head is already
+		// turned back. 115 degrees stays inside the neck limit, so the eye still reaches the player.
+		orient(watcher, position, player, level.getRandom().nextBoolean() ? 115.0F : -115.0F);
 		watcher.observe(player, forced ? 400 : 900);
 		return level.addFreshEntity(watcher);
 	}
 
+	/** Places the watcher with its head already on the player and its body turned away by an offset. */
+	private static void orient(WatcherEntity watcher, BlockPos position, ServerPlayer player,
+			float bodyOffsetDegrees) {
+		double dx = player.getX() - (position.getX() + 0.5);
+		double dz = player.getZ() - (position.getZ() + 0.5);
+		float towardPlayer = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0F;
+		float bodyYaw = Mth.wrapDegrees(towardPlayer + bodyOffsetDegrees);
+		watcher.snapTo(position.getX() + 0.5, position.getY(), position.getZ() + 0.5, bodyYaw, 0.0F);
+		watcher.setYBodyRot(bodyYaw);
+		watcher.setYHeadRot(Mth.wrapDegrees(towardPlayer));
+	}
+
 	private static BlockPos findPosition(ServerLevel level, ServerPlayer player, boolean forced,
 			double minimumDistance, double maximumDistance, boolean frontVisible) {
-		for (int attempt = 0; attempt < 24; attempt++) {
+		for (int attempt = 0; attempt < POSITION_ATTEMPTS; attempt++) {
 			double offset;
 			if (frontVisible) offset = -48.0 + level.getRandom().nextDouble() * 96.0;
 			else {
@@ -92,14 +113,47 @@ public final class WatcherService {
 			double distance = minimumDistance + level.getRandom().nextDouble() * (maximumDistance - minimumDistance);
 			int x = Mth.floor(player.getX() - Math.sin(angle) * distance);
 			int z = Mth.floor(player.getZ() + Math.cos(angle) * distance);
+			if (!level.hasChunkAt(new BlockPos(x, player.blockPosition().getY(), z))) continue;
 			for (int y = player.blockPosition().getY() + 7; y >= player.blockPosition().getY() - 12; y--) {
 				BlockPos candidate = new BlockPos(x, y, z);
 				if (!level.getBlockState(candidate.below()).isFaceSturdy(level, candidate.below(), net.minecraft.core.Direction.UP)
 						|| !level.getBlockState(candidate).isAir() || !level.getBlockState(candidate.above()).isAir()
 						|| !level.getBlockState(candidate.above(2)).isAir()) continue;
-				if (forced || level.getMaxLocalRawBrightness(candidate) <= 5) return candidate;
+				if (!forced && level.getMaxLocalRawBrightness(candidate) > 5) continue;
+				if (!visibleFrom(level, candidate, player)) continue;
+				if (!hasBackdrop(level, candidate, player)) continue;
+				return candidate;
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * The eye must actually reach the player. This is the same COLLIDER trace the runtime gaze
+	 * check uses, so a spot that passes here is a spot where looking at it can count.
+	 */
+	private static boolean visibleFrom(ServerLevel level, BlockPos candidate, ServerPlayer player) {
+		Vec3 eye = new Vec3(candidate.getX() + 0.5,
+				candidate.getY() + ModEntities.WATCHER.getDimensions().eyeHeight(),
+				candidate.getZ() + 0.5);
+		return level.clip(new ClipContext(player.getEyePosition(), eye, ClipContext.Block.COLLIDER,
+				ClipContext.Fluid.NONE, CollisionContext.empty())).getType() == HitResult.Type.MISS;
+	}
+
+	/**
+	 * It has to be standing against something. Alone in the middle of an open field it reads as an
+	 * ordinary mob that happened to spawn; framed by a treeline, a cliff or a cave wall it reads as
+	 * something that was already there. Traced horizontally away from the player at chest height,
+	 * so the backdrop is behind it from the only viewpoint that matters.
+	 */
+	private static boolean hasBackdrop(ServerLevel level, BlockPos candidate, ServerPlayer player) {
+		Vec3 chest = new Vec3(candidate.getX() + 0.5, candidate.getY() + 1.6, candidate.getZ() + 0.5);
+		double dx = chest.x - player.getX();
+		double dz = chest.z - player.getZ();
+		double length = Math.sqrt(dx * dx + dz * dz);
+		if (length < 1.0E-4) return false;
+		Vec3 behind = chest.add(dx / length * BACKDROP_RANGE, 0.0, dz / length * BACKDROP_RANGE);
+		return level.clip(new ClipContext(chest, behind, ClipContext.Block.COLLIDER,
+				ClipContext.Fluid.NONE, CollisionContext.empty())).getType() == HitResult.Type.BLOCK;
 	}
 }

@@ -38,6 +38,11 @@ public final class TerminalRuntimeService {
 	private static final int NAVIGATION_SYNC_TICKS = 4;
 	private static final Map<UUID, ViewState> OPEN_VIEWS = new LinkedHashMap<>();
 	private static final Map<UUID, Integer> REMEMBERED_MODES = new LinkedHashMap<>();
+	/**
+	 * The tab the player was last looking at. The wire mode only distinguishes signal from files, so
+	 * it cannot tell home from tools from records; reopening on the remembered tab needs the page.
+	 */
+	private static final Map<UUID, Integer> REMEMBERED_PAGES = new LinkedHashMap<>();
 	private static final Map<UUID, Integer> REMEMBERED_TUNING = new LinkedHashMap<>();
 	private static boolean initialized;
 
@@ -51,6 +56,7 @@ public final class TerminalRuntimeService {
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
 			OPEN_VIEWS.clear();
 			REMEMBERED_MODES.clear();
+			REMEMBERED_PAGES.clear();
 			REMEMBERED_TUNING.clear();
 		});
 	}
@@ -69,14 +75,17 @@ public final class TerminalRuntimeService {
 				&& record.getBooleanOr(TerminalData.PURSUIT_WARNING_RECORDS_REDIRECT, false);
 		if (openRecords) data.updateTerminalRecord(player.getUUID(),
 				tag -> tag.putBoolean(TerminalData.PURSUIT_WARNING_RECORDS_REDIRECT, false));
-		int initialPage = openRecords ? TerminalPage.RECORDS.ordinal() : TerminalPage.initialPage(mode).ordinal();
+		TerminalPage remembered = REMEMBERED_PAGES.containsKey(player.getUUID())
+				? TerminalPage.fromIndex(REMEMBERED_PAGES.get(player.getUUID()))
+				: TerminalPage.initialPage(mode);
+		TerminalPage opening = openRecords ? TerminalPage.RECORDS : remembered;
+		int initialPage = opening.ordinal();
 		int serverTick = player.level().getServer().getTickCount();
-		ViewState view = new ViewState(hand, TerminalControlPolicy.mode(mode), initialPage,
+		// The mode follows the tab rather than its own memory, so a restored view never opens on one
+		// page while the wire still claims the other.
+		ViewState view = new ViewState(hand, TerminalControlPolicy.mode(opening.wireMode()), initialPage,
 				TerminalControlPolicy.tuning(tuning), 0L, 0L, "", serverTick, TerminalToolService.NO_TOOL);
 		OPEN_VIEWS.put(player.getUUID(), view);
-		if (com.xm.thefourthfrequency.world.StructureNavigationService.acknowledgeCompletion(player)) {
-			synchronizeProjection(player);
-		}
 		sendSnapshot(player, view);
 		sendNavigation(player);
 	}
@@ -124,10 +133,7 @@ public final class TerminalRuntimeService {
 				if (value != 0 || !TerminalToolService.requestRescan(player)) return;
 			}
 			case TerminalControlPayload.SET_HOME -> { return; }
-			case TerminalControlPayload.DISMISS_NAVIGATION_COMPLETION -> {
-				if (value != 0 || !com.xm.thefourthfrequency.world.StructureNavigationService
-						.dismissCompletion(player)) return;
-			}
+			case TerminalControlPayload.DISMISS_NAVIGATION_COMPLETION -> { return; }
 			case TerminalControlPayload.READ_TRUTH_FILE -> {
 				if (value != 0 || !markTruthRead(player)) return;
 			}
@@ -142,6 +148,8 @@ public final class TerminalRuntimeService {
 			}
 			case TerminalControlPayload.VISIT_PAGE -> {
 				if (!TerminalTaskService.visitPage(player, value)) return;
+				view.page = TerminalPage.fromIndex(value).ordinal();
+				REMEMBERED_PAGES.put(player.getUUID(), view.page);
 			}
 			case TerminalControlPayload.CLAIM_TASK_REWARD -> {
 				TerminalTaskService.ClaimResult result = TerminalTaskService.claim(player, value);
@@ -354,19 +362,11 @@ public final class TerminalRuntimeService {
 				case MINERALS -> {
 					kind = targetKind(navigation.kind());
 					located = TerminalNavigationPayload.isMineral(kind) && navigation.located();
+					// No survey fallback: a survey hit is now written straight into the navigation
+					// state, so there is only ever one place the mineral target comes from.
 					BlockPos target = BlockPos.of(navigation.position());
-					String targetDimension = navigation.dimension();
-					if (!located) {
-						ResourceGuidanceService.SurveyTarget surveyed =
-								ResourceGuidanceService.automaticSurveyTarget(player, tag);
-						if (surveyed.located()) {
-							kind = targetKind(surveyed.resource().id());
-							located = true;
-							target = surveyed.position();
-							targetDimension = surveyed.dimension();
-						}
-					}
-					sameDimension = player.level().dimension().identifier().toString().equals(targetDimension);
+					sameDimension = player.level().dimension().identifier().toString()
+							.equals(navigation.dimension());
 					dx = boundedDelta(target.getX() - playerPos.getX());
 					dz = boundedDelta(target.getZ() - playerPos.getZ());
 					targetY = target.getY();
@@ -430,6 +430,7 @@ public final class TerminalRuntimeService {
 
 	private static void remember(UUID id, ViewState view) {
 		REMEMBERED_MODES.put(id, view.mode);
+		REMEMBERED_PAGES.put(id, view.page);
 		REMEMBERED_TUNING.put(id, view.tuning);
 	}
 
@@ -447,6 +448,7 @@ public final class TerminalRuntimeService {
 			case "coal" -> TerminalNavigationPayload.COAL;
 			case "gold" -> TerminalNavigationPayload.GOLD;
 			case "diamond" -> TerminalNavigationPayload.DIAMOND;
+			case "emerald" -> TerminalNavigationPayload.EMERALD;
 			case "structure_fragment" -> TerminalNavigationPayload.UNSTABLE_SIGNAL;
 			default -> TerminalNavigationPayload.NONE;
 		};
@@ -518,6 +520,12 @@ public final class TerminalRuntimeService {
 		return REMEMBERED_MODES.getOrDefault(playerId, TerminalControlPolicy.Mode.SIGNAL.ordinal());
 	}
 
+	public static int rememberedPage(UUID playerId) {
+		return REMEMBERED_PAGES.containsKey(playerId)
+				? TerminalPage.fromIndex(REMEMBERED_PAGES.get(playerId)).ordinal()
+				: TerminalPage.initialPage(rememberedMode(playerId)).ordinal();
+	}
+
 	public static int rememberedTuning(UUID playerId) {
 		return REMEMBERED_TUNING.getOrDefault(playerId, TerminalControlPolicy.DEFAULT_TUNING);
 	}
@@ -567,6 +575,8 @@ public final class TerminalRuntimeService {
 		private final InteractionHand hand;
 		private int mode;
 		private final int initialPage;
+		/** Where the view is now, as opposed to where it opened. */
+		private int page;
 		private int tuning;
 		private long nextSyncTick;
 		private long nextNavigationSyncTick;
@@ -580,6 +590,7 @@ public final class TerminalRuntimeService {
 			this.hand = hand;
 			this.mode = mode;
 			this.initialPage = initialPage;
+			this.page = initialPage;
 			this.tuning = tuning;
 			this.nextSyncTick = nextSyncTick;
 			this.nextNavigationSyncTick = nextNavigationSyncTick;

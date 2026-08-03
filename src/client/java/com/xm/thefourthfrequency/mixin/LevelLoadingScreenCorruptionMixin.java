@@ -27,6 +27,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(LevelLoadingScreen.class)
 public abstract class LevelLoadingScreenCorruptionMixin {
+	/**
+	 * Bright red, well clear of the wall's own.
+	 *
+	 * <p>The wall runs 206-248 in red with almost nothing in the other channels. Matching that
+	 * hue would hide the line; lifting green and blue together keeps it unmistakably red while
+	 * putting it far enough above the wall in brightness to be picked out at a glance.</p>
+	 */
+	@Unique private static final int INTRUSION_COLOR = 0xFFFF5C57;
+	/** Off the centre line, below and right of it: near enough to catch, far enough to miss. */
+	@Unique private static final float INTRUSION_CENTER_X = 0.66F;
+	@Unique private static final float INTRUSION_CENTER_Y = 0.66F;
 	@Shadow private LevelLoadTracker loadTracker;
 	@Shadow private float smoothedProgress;
 	@Unique private int thefourthfrequency$screenTicks;
@@ -36,6 +47,7 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 	@Unique private boolean thefourthfrequency$testScreenshotRequested;
 	@Unique private boolean thefourthfrequency$legacyFrameRecorded;
 	@Unique private boolean thefourthfrequency$legacyScreenshotRequested;
+	@Unique private boolean thefourthfrequency$recoveryFaultApplied;
 	@Unique private float thefourthfrequency$legacyProgress = 0.04F;
 
 	@Inject(method = "<init>", at = @At("TAIL"))
@@ -76,7 +88,11 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 		}
 		if (!AlphaLoadSessionController.shouldCorruptLoadingScreen()
 				|| AlphaLoadTimeline.legacyRecoveryFrame(thefourthfrequency$screenTicks)) return;
-		smoothedProgress = 0.5F;
+		// During the prelude the bar creeps up and then loses ground. Nothing has visibly
+		// corrupted yet, so this is the first thing the player cannot explain by waiting longer.
+		smoothedProgress = AlphaLoadTimeline.initialNormalFrame(thefourthfrequency$screenTicks)
+				? AlphaLoadTimeline.initialNormalProgress(thefourthfrequency$screenTicks)
+				: 0.5F;
 	}
 
 	@Redirect(method = "tick", at = @At(value = "INVOKE",
@@ -177,6 +193,13 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 				: loadTracker.isLevelReady() ? 1.0F : 0.08F;
 		thefourthfrequency$legacyProgress += (Math.clamp(target, 0.0F, 1.0F)
 				- thefourthfrequency$legacyProgress) * 0.18F;
+		// Once, well after the picture has settled and the screen has earned back some trust.
+		// Guarded by a flag rather than an exact tick because render is not tied to the tick rate.
+		if (recoveringFromCorruption && !thefourthfrequency$recoveryFaultApplied
+				&& AlphaLoadTimeline.recoveryProgressFault(thefourthfrequency$screenTicks)) {
+			thefourthfrequency$recoveryFaultApplied = true;
+			thefourthfrequency$legacyProgress *= 0.55F;
+		}
 		int barWidth = Math.min(120, Math.max(40, width - 40));
 		int barLeft = centerX - barWidth / 2;
 		int barY = centerY + 16;
@@ -240,6 +263,16 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 			thefourthfrequency$renderFullScreenFailureWall(graphics, font, failedLine,
 					AlphaLoadTimeline.floodWipeProgress(thefourthfrequency$screenTicks));
 			AlphaCorruptionRenderer.drawMediumLayers(graphics, thefourthfrequency$screenTicks);
+			if (AlphaLoadTimeline.frozenObserverVisible(thefourthfrequency$screenTicks)) {
+				// Drawn without the tremor every other line carries: on a frame where nothing is
+				// allowed to move, this is steady, and being steady is what makes it wrong.
+				String observer = Component.translatable(
+						"screen.thefourthfrequency.alpha_loading.observer_detected").getString();
+				int observerY = graphics.guiHeight() / 2;
+				graphics.drawCenteredString(font, observer, centerX + 1, observerY + 1,
+						0xC8140505);
+				graphics.drawCenteredString(font, observer, centerX, observerY, 0xFFF0E8DC);
+			}
 			thefourthfrequency$viewportFlooded = true;
 			AlphaLoadSessionController.recordViewportFlooded(true);
 			if (!thefourthfrequency$testScreenshotRequested
@@ -251,31 +284,30 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 			return;
 		}
 
+		// Nothing here moves. Text that jitters from frame to frame reads as an effect applied to
+		// the screen; text that holds perfectly still while the medium around it comes apart
+		// reads as a screen that is genuinely failing. The damage is carried by the chroma bleed,
+		// the scanlines and the tracking band, all of which sit on top of a stable layout.
 		int startX = centerX - (font.width(prefix) + font.width(suffix)) / 2;
-		int tremorSeed = thefourthfrequency$chaos(motionTick / 3 + 0x5F356495);
-		int tremorX = Math.floorMod(tremorSeed, 19) == 0
-				? Math.floorMod(tremorSeed >>> 5, 3) - 1 : 0;
-		int tremorY = Math.floorMod(tremorSeed >>> 9, 23) == 0 ? 1 : 0;
 		int suffixX = startX + font.width(prefix);
 		if (Math.floorMod(motionTick, 13) == 2) {
 			graphics.drawString(font, failedLine, startX + 1, labelY,
 					failed ? 0x4C651E22 : 0x383C3531, false);
 		}
-		AlphaCorruptionRenderer.drawChromaString(graphics, font, prefix, startX + tremorX,
-				labelY + tremorY, failed ? 0xFFD5CEC3 : 0xFFE8E3DA, thefourthfrequency$screenTicks);
+		AlphaCorruptionRenderer.drawChromaString(graphics, font, prefix, startX, labelY,
+				failed ? 0xFFD5CEC3 : 0xFFE8E3DA, thefourthfrequency$screenTicks);
 		int suffixColor = !failed
 				? (Math.floorMod(motionTick, 11) == 4 ? 0xFF766C65 : 0xFFE8E3DA)
 				: 0xFF9B302C;
-		AlphaCorruptionRenderer.drawChromaString(graphics, font, suffix, suffixX + tremorX,
-				labelY + tremorY, suffixColor, thefourthfrequency$screenTicks);
+		AlphaCorruptionRenderer.drawChromaString(graphics, font, suffix, suffixX, labelY,
+				suffixColor, thefourthfrequency$screenTicks);
 
 		if (AlphaLoadTimeline.observerMessageVisible(thefourthfrequency$screenTicks)) {
 			String observer = Component.translatable(
 					"screen.thefourthfrequency.alpha_loading.observer_detected").getString();
-			int observerX = centerX + (Math.floorMod(tremorSeed >>> 12, 3) - 1);
-			graphics.drawCenteredString(font, observer, observerX + 1, labelY + 29,
+			graphics.drawCenteredString(font, observer, centerX + 1, labelY + 29,
 					0x6A321416);
-			AlphaCorruptionRenderer.drawChromaCenteredString(graphics, font, observer, observerX,
+			AlphaCorruptionRenderer.drawChromaCenteredString(graphics, font, observer, centerX,
 					labelY + 28, 0xC9D8D0C4, thefourthfrequency$screenTicks);
 		}
 
@@ -283,12 +315,15 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 		for (int copy = 0; copy < copies; copy++) {
 			int y = labelY + 8 + copy * 6;
 			if (y >= graphics.guiHeight() - 8) break;
-			int seed = thefourthfrequency$chaos(copy * 31 + motionTick / 4);
-			int jitter = Math.floorMod(seed, 5) - 2;
+			// Placement is seeded by the copy index alone, so each line keeps the offset it was
+			// born with instead of dancing sideways every few frames. Only the colour breathes.
+			int placement = thefourthfrequency$chaos(copy * 31);
+			int shimmer = thefourthfrequency$chaos(copy * 31 + motionTick / 4);
+			int jitter = Math.floorMod(placement, 5) - 2;
 			int alpha = Math.max(34, 170 - copy * 10);
-			int red = 112 + Math.floorMod(seed >>> 8, 37);
-			int green = 22 + Math.floorMod(seed >>> 14, 16);
-			int blue = 24 + Math.floorMod(seed >>> 19, 13);
+			int red = 112 + Math.floorMod(shimmer >>> 8, 37);
+			int green = 22 + Math.floorMod(shimmer >>> 14, 16);
+			int blue = 24 + Math.floorMod(shimmer >>> 19, 13);
 			int color = alpha << 24 | red << 16 | green << 8 | blue;
 			graphics.drawCenteredString(font, failedLine, centerX + jitter, y, color);
 		}
@@ -345,12 +380,27 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 					0xFF000000 | red << 16 | green << 8 | blue, false);
 		}
 		graphics.pose().popMatrix();
+
+		// One line in the wall does not agree with the wall. Twenty-eight ticks of the same word
+		// is parsed by the eye in ten and then costs attention without paying any back; a single
+		// line that contradicts every other line spends the rest of that time well. At normal
+		// size against text nearly three times its height it reads as a status the machine is
+		// reporting rather than as part of the failure it is reporting - and it reframes that
+		// failure entirely: nothing failed to load. Something finished connecting.
+		//
+		// Placed off the centre line, below and right of it. Dead centre is where a player looks
+		// first and would read it as the point of the frame; out here it has to be found, and
+		// something found is trusted more than something presented.
+		String intrusion = Component.translatable(
+				"screen.thefourthfrequency.alpha_loading.wall_intrusion").getString();
+		int intrusionWidth = font.width(intrusion);
+		int intrusionX = Math.round(width * INTRUSION_CENTER_X) - intrusionWidth / 2;
+		int intrusionY = Math.round(height * INTRUSION_CENTER_Y);
+		graphics.fill(intrusionX - 4, intrusionY - 2, intrusionX + intrusionWidth + 4,
+				intrusionY + font.lineHeight, 0xD9060000);
+		graphics.drawString(font, intrusion, intrusionX, intrusionY, INTRUSION_COLOR, false);
+
 		graphics.disableScissor();
-		// The leading edges of the wipe stay lit for as long as they are still travelling.
-		if (opening < 1.0F) {
-			graphics.fill(0, wipeTop, width, wipeTop + 1, 0xB3E8DCD4);
-			graphics.fill(0, wipeBottom - 1, width, wipeBottom, 0xB3E8DCD4);
-		}
 	}
 
 	@Unique
@@ -398,7 +448,9 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 	@Inject(method = "onClose", at = @At("TAIL"))
 	private void thefourthfrequency$finishInitialFailure(CallbackInfo callback) {
 		// Unconditional: a bed that outlives this screen would follow the player into the world.
-		AlphaCorruptionAudio.stopAll();
+		// Released with a tail rather than cut, so the world comes up underneath the noise floor
+		// instead of replacing it on a frame the player can point at.
+		AlphaCorruptionAudio.fadeOutAll();
 		if (thefourthfrequency$corruptionClaimed) {
 			AlphaLoadSessionController.loadingScreenClosed(thefourthfrequency$screenTicks,
 					thefourthfrequency$viewportFlooded);

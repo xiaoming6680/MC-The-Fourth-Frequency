@@ -1,0 +1,299 @@
+[
+	{
+		"section": "The Fourth Frequency",
+		"disciplines": [
+			{
+				"discipline": "Production",
+				"titles": [
+					{
+						"title": "Creator & Director",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Producer",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "Design",
+				"titles": [
+					{
+						"title": "Game Design",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Systems & Balance Design",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Terminal & Interaction Design",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Anomaly & Pursuit Design",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "End Encounter Design",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "Narrative",
+				"titles": [
+					{
+						"title": "World Bible",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Script & Terminal Writing",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Damaged Files & Full Journal",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "End Poem",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Localization (Simplified Chinese / English)",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "Engineering",
+				"titles": [
+					{
+						"title": "Client",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Server",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Networking Protocol",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Save Data & Persistence",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Rendering & Animation",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Mixins & Compatibility",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "Art",
+				"titles": [
+					{
+						"title": "Entity Models & Textures",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "UI & HUD",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Staging & Visual Effects",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "Audio",
+				"titles": [
+					{
+						"title": "Music Selection & Scene Scoring",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Audio Implementation",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "Quality Assurance",
+				"titles": [
+					{
+						"title": "Functional Testing",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Automated Testing",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "Release Acceptance",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "Documentation",
+				"titles": [
+					{
+						"title": "Architecture & Testing Docs",
+						"names": [
+							"XIAOMING6680"
+						]
+					},
+					{
+						"title": "World Bible",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			}
+		]
+	},
+	{
+		"section": "Music",
+		"disciplines": [
+			{
+				"discipline": "Tracks Used",
+				"titles": [
+					{
+						"title": "In-Game BGM",
+						"names": [
+							"School Rooftop — hisohkah, WMD",
+							"Comfort Chain — instupendo",
+							"千禧梦 (Chinese Dreamcore) — LUSTN",
+							"天使は感動する (feat. Aiobahn +81) — NEEDY GIRL OVERDOSE, Aiobahn +81",
+							"Are You Lost — Park Bird",
+							"Hi — TEMPOREX"
+						]
+					},
+					{
+						"title": "Main Menu BGM",
+						"names": [
+							"frutiger aero — amirthetrash",
+							"green to blue (Sped Up) — Aurenth",
+							"Hi (Piano Dreamcore) — 弹琴老周",
+							"nop — 陈越龙"
+						]
+					},
+					{
+						"title": "Personal Pursuit",
+						"names": [
+							"level！— niqizhuo, Dapper Husky"
+						]
+					},
+					{
+						"title": "World Interface Encounter",
+						"names": [
+							"NCPD Prowl — Marcin Przybyłowicz",
+							"WAKE UP! (Sped Up) — MoonDeity"
+						]
+					},
+					{
+						"title": "End Poem - Victory",
+						"names": [
+							"Reverie — ILLENIUM, Dana Salah"
+						]
+					},
+					{
+						"title": "End Poem - Defeat",
+						"names": [
+							"Fallen Down (Electric Piano Version) — The Versions"
+						]
+					}
+				]
+			},
+			{
+				"discipline": "",
+				"titles": [
+					{
+						"title": "Rights",
+						"names": [
+							"None of the music above is original to this mod",
+							"All rights remain with the respective artists and rights holders",
+							"This mod claims no rights to any of it"
+						]
+					}
+				]
+			}
+		]
+	},
+	{
+		"section": "Special Thanks",
+		"disciplines": [
+			{
+				"discipline": "",
+				"titles": [
+					{
+						"title": "For everyone who listened all the way to the end of this frequency",
+						"names": [
+							"XIAOMING6680"
+						]
+					}
+				]
+			}
+		]
+	}
+]

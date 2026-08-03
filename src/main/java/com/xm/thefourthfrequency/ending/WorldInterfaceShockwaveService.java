@@ -24,7 +24,7 @@ public final class WorldInterfaceShockwaveService {
 	/** Samples per ring. Emitting on alternating ticks keeps the packet cost near vanilla's. */
 	public static final int RING_SAMPLES = 32;
 	public static final int EMIT_INTERVAL_TICKS = 2;
-	public static final int MAX_CONCURRENT_WAVES = 4;
+	public static final int MAX_CONCURRENT_WAVES = 16;
 
 	private static final List<Wave> ACTIVE = new CopyOnWriteArrayList<>();
 	private static boolean initialized;

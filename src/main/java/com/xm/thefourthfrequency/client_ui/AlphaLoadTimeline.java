@@ -8,7 +8,17 @@ public final class AlphaLoadTimeline {
 	 * claimed. Keep only the one-second pause here instead of replaying 0 -> 50%.
 	 */
 	public static final int NORMAL_PROGRESS_END_TICK = 0;
-	public static final int NORMAL_PAUSE_TICKS = 20;
+	/**
+	 * How long the screen is allowed to look like an ordinary loading screen.
+	 *
+	 * <p>This was one second, which is not long enough to be believed. The whole sequence depends
+	 * on the player having settled into a normal wait before anything contradicts it, and a
+	 * player who never settled reads the first glitch as a scripted effect rather than as
+	 * something going wrong. Nearly three seconds is enough for the stalled bar below to become
+	 * a conscious question - <em>why is this not moving?</em> - which is the thought the rest of
+	 * the sequence answers.</p>
+	 */
+	public static final int NORMAL_PAUSE_TICKS = 56;
 	public static final int GLITCH_START_TICK = NORMAL_PROGRESS_END_TICK + NORMAL_PAUSE_TICKS;
 	public static final int FAILURE_TICK = GLITCH_START_TICK + 24;
 	public static final int OBSERVER_MESSAGE_START_TICK = FAILURE_TICK + 24;
@@ -21,7 +31,12 @@ public final class AlphaLoadTimeline {
 	public static final int FREEZE_START_TICK = FLOOD_COMPLETE_TICK;
 	public static final int BLACKOUT_START_TICK =
 			FREEZE_START_TICK + FROZEN_FAILURE_WALL_TICKS;
-	public static final int BLACKOUT_TICKS = 40;
+	/**
+	 * Shortened from two seconds once the single-frame flashbacks were removed: dead air with
+	 * nothing in it earns its length only up to a point, and the time is better spent on the
+	 * prelude, where it buys belief instead of patience.
+	 */
+	public static final int BLACKOUT_TICKS = 28;
 	public static final int LEGACY_RECOVERY_START_TICK = BLACKOUT_START_TICK + BLACKOUT_TICKS;
 	public static final int MIN_LOADING_SCREEN_TICKS = LEGACY_RECOVERY_START_TICK + 50;
 	public static final int MAX_RESOURCE_RELOAD_WAIT_TICKS = MIN_LOADING_SCREEN_TICKS + 64;
@@ -87,8 +102,45 @@ public final class AlphaLoadTimeline {
 		return age < 8 || Math.floorMod(age, 7) != 1;
 	}
 
+	/**
+	 * The tick the progress bar stops being merely slow.
+	 *
+	 * <p>A bar that stalls is a bad connection and the player will wait it out. A bar that goes
+	 * <em>backwards</em> is not something any amount of waiting fixes, and it is the first thing
+	 * in the sequence that cannot be explained away - before a single pixel has visibly
+	 * corrupted.</p>
+	 */
+	public static final int PROGRESS_REGRESSION_TICK = NORMAL_PAUSE_TICKS * 2 / 3;
+	/**
+	 * How long the bar takes to slide back down.
+	 *
+	 * <p>Snapping to the lower value reads as a rendering glitch - one frame was wrong - and a
+	 * glitch is something a player forgives and forgets. Ground being given up steadily, slowly
+	 * enough to watch happen, cannot be filed that way. It also leaves a few ticks of holding at
+	 * the bottom before the first visible corruption, which is where the thought lands.</p>
+	 */
+	public static final int PROGRESS_REGRESSION_SLIDE_TICKS = 14;
+	private static final float PROGRESS_CREEP_TOP = 0.62F;
+	/**
+	 * Exactly the value the corruption phase pins the bar to.
+	 *
+	 * <p>Retreating past it would be a stronger beat in isolation, but the prelude hands straight
+	 * over to a phase that holds the bar at half, so any other landing point becomes a visible
+	 * jump on that frame - and a jump is the one thing this whole slide exists to avoid. The
+	 * ground given up is the climb, which is enough: the bar still ends up lower than it was a
+	 * moment ago, and it still never recovers.</p>
+	 */
+	private static final float PROGRESS_AFTER_REGRESSION = 0.5F;
+
 	public static float initialNormalProgress(int screenTicks) {
-		return 0.5F;
+		// Creeping upward first is what makes the retreat register as a loss rather than a value.
+		if (screenTicks <= PROGRESS_REGRESSION_TICK) {
+			return 0.5F + (PROGRESS_CREEP_TOP - 0.5F)
+					* ramp(screenTicks, 0, PROGRESS_REGRESSION_TICK);
+		}
+		float slide = Math.clamp((screenTicks - PROGRESS_REGRESSION_TICK)
+				/ (float) PROGRESS_REGRESSION_SLIDE_TICKS, 0.0F, 1.0F);
+		return lerp(PROGRESS_CREEP_TOP, PROGRESS_AFTER_REGRESSION, slide);
 	}
 
 	public static int copiedFailureLines(int screenTicks) {
@@ -105,6 +157,22 @@ public final class AlphaLoadTimeline {
 
 	public static boolean frozenFailureFrame(int screenTicks) {
 		return screenTicks >= FREEZE_START_TICK && screenTicks < BLACKOUT_START_TICK;
+	}
+
+	/** Ticks the frame is allowed to sit locked before the one thing that still moves moves. */
+	public static final int FROZEN_OBSERVER_DELAY_TICKS = 5;
+
+	/**
+	 * The second and last time the recording admits it can see the player.
+	 *
+	 * <p>The first sighting is one line among many on a picture that is already coming apart, and
+	 * it is easy to file as more noise. This one lands on a frame that has visibly stopped -
+	 * every other layer is locked - so a line appearing here breaks the freeze's own rule. A
+	 * still image with exactly one moving element is worse than any amount of motion.</p>
+	 */
+	public static boolean frozenObserverVisible(int screenTicks) {
+		return frozenFailureFrame(screenTicks)
+				&& screenTicks >= FREEZE_START_TICK + FROZEN_OBSERVER_DELAY_TICKS;
 	}
 
 	public static boolean blackoutFrame(int screenTicks) {
@@ -273,6 +341,35 @@ public final class AlphaLoadTimeline {
 		// Dead air is not an absence of picture, it is a picture of nothing. Never fully still.
 		float settled = ramp(screenTicks, BLACKOUT_START_TICK, BLACKOUT_COLLAPSE_TICKS);
 		return Math.round((9 + Math.floorMod(noise(screenTicks), 12)) * settled);
+	}
+
+	/**
+	 * The window title has its own channel, and dead air is the only stretch where it is the
+	 * <em>only</em> channel: the picture is gone, but the title bar the operating system draws
+	 * is not. For those ticks the title stops naming a version, because nothing is left running
+	 * that could name one.
+	 */
+	public static boolean deadAirWindowTitle(int screenTicks) {
+		return blackoutFrame(screenTicks);
+	}
+
+	/** How long after the picture returns the recovered progress bar gives itself away. */
+	private static final int RECOVERY_FAULT_DELAY_TICKS = 34;
+
+	public static int recoveryFaultTick() {
+		return LEGACY_RECOVERY_START_TICK + RECOVERY_FAULT_DELAY_TICKS;
+	}
+
+	/**
+	 * Fires once, after the recovered screen has had long enough to look trustworthy again.
+	 *
+	 * <p>Landing it after {@link #RECOVERY_LOCK_TICKS} is the point: the tracking has settled,
+	 * the bar is filling normally, the player has been given permission to relax - and then the
+	 * bar loses ground. What is being taken back is not progress, it is the conclusion that the
+	 * worst is over.</p>
+	 */
+	public static boolean recoveryProgressFault(int screenTicks) {
+		return screenTicks >= recoveryFaultTick();
 	}
 
 	/** 1 on the frame the picture returns, decaying to 0 as the tracking finds its lock. */

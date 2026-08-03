@@ -4,15 +4,17 @@ import com.mojang.serialization.DynamicOps;
 import com.xm.thefourthfrequency.audio.AudioService;
 import com.xm.thefourthfrequency.audio.ModSounds;
 import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
+import com.xm.thefourthfrequency.content.ModBlocks;
+import com.xm.thefourthfrequency.entity.WorldInterfaceAnatomy;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEnergyOrbEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEntity;
 import com.xm.thefourthfrequency.networking.WorldInterfaceProtocol;
 import com.xm.thefourthfrequency.terminal.TerminalNoticeService;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.core.particles.PowerParticleOption;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
@@ -22,23 +24,26 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
-import net.minecraft.world.entity.projectile.arrow.Arrow;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -47,36 +52,145 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /** Server-authoritative transient executor for the nine world-interface actions. */
 public final class WorldInterfaceAttackService {
 	private static final int LASER_WARNING_TICKS = WorldInterfaceProtocol.LASER_WARNING_TICKS;
-	private static final int ORB_TRACKING_TICKS = 100;
-	private static final int GRAB_WARNING_TICKS = 30;
-	private static final int GRAB_HOLD_TICKS = 40;
-	private static final int MENTAL_WARNING_TICKS = WorldInterfaceProtocol.MENTAL_WARNING_TICKS;
-	private static final int MENTAL_EFFECT_TICKS = 80;
-	private static final int WEAPON_WARNING_TICKS = 35;
+	private static final int LASER_SWEEP_TICKS = WorldInterfaceProtocol.LASER_SWEEP_TICKS;
+	private static final int LASER_TRACKING_LAG_TICKS = WorldInterfaceProtocol.LASER_TRACKING_LAG_TICKS;
+	/**
+	 * How close the beam has to pass to burn. Wide enough that standing still is fatal, tight enough
+	 * that the lag the beam is drawn with is genuinely enough to walk out of - it has to stay under
+	 * what {@link WorldInterfaceProtocol#LASER_TRACKING_LAG_TICKS} of running actually covers, or
+	 * the trailing beam catches up with a moving player anyway and the mechanic is a lie.
+	 */
+	private static final double LASER_BURN_RADIUS = 2.2D;
+	private static final float LASER_BURN_DAMAGE = 3.0F;
+	private static final int LASER_BURN_INTERVAL_TICKS = 5;
+	private static final int LASER_SCAR_INTERVAL_TICKS = 2;
+	private static final int LASER_SCAR_RADIUS = 2;
+	private static final int LASER_SCAR_EDITS = 6;
+	private static final int ORB_WARNING_TICKS = WorldInterfaceProtocol.ORB_WARNING_TICKS;
+	private static final int ORB_TRACKING_TICKS = WorldInterfaceEnergyOrbEntity.MAX_FLIGHT_TICKS;
+	private static final int GRAB_WARNING_TICKS = WorldInterfaceProtocol.GRAB_WARNING_TICKS;
+	/** Carried off the ground rather than teleported: the lift is an interpolated arc, not a jump. */
+	private static final int GRAB_LIFT_TICKS = WorldInterfaceProtocol.GRAB_LIFT_TICKS;
+	/**
+	 * Ticks the tendrils spend dragging the victim out from under the body before letting go.
+	 *
+	 * <p>Longer than it was, because it now has somewhere to take them. See {@link #THROW_CLEARANCE}.
+	 */
+	private static final int THROW_WINDUP_TICKS = 16;
+	/** Ticks the envelope stays open after the launch, purely so the release animation can play out. */
+	private static final int THROW_RELEASE_TICKS = 16;
+	/**
+	 * How far past the edge of the body the wind-up carries the victim before the launch.
+	 *
+	 * <p>The throw used to release from directly under the interface and fling the victim upward
+	 * through it. At third form that is a thirty-three-block-wide mass overhead, and no launch
+	 * impulse survives contact with it: a player thrown hard enough to clear the silhouette
+	 * horizontally has already risen into it, and one thrown gently enough not to has not gone
+	 * anywhere. The fix is not a bigger number, it is a different release point - the tendrils swing
+	 * them out past the rim first, and the launch happens in open air.</p>
+	 */
+	private static final double THROW_CLEARANCE = 5.0D;
+	/** Blocks below the underside of the mass that a carried player is held at. */
+	private static final double CARRY_HOLD_DROP = 1.5D;
+	/** A carry always lifts the victim at least this far, however low the body is hanging. */
+	private static final double CARRY_MIN_LIFT = 2.5D;
+	/**
+	 * How far the tendrils can actually reach when they close, measured from the interface.
+	 *
+	 * <p>Generous - the third form is thirty-three blocks across - but finite, which is the point:
+	 * it is the number that makes the grab's lock window worth reacting to.
+	 */
+	private static final double GRAB_REACH = 26.0D;
+	/**
+	 * Launch velocity, in blocks per tick. Under vanilla gravity this peaks around thirty blocks up,
+	 * which is high enough that the fall is lethal without a clutch and long enough that there is
+	 * time to make one.
+	 */
+	private static final double THROW_LAUNCH_SPEED = 2.5D;
+	/**
+	 * Outward speed of the throw, in blocks per tick.
+	 *
+	 * <p>Paired with the upward launch to make an arc rather than a column. Player horizontal motion
+	 * decays by about nine percent a tick in the air, so the total outward travel is roughly eleven
+	 * times this - the old 0.62 was worth under seven blocks, which alongside a thirty-block climb
+	 * read as a vertical column and, at third form, was less than half the body's own radius. At
+	 * this rate the victim covers something like twenty blocks away from the interface over the
+	 * flight that takes them thirty blocks up: far enough that landing is a journey back, close
+	 * enough that the arena still catches them.</p>
+	 */
+	private static final double THROW_LAUNCH_DRIFT = 1.85D;
+	private static final int SKY_LANCE_LOCK_TICKS = WorldInterfaceProtocol.SKY_LANCE_LOCK_TICKS;
+	private static final int SKY_LANCE_CHARGE_TICKS = WorldInterfaceProtocol.SKY_LANCE_CHARGE_TICKS;
+	private static final int SKY_LANCE_STRIKE_TICKS = WorldInterfaceProtocol.SKY_LANCE_STRIKE_TICKS;
+	private static final double SKY_LANCE_RADIUS = 3.6D;
+	private static final float SKY_LANCE_DAMAGE = 15.0F;
+	/** The lance is the encounter's one true crater; it is allowed to take a bite out of the island. */
+	private static final int SKY_LANCE_SCAR_RADIUS = 7;
+	private static final int SKY_LANCE_SCAR_EDITS = 90;
+	/** Blocks around the crater rim left as missing-texture proxies rather than removed. */
+	/** Rings of the outward blast front. Each steps one lance radius further out. */
+	private static final int SKY_LANCE_SHOCK_RINGS = 4;
+	private static final int SKY_LANCE_CORRUPTION_RADIUS = 9;
+	private static final int SKY_LANCE_CORRUPTION_EDITS = 34;
+	private static final int WEAPON_WARNING_TICKS = WorldInterfaceProtocol.WEAPON_WARNING_TICKS;
 	private static final int WEAPON_CUSTODY_TICKS = 160;
-	private static final int HOTBAR_WARNING_TICKS = 40;
+	private static final int HOTBAR_WARNING_TICKS = WorldInterfaceProtocol.HOTBAR_WARNING_TICKS;
 	private static final int HOTBAR_STEP_TICKS = 8;
 	private static final int HOTBAR_SLOTS = 9;
-	private static final int DROP_PROTECTION_TICKS = 600;
-	private static final int ARROW_VOLLEY_INTERVAL = 40;
-	private static final int REFLECTED_ARROW_COUNT = 20;
-	private static final int REFLECTED_ARROW_TTL = 80;
-	private static final int MAX_REFLECTED_ARROWS = 40;
-	private static final double REFLECTED_ARROW_DAMAGE = 0.5D;
-	private static final String REFLECTED_ARROW_TAG = "thefourthfrequency.world_interface_reflected";
-	private static final String CAPTURED_ARROW_TAG = "thefourthfrequency.world_interface_captured";
-	private static final String RECOVERY_ITEM_TAG_PREFIX = "thefourthfrequency.recovery.";
+	private static final int TENDRIL_WARNING_TICKS = WorldInterfaceProtocol.TENDRIL_WARNING_TICKS;
+	private static final int TENDRIL_STRIKE_INTERVAL_TICKS =
+			WorldInterfaceProtocol.TENDRIL_STRIKE_INTERVAL_TICKS;
+	private static final int TENDRIL_STRIKE_TELEGRAPH_TICKS =
+			WorldInterfaceProtocol.TENDRIL_STRIKE_TELEGRAPH_TICKS;
+	private static final int TENDRIL_STRIKE_COUNT = WorldInterfaceProtocol.TENDRIL_STRIKE_COUNT;
+	/**
+	 * Radius of one lash. Small enough that the telegraph is worth reacting to: a sprint covers
+	 * about five and a half blocks in the second the mark is on the ground, so leaving is possible
+	 * from the centre of it and standing still is not survivable.
+	 */
+	private static final double TENDRIL_REACH = 5.0D;
+	private static final float TENDRIL_DAMAGE = 8.0F;
+	private static final int TENDRIL_SCAR_RADIUS = 3;
+	private static final int TENDRIL_SCAR_EDITS = 12;
+	/** Dragon breath is a powered particle, so the option carries the drift rather than the type. */
+	private static final PowerParticleOption CHARGE_PARTICLE =
+			PowerParticleOption.create(ParticleTypes.DRAGON_BREATH, 0.4F);
 	private static final Component EVICTION_REASON = Component.translatable(
 			"hud.thefourthfrequency.world_interface.action.forced_expulsion");
 
 	private static final Map<UUID, AttackRuntime> ACTIVE = new ConcurrentHashMap<>();
-	private static final Map<UUID, ProjectileLease> PROJECTILES = new ConcurrentHashMap<>();
-	private static final Map<UUID, DropLease> DROPS = new ConcurrentHashMap<>();
-	private static final Set<MinecraftServer> DROP_LEASES_RECONCILED = ConcurrentHashMap.newKeySet();
+	/**
+	 * The third form's second lane: attacks running alongside the scheduled one.
+	 *
+	 * <p>Transient by design, where {@link #ACTIVE} is mirrored into persisted encounter state. The
+	 * persisted envelope is what lets a restart resume or cancel the scheduled attack cleanly and
+	 * what the client draws its beam and lance geometry from, and it holds exactly one action - so
+	 * making the volley persistent would mean a schema change, a migration and a protocol change for
+	 * something a restart already throws away. A restart cancels the scheduled attack outright and
+	 * grants recovery grace; the volley simply going quiet at the same moment is the same promise.
+	 * Nothing in this lane touches the recovery ledger, so nothing in it can be lost that way.</p>
+	 */
+	private static final Map<UUID, List<AttackRuntime>> VOLLEY = new ConcurrentHashMap<>();
+	/**
+	 * What the volley is allowed to throw.
+	 *
+	 * <p>Two hard limits pick this set. Nothing that takes exclusive control of a player may run
+	 * here - the grab, the confiscation, the purge and the eviction all write to the durable
+	 * recovery ledger and share one global lane precisely so a player cannot be seized twice at
+	 * once. And nothing whose presentation is drawn from the action envelope may run here either:
+	 * the laser's shaft and the lance's column are resolved client-side from the one envelope the
+	 * protocol carries, so a second one would burn along a beam nobody could see. What is left is
+	 * the two attacks the server draws itself, which is enough for the sky to be full.</p>
+	 */
+	private static final List<WorldInterfaceAction> VOLLEY_ACTIONS = List.of(
+			WorldInterfaceAction.ENERGY_ORB, WorldInterfaceAction.TENDRIL_LASH);
+	/** Extra attacks that may be in flight at once, on top of the scheduled one. */
+	public static final int MAX_VOLLEY = 3;
 	private static boolean initialized;
 
 	private WorldInterfaceAttackService() {
@@ -85,7 +199,7 @@ public final class WorldInterfaceAttackService {
 	public static synchronized void initialize() {
 		if (initialized) return;
 		initialized = true;
-		ServerTickEvents.END_SERVER_TICK.register(WorldInterfaceAttackService::maintenanceTick);
+		ConfiscationService.initialize();
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
 			WorldInterfaceState.Snapshot snapshot = WorldInterfaceState.snapshot(server);
 			snapshot.encounterId().ifPresent(id -> onDisconnect(handler.player, id));
@@ -96,9 +210,7 @@ public final class WorldInterfaceAttackService {
 		});
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
 			ACTIVE.clear();
-			PROJECTILES.clear();
-			DROPS.clear();
-			DROP_LEASES_RECONCILED.remove(server);
+			VOLLEY.clear();
 		});
 	}
 
@@ -138,19 +250,17 @@ public final class WorldInterfaceAttackService {
 		AttackRuntime runtime = new AttackRuntime(encounterId, boss.getUUID(), action, activeTick,
 				activeTick + duration, actionSequence, seed, targets, boss.blockPosition(),
 				snapshot.arenaCenter(), snapshot.safeSpawn());
-		if (action == WorldInterfaceAction.ENERGY_ORB) {
-			ServerPlayer target = level.getServer().getPlayerList().getPlayer(targets.getFirst());
-			if (target == null) throw new IllegalStateException("Energy-orb target left before spawn");
-			WorldInterfaceEnergyOrbEntity orb = WorldInterfaceEnergyOrbEntity.create(level, boss, encounterId, target);
-			runtime.orbId = orb.getUUID();
-		}
+		// The bolt is no longer born here. It spawns at the end of its charge, in tickOrb, so that
+		// the warning is a warning rather than a caption on a shot that has already been fired.
 		if (ACTIVE.putIfAbsent(encounterId, runtime) != null) {
-			if (runtime.orbId != null && level.getEntity(runtime.orbId) != null) level.getEntity(runtime.orbId).discard();
 			throw new IllegalStateException("An encounter action started concurrently");
 		}
 
 		boss.showAction(action.wireId(), level.getGameTime(), duration);
-		playActionCue(level, boss.blockPosition(), action, 0.65F, 0.82F);
+		// At the core, not at the entity position - which is a bookkeeping point that now sits at or
+		// below the arena floor, so a cast announced there was announced from inside the ground.
+		playActionCue(level, BlockPos.containing(WorldInterfaceAnatomy.coreOrigin(boss)), action,
+				0.65F, 0.82F);
 		WorldInterfaceState.AttackEnvelope envelope = runtime.envelope();
 		return new AttackStart(envelope, action, duration, Set.copyOf(targets), seed);
 	}
@@ -176,13 +286,12 @@ public final class WorldInterfaceAttackService {
 		long elapsed = Math.max(0L, activeTick - runtime.startedActiveTick);
 		boolean complete = switch (runtime.action) {
 			case LASER_SWEEP -> tickLaser(level, boss, runtime, elapsed);
-			case ENERGY_ORB -> tickOrb(level, runtime, elapsed);
-			case GRAB_SLAM -> tickGrabSlam(level, boss, runtime, elapsed);
-			case MENTAL_ASSAULT -> tickMental(level, boss, runtime, elapsed);
+			case ENERGY_ORB -> tickOrb(level, boss, runtime, elapsed);
+			case SKY_LANCE -> tickSkyLance(level, boss, runtime, elapsed);
 			case CHARGE_WEAPON_STEAL -> tickWeaponSteal(level, boss, snapshot, runtime, elapsed);
 			case GRAB_THROW -> tickGrabThrow(level, boss, runtime, elapsed);
-			case GAZE_HOTBAR_CLEAR -> tickHotbar(level, snapshot, runtime, elapsed);
-			case ARROW_REFLECTION -> tickArrowReflection(level, boss, runtime, elapsed);
+			case GAZE_HOTBAR_CLEAR -> tickHotbar(level, runtime, elapsed);
+			case TENDRIL_LASH -> tickTendrilLash(level, boss, runtime, elapsed);
 			case FORCED_EVICTION -> tickEviction(level, runtime, elapsed);
 		};
 		WorldInterfaceState.AttackEnvelope replacement = runtime.envelope();
@@ -194,32 +303,130 @@ public final class WorldInterfaceAttackService {
 		return new AttackTick(AttackStatus.COMPLETE, Optional.of(replacement));
 	}
 
-	/** Called before virtual damage routing when a player arrow touches the root or one of its parts. */
-	public static boolean captureArrow(ServerLevel level, WorldInterfaceEntity boss, AbstractArrow arrow) {
-		if (boss.encounterId() == null || arrow == null || arrow.isRemoved()) return false;
-		AttackRuntime runtime = ACTIVE.get(boss.encounterId());
-		if (runtime == null || runtime.action != WorldInterfaceAction.ARROW_REFLECTION) return false;
-		if (!(arrow.getOwner() instanceof ServerPlayer) || arrow.getTags().contains(REFLECTED_ARROW_TAG)) return false;
-		if (!runtime.capturedArrows.add(arrow.getUUID())) return true;
-		arrow.setDeltaMovement(Vec3.ZERO);
-		arrow.setNoGravity(true);
-		arrow.setNoPhysics(true);
-		arrow.pickup = AbstractArrow.Pickup.DISALLOWED;
-		arrow.addTag(CAPTURED_ARROW_TAG);
-		arrow.setPos(boss.getX(), boss.getEyeY(), boss.getZ());
-		level.sendParticles(ParticleTypes.ENCHANT, arrow.getX(), arrow.getY(), arrow.getZ(), 10,
-				0.3D, 0.3D, 0.3D, 0.04D);
-		return true;
+	/**
+	 * Opens a third-phase volley: extra attacks started outside the scheduled lane and outside the
+	 * persisted envelope, so several of them can be in the air at once and the scheduled attack does
+	 * not have to wait for any of them.
+	 *
+	 * <p>Returns how many actually started. Refuses everything outside third phase, and trims itself
+	 * against {@link #MAX_VOLLEY} so a stalled encounter cannot accumulate a wall of them.</p>
+	 */
+	public static int beginVolley(ServerLevel level, WorldInterfaceEntity boss,
+			WorldInterfaceState.Snapshot snapshot, List<ServerPlayer> participants, long activeTick,
+			long sequence) {
+		initialize();
+		Objects.requireNonNull(participants, "participants");
+		if (snapshot == null || snapshot.stage() != WorldInterfaceStage.PHASE_3 || participants.isEmpty()) {
+			return 0;
+		}
+		UUID encounterId = snapshot.encounterId().orElse(null);
+		if (encounterId == null || !encounterId.equals(boss.encounterId())) return 0;
+		List<AttackRuntime> lane = VOLLEY.computeIfAbsent(encounterId,
+				ignored -> new CopyOnWriteArrayList<>());
+		int room = MAX_VOLLEY - lane.size();
+		if (room <= 0) return 0;
+
+		WorldInterfaceAction scheduled = snapshot.currentAttack()
+				.flatMap(envelope -> WorldInterfaceAction.fromWireIdOrEmpty(envelope.actionWireId()))
+				.orElse(null);
+		int wanted = Math.min(room,
+				WorldInterfaceActionScheduler.volleySize(snapshot.deterministicSeed(), activeTick));
+		int started = 0;
+		for (int slot = 0; slot < wanted; slot++) {
+			long seed = mix(snapshot.deterministicSeed() ^ (activeTick * 0x9E3779B97F4A7C15L)
+					^ ((long) slot << 40));
+			WorldInterfaceAction action = VOLLEY_ACTIONS.get(
+					(int) Math.floorMod(seed >>> 16, VOLLEY_ACTIONS.size()));
+			// Bolts stack happily - a barrage from three directions is the point. A second flurry of
+			// lashes on top of a running one would just be the same three impacts drawn twice.
+			if (action == WorldInterfaceAction.TENDRIL_LASH
+					&& (scheduled == action || laneHolds(lane, action))) {
+				action = WorldInterfaceAction.ENERGY_ORB;
+			}
+			List<UUID> targets = volleyTargets(action, participants, seed);
+			if (targets.isEmpty() && requiresTarget(action)) continue;
+			AttackRuntime runtime = new AttackRuntime(encounterId, boss.getUUID(), action, activeTick,
+					activeTick + durationTicks(action), sequence, seed, targets, boss.blockPosition(),
+					snapshot.arenaCenter(), snapshot.safeSpawn());
+			lane.add(runtime);
+			started++;
+		}
+		return started;
+	}
+
+	/**
+	 * Advances every volley attack and retires the finished ones. Separate from {@link #tick} because
+	 * these own no persisted envelope: there is nothing to reconcile, only work to run.
+	 */
+	public static void tickVolley(ServerLevel level, WorldInterfaceEntity boss,
+			WorldInterfaceState.Snapshot snapshot, long activeTick) {
+		UUID encounterId = snapshot == null ? null : snapshot.encounterId().orElse(null);
+		if (encounterId == null) return;
+		List<AttackRuntime> lane = VOLLEY.get(encounterId);
+		if (lane == null || lane.isEmpty()) return;
+		if (!snapshot.stage().isCombat() || !encounterId.equals(boss.encounterId())) {
+			clearVolley(level.getServer(), encounterId);
+			return;
+		}
+		for (AttackRuntime runtime : lane) {
+			invalidateUnavailableTargets(level, runtime);
+			long elapsed = Math.max(0L, activeTick - runtime.startedActiveTick);
+			boolean complete = switch (runtime.action) {
+				case ENERGY_ORB -> tickOrb(level, boss, runtime, elapsed);
+				case TENDRIL_LASH -> tickTendrilLash(level, boss, runtime, elapsed);
+				// Unreachable while VOLLEY_ACTIONS holds only the two above, and a safe stop if it
+				// ever grows: an action this lane cannot drive is retired rather than left running.
+				default -> true;
+			};
+			if (complete || activeTick >= runtime.dueActiveTick) {
+				discardVolleyOrb(level.getServer(), runtime);
+				lane.remove(runtime);
+			}
+		}
+	}
+
+	private static boolean laneHolds(List<AttackRuntime> lane, WorldInterfaceAction action) {
+		for (AttackRuntime runtime : lane) if (runtime.action == action) return true;
+		return false;
+	}
+
+	/** A lash swings at whoever is nearest when it lands, so it takes the whole island. */
+	private static List<UUID> volleyTargets(WorldInterfaceAction action,
+			List<ServerPlayer> participants, long seed) {
+		List<UUID> roster = participants.stream()
+				.filter(player -> player.isAlive() && !player.isSpectator())
+				.map(ServerPlayer::getUUID)
+				.sorted(Comparator.comparing(UUID::toString))
+				.toList();
+		if (roster.isEmpty()) return List.of();
+		if (action == WorldInterfaceAction.TENDRIL_LASH) return roster;
+		return List.of(roster.get((int) Math.floorMod(seed >>> 24, roster.size())));
+	}
+
+	private static void clearVolley(MinecraftServer server, UUID encounterId) {
+		List<AttackRuntime> lane = VOLLEY.remove(encounterId);
+		if (lane == null) return;
+		for (AttackRuntime runtime : lane) discardVolleyOrb(server, runtime);
+	}
+
+	private static void discardVolleyOrb(MinecraftServer server, AttackRuntime runtime) {
+		if (runtime.orbId == null) return;
+		ServerLevel level = server.getLevel(Level.END);
+		if (level == null) return;
+		Entity orb = level.getEntity(runtime.orbId);
+		if (orb != null) orb.discard();
 	}
 
 	public static int cancelAndRestore(MinecraftServer server, UUID encounterId) {
 		AttackRuntime runtime = ACTIVE.remove(encounterId);
 		if (runtime != null) cancelRuntime(server, runtime, true);
+		clearVolley(server, encounterId);
 		return restoreRecoveryEntries(server, encounterId, null);
 	}
 
 	public static void onDisconnect(ServerPlayer player, UUID encounterId) {
 		MinecraftServer server = Objects.requireNonNull(player.level().getServer(), "server");
+		markVolleyTargetGone(encounterId, player.getUUID());
 		AttackRuntime runtime = ACTIVE.get(encounterId);
 		if (runtime != null) {
 			runtime.unavailableTargets.add(player.getUUID());
@@ -232,6 +439,7 @@ public final class WorldInterfaceAttackService {
 
 	public static void onDeath(ServerPlayer player, UUID encounterId) {
 		MinecraftServer server = Objects.requireNonNull(player.level().getServer(), "server");
+		markVolleyTargetGone(encounterId, player.getUUID());
 		AttackRuntime runtime = ACTIVE.get(encounterId);
 		if (runtime != null) {
 			runtime.unavailableTargets.add(player.getUUID());
@@ -242,9 +450,17 @@ public final class WorldInterfaceAttackService {
 		restoreRecoveryEntries(server, encounterId, player.getUUID());
 	}
 
+	/** Keeps a volley from keeping a player it can no longer see on its books. */
+	private static void markVolleyTargetGone(UUID encounterId, UUID playerId) {
+		List<AttackRuntime> lane = VOLLEY.get(encounterId);
+		if (lane == null) return;
+		for (AttackRuntime runtime : lane) runtime.unavailableTargets.add(playerId);
+	}
+
 	public static int onRestart(MinecraftServer server, UUID encounterId) {
 		AttackRuntime runtime = ACTIVE.remove(encounterId);
 		if (runtime != null) cancelRuntime(server, runtime, true);
+		clearVolley(server, encounterId);
 		clearRestartTransients(server, encounterId);
 		return restoreRecoveryEntries(server, encounterId, null);
 	}
@@ -254,17 +470,16 @@ public final class WorldInterfaceAttackService {
 		if (level == null) return;
 		List<Entity> stale = new ArrayList<>();
 		for (Entity entity : level.getAllEntities()) {
-			if (entity instanceof AbstractArrow arrow
-					&& (arrow.getTags().contains(REFLECTED_ARROW_TAG)
-					|| arrow.getTags().contains(CAPTURED_ARROW_TAG))) {
-				stale.add(arrow);
-			} else if (entity instanceof WorldInterfaceEnergyOrbEntity orb
+			if (entity instanceof WorldInterfaceEnergyOrbEntity orb
 					&& encounterId.equals(orb.encounterId())) {
 				stale.add(orb);
 			}
 		}
 		stale.forEach(Entity::discard);
-		PROJECTILES.entrySet().removeIf(entry -> encounterId.equals(entry.getValue().encounterId));
+		// A restart must not leave a player holding a placeholder for a custody that no longer exists.
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			ConfiscationService.clearPlaceholders(player);
+		}
 	}
 
 	public static int restorePendingFor(ServerPlayer player, UUID encounterId) {
@@ -272,102 +487,258 @@ public final class WorldInterfaceAttackService {
 				encounterId, player.getUUID());
 	}
 
+	/**
+	 * The laser no longer resolves as a single shot down a frozen line. It locks a player, warns
+	 * them, and then sweeps: every tick the beam is aimed at where the target was
+	 * {@link WorldInterfaceProtocol#LASER_TRACKING_LAG_TICKS} ticks ago. Standing still puts the
+	 * player exactly where the beam is about to be; running puts the beam behind them. The client
+	 * resolves the same lagged aim point, so the shaft that is drawn is the shaft that burns.
+	 */
 	private static boolean tickLaser(ServerLevel level, WorldInterfaceEntity boss,
 			AttackRuntime runtime, long elapsed) {
-		if (!runtime.damageApplied && elapsed >= LASER_WARNING_TICKS) {
-			ServerPlayer target = onlineTarget(level, runtime, 0);
-			Vec3 start = boss.getEyePosition();
-			Vec3 end = target == null ? start.add(boss.getLookAngle().scale(48.0D)) : target.getEyePosition();
-			if (target != null) damage(level, boss, target, 12.0F);
-			AABB sweepBounds = new AABB(start, end).inflate(4.0D);
+		ServerPlayer target = onlineTarget(level, runtime, 0);
+		if (target != null) runtime.recordAim(target.getEyePosition());
+		if (elapsed < LASER_WARNING_TICKS) {
+			announceLock(level, runtime, target, elapsed, LASER_WARNING_TICKS);
+			return false;
+		}
+		Vec3 start = WorldInterfaceAnatomy.coreOrigin(boss);
+		Vec3 aim = runtime.laggedAim(LASER_TRACKING_LAG_TICKS);
+		if (aim == null) {
+			aim = target != null ? target.getEyePosition()
+					: start.add(boss.getLookAngle().scale(48.0D));
+		}
+		Vec3 end = groundUnder(level, aim);
+		long sweptTicks = elapsed - LASER_WARNING_TICKS;
+		if (sweptTicks == 0L) {
+			// Fired from both ends: the muzzle says who shot, the impact says where it landed.
+			AudioService.playBounded(level, BlockPos.containing(start),
+					ModSounds.WORLD_INTERFACE_LASER_FIRE, SoundSource.HOSTILE, 1.0F, 1.0F);
+			runtime.damageApplied = true;
+		}
+		if (sweptTicks % LASER_BURN_INTERVAL_TICKS == 0L) {
+			AABB sweepBounds = new AABB(start, end).inflate(LASER_BURN_RADIUS + 1.0D);
+			double burnSqr = LASER_BURN_RADIUS * LASER_BURN_RADIUS;
 			for (ServerPlayer nearby : level.getEntitiesOfClass(ServerPlayer.class, sweepBounds,
 					candidate -> candidate.isAlive() && !candidate.isSpectator())) {
-				if (nearby != target && distanceToSegmentSqr(nearby.getEyePosition(), start, end) <= 16.0D) {
-					damage(level, boss, nearby, 6.0F);
+				if (distanceToSegmentSqr(nearby.getEyePosition(), start, end) <= burnSqr) {
+					damage(level, boss, nearby, formDamage(boss, LASER_BURN_DAMAGE));
 				}
 			}
-			List<BlockPos> scarPath = laserCandidates(level, start, end);
-			EndBossArenaService.queueLaserScar(level, scarPath, runtime.seed);
-			for (Vec3 burst : directionalLaserBursts(start, end)) {
-				level.sendParticles(ParticleTypes.EXPLOSION, burst.x, burst.y, burst.z,
-						4, 0.55D, 0.30D, 0.55D, 0.025D);
-			}
-			playActionCue(level, BlockPos.containing(end), runtime.action, 0.92F, 1.05F);
-			runtime.damageApplied = true;
-			runtime.cursor = scarPath.size();
 		}
-		return elapsed >= LASER_WARNING_TICKS + 1L;
+		// Where the beam meets the floor it detonates, every tick, for as long as it is sweeping.
+		// The contact point is the only part of the shot that is at the player's own eye level, so
+		// it is what actually communicates where the beam is - a scar appearing behind you after
+		// the fact does not.
+		BlockPos impact = BlockPos.containing(end);
+		level.sendParticles(ParticleTypes.EXPLOSION, end.x, end.y + 0.25D, end.z,
+				3, 0.55D, 0.25D, 0.55D, 0.03D);
+		level.sendParticles(ParticleTypes.LARGE_SMOKE, end.x, end.y + 0.35D, end.z,
+				6, 0.60D, 0.30D, 0.60D, 0.05D);
+		level.sendParticles(ParticleTypes.LAVA, end.x, end.y + 0.2D, end.z,
+				4, 0.45D, 0.10D, 0.45D, 0.06D);
+		if (sweptTicks % LASER_SCAR_INTERVAL_TICKS == 0L) {
+			// The impact walks with the beam, so the arena ends up wearing the whole sweep path
+			// instead of a single line drawn in one frame.
+			runtime.cursor += EndBossArenaService.queueExplosionScar(level, impact,
+					LASER_SCAR_RADIUS + boss.form(),
+					LASER_SCAR_EDITS + LASER_SCAR_EDITS * boss.form() / 2,
+					runtime.seed ^ impact.asLong());
+			// The full emitter, sparingly: one per burst reads as a detonation walking across the
+			// island, where one every tick would just be a wall of smoke nobody can see through.
+			level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, end.x, end.y + 0.4D, end.z,
+					1, 0.0D, 0.0D, 0.0D, 0.0D);
+			AudioService.playBounded(level, impact, ModSounds.WORLD_INTERFACE_LASER_FIRE,
+					SoundSource.HOSTILE, 0.55F, 1.18F);
+			// The contact detonates, so it sounds like a detonation: vanilla's own explosion, the
+			// one every player already reads as "that just blew a hole in something".
+			//
+			// Pitched off the impact position rather than drawn from a random source. Twenty of
+			// these land during a single sweep, and at a fixed pitch that reads as one sample on
+			// loop; the scatter hides the repetition while keeping a replayed encounter identical
+			// to the one that was recorded, which the rest of this fight is built on.
+			float scatter = 1.0F
+					+ ((mix(impact.asLong()) >>> 40) / (float) 0xFFFFFF * 2.0F - 1.0F) * 0.16F;
+			AudioService.playBounded(level, impact, SoundEvents.GENERIC_EXPLODE.value(),
+					SoundSource.HOSTILE, 0.75F, scatter);
+		}
+		return elapsed >= LASER_WARNING_TICKS + LASER_SWEEP_TICKS;
 	}
 
-	private static boolean tickOrb(ServerLevel level, AttackRuntime runtime, long elapsed) {
+	/**
+	 * Charges, fires once, then gets out of the way.
+	 *
+	 * <p>The core spins up for {@link WorldInterfaceProtocol#ORB_WARNING_TICKS} with the marked
+	 * player ringed by the shared lock tell, so being the one it has picked is knowable before the
+	 * bolt exists. After that the bolt owns its own flight and impact, and this only holds the action
+	 * envelope open for as long as it is in the air; the shot is aimed at launch, so the target
+	 * leaving no longer unmakes it.</p>
+	 */
+	private static boolean tickOrb(ServerLevel level, WorldInterfaceEntity boss,
+			AttackRuntime runtime, long elapsed) {
+		if (elapsed < ORB_WARNING_TICKS) {
+			ServerPlayer marked = onlineTarget(level, runtime, 0);
+			announceLock(level, runtime, marked, elapsed, ORB_WARNING_TICKS);
+			chargeCore(level, boss, elapsed / (float) ORB_WARNING_TICKS);
+			return false;
+		}
+		if (runtime.orbId == null && !runtime.damageApplied) {
+			runtime.damageApplied = true;
+			ServerPlayer target = onlineTarget(level, runtime, 0);
+			// Nobody left to shoot at, and the bolt is aimed once - so there is nothing to aim it at.
+			if (target == null) return true;
+			WorldInterfaceEnergyOrbEntity orb = WorldInterfaceEnergyOrbEntity.create(level, boss,
+					runtime.encounterId, target);
+			runtime.orbId = orb.getUUID();
+		}
 		Entity orb = runtime.orbId == null ? null : level.getEntity(runtime.orbId);
 		if (orb == null || orb.isRemoved()) return true;
-		if (onlineTarget(level, runtime, 0) == null) {
-			orb.discard();
-			return true;
-		}
-		if (elapsed >= ORB_TRACKING_TICKS) {
+		if (elapsed >= ORB_WARNING_TICKS + ORB_TRACKING_TICKS) {
 			orb.discard();
 			return true;
 		}
 		return false;
 	}
 
-	private static boolean tickGrabSlam(ServerLevel level, WorldInterfaceEntity boss,
+	/**
+	 * The other half of the breath weapon's tell, drawn at the interface rather than at the victim:
+	 * the core gathers visibly before it fires, so the rest of the table can see the shot coming as
+	 * well as the person it is coming for.
+	 */
+	private static void chargeCore(ServerLevel level, WorldInterfaceEntity boss, float progress) {
+		Vec3 core = WorldInterfaceAnatomy.coreOrigin(boss);
+		double radius = WorldInterfaceAnatomy.coreRadius(boss.form()) * (1.35D - progress * 0.85D);
+		int samples = 6 + Math.round(progress * 10.0F);
+		for (int index = 0; index < samples; index++) {
+			double angle = Math.PI * 2.0D * index / samples + progress * 6.0D;
+			level.sendParticles(CHARGE_PARTICLE,
+					core.x + Math.cos(angle) * radius, core.y + Math.sin(angle * 1.7D) * radius * 0.4D,
+					core.z + Math.sin(angle) * radius, 1, 0.0D, 0.0D, 0.0D, 0.0D);
+		}
+		if (progress <= 0.02F || (long) (progress * ORB_WARNING_TICKS) % 8L == 0L) {
+			AudioService.playBounded(level, BlockPos.containing(core), ModSounds.WORLD_INTERFACE_ORB,
+					SoundSource.HOSTILE, 0.45F + progress * 0.4F, 0.72F + progress * 0.55F);
+		}
+	}
+
+	/**
+	 * Replaces the old mental assault, which was an unavoidable flat hit dressed as a screen effect.
+	 * The lance picks a player, tracks their feet while it locks on, freezes its impact when the lock
+	 * resolves, charges for half a second on that fixed spot, and only then falls. Everything after
+	 * the freeze is the player's to dodge.
+	 */
+	private static boolean tickSkyLance(ServerLevel level, WorldInterfaceEntity boss,
 			AttackRuntime runtime, long elapsed) {
+		long chargeStart = SKY_LANCE_LOCK_TICKS;
+		long strikeTick = chargeStart + SKY_LANCE_CHARGE_TICKS;
 		ServerPlayer target = onlineTarget(level, runtime, 0);
-		if (target == null) return elapsed >= GRAB_WARNING_TICKS;
-		if (elapsed >= GRAB_WARNING_TICKS && runtime.control == null) {
-			runtime.control = beginControl(level.getServer(), runtime, target);
+		if (elapsed < chargeStart) {
+			if (target != null) runtime.lanceImpact = groundUnder(level, target.position());
+			announceLock(level, runtime, target, elapsed, SKY_LANCE_LOCK_TICKS);
+			markLanceImpact(level, boss, runtime, 0.35F);
+			return false;
 		}
-		if (runtime.control != null && elapsed < GRAB_WARNING_TICKS + GRAB_HOLD_TICKS) {
-			holdAtBoss(target, boss, 4.0D);
+		if (runtime.lanceImpact == null) {
+			runtime.lanceImpact = target != null ? groundUnder(level, target.position())
+					: runtime.safeSpawn.getCenter();
 		}
-		if (!runtime.damageApplied && runtime.control != null
-				&& elapsed >= GRAB_WARNING_TICKS + GRAB_HOLD_TICKS) {
-			Vec3 impact = safeLanding(level, runtime, target.position());
-			target.teleportTo(impact.x, impact.y + 0.25D, impact.z);
-			finishControl(level.getServer(), runtime, target, false);
-			damage(level, boss, target, 12.0F);
+		if (elapsed < strikeTick) {
+			// The mark stops moving here. Escalating cue and ring so the last half second reads as a
+			// countdown on a fixed place rather than as continued tracking.
+			float charge = (elapsed - chargeStart + 1) / (float) SKY_LANCE_CHARGE_TICKS;
+			markLanceImpact(level, boss, runtime, 0.55F + charge * 0.75F);
+			if ((elapsed - chargeStart) % 3L == 0L) {
+				AudioService.playBounded(level, BlockPos.containing(runtime.lanceImpact),
+						ModSounds.WORLD_INTERFACE_MENTAL, SoundSource.HOSTILE,
+						0.55F + charge * 0.35F, 0.85F + charge * 0.5F);
+			}
+			return false;
+		}
+		if (!runtime.damageApplied) {
+			Vec3 impact = runtime.lanceImpact;
+			double lanceRadius = formRadius(boss, SKY_LANCE_RADIUS);
+			double radiusSqr = lanceRadius * lanceRadius;
 			for (ServerPlayer nearby : level.getEntitiesOfClass(ServerPlayer.class,
-					new AABB(impact, impact).inflate(4.0D), candidate -> candidate != target
-							&& candidate.isAlive() && !candidate.isSpectator())) {
-				if (nearby.position().distanceToSqr(impact) <= 16.0D) damage(level, boss, nearby, 6.0F);
+					new AABB(impact, impact).inflate(lanceRadius + 1.0D),
+					candidate -> candidate.isAlive() && !candidate.isSpectator())) {
+				if (nearby.position().distanceToSqr(impact) <= radiusSqr) {
+					damage(level, boss, nearby, formDamage(boss, SKY_LANCE_DAMAGE));
+				}
 			}
-			level.sendParticles(ParticleTypes.EXPLOSION, impact.x, impact.y, impact.z, 24,
-					1.8D, 0.3D, 1.8D, 0.08D);
+			// Vanilla's own detonation, in the shape a player already reads as "that was an
+			// explosion": the emitter plus the sound TNT makes, at the point of contact.
+			BlockPos impactPos = BlockPos.containing(impact);
+			// A detonation that travels outward rather than a puff at a point.
+			//
+			// Emitters at the centre alone read as one small explosion no matter how big the crater
+			// is. This is a front: a tight core, then rings of TNT bursts stepping outward across the
+			// whole radius, each one seeded a little further and thrown outward so the wave keeps
+			// moving after it is drawn. Ordered inside-out, which is the direction a blast reads in.
+			level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, impact.x, impact.y + 0.5D, impact.z,
+					1, 0.0D, 0.0D, 0.0D, 0.0D);
+			for (int ring = 1; ring <= SKY_LANCE_SHOCK_RINGS; ring++) {
+				double radius = lanceRadius * 0.9D * ring;
+				int samples = 5 + ring * 4;
+				for (int index = 0; index < samples; index++) {
+					double angle = Math.PI * 2.0D * index / samples + ring * 0.35D;
+					double x = impact.x + Math.cos(angle) * radius;
+					double z = impact.z + Math.sin(angle) * radius;
+					// The full emitter only on the inner rings; further out it would be a smoke wall.
+					if (ring <= 2 && index % 3 == 0) {
+						level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, x, impact.y + 0.5D, z,
+								1, 0.0D, 0.0D, 0.0D, 0.0D);
+					}
+					level.sendParticles(ParticleTypes.EXPLOSION, x, impact.y + 0.4D, z,
+							2, 0.5D, 0.3D, 0.5D, 0.02D);
+					// Velocity pointed outward along the ring, so the front keeps expanding.
+					level.sendParticles(ParticleTypes.LARGE_SMOKE, x, impact.y + 0.5D, z,
+							0, Math.cos(angle), 0.18D, Math.sin(angle), 0.34D + ring * 0.06D);
+					level.sendParticles(ParticleTypes.CAMPFIRE_COSY_SMOKE, x, impact.y + 0.3D, z,
+							0, Math.cos(angle), 0.05D, Math.sin(angle), 0.5D);
+				}
+			}
+			level.sendParticles(ParticleTypes.END_ROD, impact.x, impact.y + 1.0D, impact.z,
+					90, 0.6D, 3.5D, 0.6D, 0.28D);
+			AudioService.playBounded(level, impactPos, SoundEvents.GENERIC_EXPLODE.value(),
+					SoundSource.HOSTILE, 1.0F, 0.82F);
+			craterAt(level, boss, runtime, impact, SKY_LANCE_SCAR_RADIUS, SKY_LANCE_SCAR_EDITS);
+			corruptAround(level, runtime, impactPos);
+			// Only the third form is large enough for this to read as reach rather than coincidence.
+			if (boss.form() == WorldInterfaceEntity.FORM_INTERFACE) {
+				EndBossArenaService.shearNearestSpikeCrown(level, BlockPos.containing(impact),
+						runtime.seed ^ 0x5C0A11L);
+			}
+			AudioService.playBounded(level, BlockPos.containing(impact),
+					ModSounds.WORLD_INTERFACE_LASER_FIRE, SoundSource.HOSTILE, 1.0F, 0.72F);
 			runtime.damageApplied = true;
 		}
-		return elapsed >= GRAB_WARNING_TICKS + GRAB_HOLD_TICKS + 1L;
+		// The column keeps burning for a moment, so the strike has a visible aftermath.
+		if ((elapsed - strikeTick) % 2L == 0L) markLanceImpact(level, boss, runtime, 0.9F);
+		return elapsed >= strikeTick + SKY_LANCE_STRIKE_TICKS;
 	}
 
-	private static boolean tickMental(ServerLevel level, WorldInterfaceEntity boss,
-			AttackRuntime runtime, long elapsed) {
-		if (!runtime.damageApplied && elapsed >= MENTAL_WARNING_TICKS) {
-			for (UUID targetId : runtime.targets) {
-				if (runtime.unavailableTargets.contains(targetId)) continue;
-				ServerPlayer target = level.getServer().getPlayerList().getPlayer(targetId);
-				if (target != null && target.level() == level && target.isAlive()) damage(level, boss, target, 4.0F);
-			}
-			playActionCue(level, boss.blockPosition(), runtime.action, 0.95F, 0.70F);
-			runtime.damageApplied = true;
-		}
-		return elapsed >= MENTAL_WARNING_TICKS + MENTAL_EFFECT_TICKS;
-	}
-
+	/**
+	 * Custody is now visible in the inventory instead of being a hole in it. The taken tool is
+	 * replaced in its own slot by a barrier placeholder the player can shuffle around but cannot
+	 * drop or use, so "the interface is holding my sword" is legible without a HUD line, and the
+	 * exact stack still comes back out of the durable ledger.
+	 */
 	private static boolean tickWeaponSteal(ServerLevel level, WorldInterfaceEntity boss,
 			WorldInterfaceState.Snapshot snapshot, AttackRuntime runtime, long elapsed) {
 		ServerPlayer target = onlineTarget(level, runtime, 0);
-		if (!runtime.damageApplied && elapsed >= WEAPON_WARNING_TICKS) {
+		if (elapsed < WEAPON_WARNING_TICKS) {
+			announceLock(level, runtime, target, elapsed, WEAPON_WARNING_TICKS);
+			return false;
+		}
+		if (!runtime.damageApplied) {
 			if (target != null) {
-				damage(level, boss, target, 10.0F);
+				damage(level, boss, target, formDamage(boss, 10.0F));
 				runtime.weapon = takeSelectedWeapon(level.getServer(), snapshot, runtime, target);
+				if (runtime.weapon != null) {
+					playActionCue(level, target.blockPosition(), runtime.action, 0.9F, 0.78F);
+				}
 			}
 			runtime.damageApplied = true;
-		}
-		if (runtime.weapon != null && !runtime.weaponUsed && elapsed >= WEAPON_WARNING_TICKS + 40L) {
-			simulateWeaponUse(level, boss, runtime, target);
-			runtime.weaponUsed = true;
 		}
 		if (runtime.weapon != null && elapsed >= WEAPON_WARNING_TICKS + WEAPON_CUSTODY_TICKS) {
 			deliverRecovery(level.getServer(), runtime.encounterId, runtime.weapon.recoveryId,
@@ -377,49 +748,113 @@ public final class WorldInterfaceAttackService {
 		return elapsed >= WEAPON_WARNING_TICKS + WEAPON_CUSTODY_TICKS + 1L;
 	}
 
+	/**
+	 * Same staged carry as the slam, but the release throws the victim straight up and lets go.
+	 *
+	 * <p>Throwing them at a scripted landing point meant the encounter authored both ends of the
+	 * arc, and the player was a passenger for all of it. Hurling them into the sky hands the second
+	 * half back: the interface decides they are going up, and what happens on the way down is
+	 * theirs - a water bucket, a slow-fall potion, or the ground.</p>
+	 */
 	private static boolean tickGrabThrow(ServerLevel level, WorldInterfaceEntity boss,
 			AttackRuntime runtime, long elapsed) {
+		long liftStart = GRAB_WARNING_TICKS;
+		long windupStart = liftStart + GRAB_LIFT_TICKS;
+		long launchTick = windupStart + THROW_WINDUP_TICKS;
+		long endTick = launchTick + THROW_RELEASE_TICKS;
 		ServerPlayer grabbed = onlineTarget(level, runtime, 0);
-		if (grabbed == null) return elapsed >= GRAB_WARNING_TICKS;
-		if (elapsed >= GRAB_WARNING_TICKS && runtime.control == null) {
-			runtime.control = beginControl(level.getServer(), runtime, grabbed);
+		if (grabbed == null) return elapsed >= liftStart;
+		if (elapsed < liftStart) {
+			announceLock(level, runtime, grabbed, elapsed, GRAB_WARNING_TICKS);
+			return false;
 		}
-		if (runtime.control != null && elapsed < GRAB_WARNING_TICKS + 20L) holdAtBoss(grabbed, boss, 5.0D);
-		long throwStartTick = GRAB_WARNING_TICKS + 20L;
-		long throwEndTick = GRAB_WARNING_TICKS + 30L;
-		if (!runtime.damageApplied && runtime.control != null && elapsed >= throwStartTick) {
-			ServerPlayer other = onlineTarget(level, runtime, 1);
-			if (runtime.throwLanding == null) {
-				Vec3 desired = other == null ? runtime.safeSpawn.getCenter() : other.position();
-				runtime.throwStart = grabbed.position();
-				runtime.throwLanding = safeLanding(level, runtime, desired);
-			}
-			double progress = Math.clamp((elapsed - throwStartTick)
-					/ (double) Math.max(1L, throwEndTick - throwStartTick), 0.0D, 1.0D);
-			Vec3 path = runtime.throwStart.add(runtime.throwLanding.subtract(runtime.throwStart).scale(progress))
-					.add(0.0D, Math.sin(progress * Math.PI) * 6.0D, 0.0D);
-			grabbed.setNoGravity(true);
-			grabbed.setDeltaMovement(Vec3.ZERO);
-			grabbed.teleportTo(path.x, path.y, path.z);
-			if (progress >= 1.0D) {
-				grabbed.teleportTo(runtime.throwLanding.x, runtime.throwLanding.y + 0.25D,
-						runtime.throwLanding.z);
-				grabbed.setDeltaMovement(Vec3.ZERO);
-				finishControl(level.getServer(), runtime, grabbed, false);
-				damage(level, boss, grabbed, 10.0F);
-				if (other != null && other != grabbed
-						&& other.position().distanceToSqr(runtime.throwLanding) <= 16.0D) {
-					damage(level, boss, other, 10.0F);
-				}
+		if (runtime.control == null && !runtime.damageApplied) {
+			// The lock is an actual warning, not a countdown to a foregone conclusion.
+			//
+			// The grab used to seize whoever it had marked wherever they had got to, which made the
+			// two and a half seconds of telegraph pure theatre - there was nothing to do with them.
+			// The tendrils have a reach; run past it before they close and they come back empty.
+			if (grabbed.distanceToSqr(boss) > GRAB_REACH * GRAB_REACH) {
 				runtime.damageApplied = true;
+				Vec3 empty = carryHold(boss, grabbed.position());
+				level.sendParticles(ParticleTypes.REVERSE_PORTAL, boss.getX(), empty.y, boss.getZ(),
+						40, 3.0D, 1.2D, 3.0D, 0.14D);
+				AudioService.playBounded(level, BlockPos.containing(empty), ModSounds.WORLD_INTERFACE_GRAB,
+						SoundSource.HOSTILE, 0.7F, 0.62F);
+				TerminalNoticeService.encounter(grabbed, Component.translatable(
+						"message.thefourthfrequency.world_interface.grab_evaded"));
+				return true;
 			}
+			runtime.control = beginControl(level.getServer(), runtime, grabbed);
+			runtime.carryStart = grabbed.position();
+			// The bearing to hurl them along, fixed at the moment of the grab: whichever way they
+			// already were from the interface. Frozen here rather than resampled every tick so the
+			// swing is one continuous arc instead of a direction that chases the victim around.
+			runtime.throwBearing = outwardBearing(runtime, grabbed.position(), boss.position());
+			AudioService.playBounded(level, grabbed.blockPosition(), ModSounds.WORLD_INTERFACE_GRAB,
+					SoundSource.HOSTILE, 0.9F, 1.05F);
 		}
-		return elapsed >= throwEndTick;
+		if (runtime.control == null && !runtime.damageApplied) return elapsed >= endTick;
+		Vec3 hold = carryHold(boss, runtime.carryStart);
+		if (elapsed < windupStart) {
+			double progress = easeOut((elapsed - liftStart + 1) / (double) GRAB_LIFT_TICKS);
+			carryTo(grabbed, runtime.carryStart.lerp(hold, progress)
+					.add(0.0D, Math.sin(progress * Math.PI) * 1.8D, 0.0D));
+			return false;
+		}
+		if (elapsed < launchTick) {
+			// Swung out from under the body, not spun on the spot.
+			//
+			// The wind-up is what makes the launch survivable: it ends with the victim past the rim
+			// of the mass, in open air, so the impulse that follows does not have thirty-three blocks
+			// of interface in front of it. Dips as it goes so the release is an underarm hurl.
+			double swing = easeIn((elapsed - windupStart + 1) / (double) THROW_WINDUP_TICKS);
+			double reach = (WorldInterfaceAnatomy.massRadius(boss.form()) + THROW_CLEARANCE) * swing;
+			Vec3 bearing = runtime.throwBearing;
+			carryTo(grabbed, hold.add(bearing.x * reach, -swing * 2.2D, bearing.z * reach));
+			return false;
+		}
+		if (!runtime.damageApplied) {
+			// Control ends at the launch, not at a landing: from here the fall is the player's
+			// problem and their clutch, so nothing may keep holding their position.
+			finishControl(level.getServer(), runtime, grabbed, false);
+			grabbed.setNoGravity(false);
+			// Thrown out and up, not straight up.
+			//
+			// A vertical launch reads as an elevator: the victim goes up, comes down on the spot
+			// they left, and the interface may as well have pushed a button. Hurling them away from
+			// itself gives the throw a direction the whole table can see, and it lands them
+			// somewhere they have to walk back from - which is the point of being thrown.
+			//
+			// Along the same bearing the wind-up already swung them out on, so the release continues
+			// the arc rather than snapping to wherever they happen to have ended up.
+			Vec3 away = runtime.throwBearing != null ? runtime.throwBearing
+					: outwardBearing(runtime, grabbed.position(), boss.position());
+			grabbed.setDeltaMovement(away.x * THROW_LAUNCH_DRIFT, THROW_LAUNCH_SPEED,
+					away.z * THROW_LAUNCH_DRIFT);
+			grabbed.hurtMarked = true;
+			grabbed.fallDistance = 0.0F;
+			damage(level, boss, grabbed, formDamage(boss, 10.0F));
+			level.sendParticles(ParticleTypes.EXPLOSION, grabbed.getX(), grabbed.getY(),
+					grabbed.getZ(), 14, 1.2D, 0.6D, 1.2D, 0.09D);
+			AudioService.playBounded(level, grabbed.blockPosition(),
+					ModSounds.WORLD_INTERFACE_THROW, SoundSource.HOSTILE, 1.0F, 0.88F);
+			runtime.damageApplied = true;
+		}
+		return elapsed >= endTick;
 	}
 
-	private static boolean tickHotbar(ServerLevel level, WorldInterfaceState.Snapshot snapshot,
-			AttackRuntime runtime, long elapsed) {
+	/**
+	 * The purge no longer reserves what it throws. The hotbar empties left to right after its
+	 * warning and the stacks land as ordinary drops: anyone can pick them up, and getting them back
+	 * is the table's problem rather than the ledger's.
+	 */
+	private static boolean tickHotbar(ServerLevel level, AttackRuntime runtime, long elapsed) {
 		ServerPlayer target = onlineTarget(level, runtime, 0);
+		if (elapsed < HOTBAR_WARNING_TICKS) {
+			announceLock(level, runtime, target, elapsed, HOTBAR_WARNING_TICKS);
+			return false;
+		}
 		if (target != null && runtime.originalSelectedSlot < 0) {
 			runtime.originalSelectedSlot = target.getInventory().getSelectedSlot();
 		}
@@ -428,7 +863,7 @@ public final class WorldInterfaceAttackService {
 				&& runtime.cursor < HOTBAR_SLOTS) {
 			int slot = runtime.cursor++;
 			target.getInventory().setSelectedSlot(slot);
-			dropHotbarSlot(level, snapshot, runtime, target, slot);
+			dropHotbarSlot(level, runtime, target, slot);
 		}
 		if (elapsed >= HOTBAR_WARNING_TICKS + HOTBAR_STEP_TICKS * HOTBAR_SLOTS + 1L) {
 			if (target != null && runtime.originalSelectedSlot >= 0) {
@@ -439,25 +874,75 @@ public final class WorldInterfaceAttackService {
 		return false;
 	}
 
-	private static boolean tickArrowReflection(ServerLevel level, WorldInterfaceEntity boss,
+	/**
+	 * Replaces arrow reflection. The tendrils rear up over the arena, then lash three times, each
+	 * strike swinging at whoever is nearest at that moment - so the flurry has to be read and moved
+	 * away from rather than simply shot through.
+	 */
+	private static boolean tickTendrilLash(ServerLevel level, WorldInterfaceEntity boss,
 			AttackRuntime runtime, long elapsed) {
-		AABB catchment = boss.getBoundingBox().inflate(13.0D, 3.0D, 13.0D);
-		for (AbstractArrow arrow : level.getEntitiesOfClass(AbstractArrow.class, catchment,
-				candidate -> candidate.isAlive() && !candidate.getTags().contains(REFLECTED_ARROW_TAG))) {
-			captureArrow(level, boss, arrow);
-		}
-		for (UUID arrowId : runtime.capturedArrows) {
-			Entity arrow = level.getEntity(arrowId);
-			if (arrow != null) arrow.setPos(boss.getX(), boss.getEyeY(), boss.getZ());
-		}
-		if (elapsed > 0L && elapsed % ARROW_VOLLEY_INTERVAL == 0L
-				&& runtime.lastArrowVolley != elapsed && !runtime.capturedArrows.isEmpty()) {
-			if (activeReflectedArrowCount(level) <= MAX_REFLECTED_ARROWS - REFLECTED_ARROW_COUNT) {
-				spawnReflectedVolley(level, boss, runtime);
-				runtime.lastArrowVolley = (int) elapsed;
+		if (elapsed < TENDRIL_WARNING_TICKS) {
+			for (UUID targetId : runtime.targets) {
+				if (runtime.unavailableTargets.contains(targetId)) continue;
+				ServerPlayer warned = level.getServer().getPlayerList().getPlayer(targetId);
+				announceLock(level, runtime, warned, elapsed, TENDRIL_WARNING_TICKS);
 			}
+			return false;
 		}
-		return elapsed >= 120L;
+		long sinceWarning = elapsed - TENDRIL_WARNING_TICKS;
+		long total = (long) TENDRIL_STRIKE_INTERVAL_TICKS * TENDRIL_STRIKE_COUNT;
+		if (sinceWarning >= total) return true;
+		long phase = sinceWarning % TENDRIL_STRIKE_INTERVAL_TICKS;
+
+		if (phase == 0L) {
+			// Each lash commits to one spot, here, and stops tracking.
+			//
+			// Picking the nearest player at the moment of impact meant the landing followed whoever
+			// it had chosen, so the only way to not be hit was to not be the closest - which is not
+			// something a player under attack can act on. Choosing now and marking the ground turns
+			// the flurry into three readable events instead of three unavoidable ones.
+			ServerPlayer struck = nearestTarget(level, runtime, boss);
+			runtime.tendrilImpact = struck != null ? groundUnder(level, struck.position())
+					: groundUnder(level, boss.position().add(boss.getLookAngle().scale(12.0D)));
+			AudioService.playBounded(level, BlockPos.containing(runtime.tendrilImpact),
+					ModSounds.WORLD_INTERFACE_ARROW, SoundSource.HOSTILE, 0.7F, 1.35F);
+		}
+		if (runtime.tendrilImpact == null) return false;
+		Vec3 impact = runtime.tendrilImpact;
+
+		if (phase < TENDRIL_STRIKE_TELEGRAPH_TICKS) {
+			// The mark tightens as the limb comes down, on the same clock the damage lands on.
+			float charge = phase / (float) TENDRIL_STRIKE_TELEGRAPH_TICKS;
+			markGround(level, impact, TENDRIL_REACH, 0.4F + charge * 0.9F);
+			if (phase % 4L == 0L) {
+				AudioService.playBounded(level, BlockPos.containing(impact),
+						ModSounds.WORLD_INTERFACE_IMPACT, SoundSource.HOSTILE,
+						0.32F, 1.35F + charge * 0.35F);
+			}
+			return false;
+		}
+		if (phase == TENDRIL_STRIKE_TELEGRAPH_TICKS) {
+			runtime.cursor++;
+			runtime.damageApplied = true;
+			double reachSqr = TENDRIL_REACH * TENDRIL_REACH;
+			for (ServerPlayer nearby : level.getEntitiesOfClass(ServerPlayer.class,
+					new AABB(impact, impact).inflate(TENDRIL_REACH + 1.0D),
+					candidate -> candidate.isAlive() && !candidate.isSpectator())) {
+				if (nearby.position().distanceToSqr(impact) > reachSqr) continue;
+				damage(level, boss, nearby, formDamage(boss, TENDRIL_DAMAGE));
+				Vec3 away = nearby.position().subtract(impact);
+				nearby.knockback(0.85D * (1.0D + boss.form() * 0.3D), -away.x, -away.z);
+				nearby.hurtMarked = true;
+			}
+			level.sendParticles(ParticleTypes.EXPLOSION, impact.x, impact.y + 0.4D, impact.z,
+					10, 1.4D, 0.3D, 1.4D, 0.06D);
+			level.sendParticles(ParticleTypes.REVERSE_PORTAL, impact.x, impact.y + 0.6D, impact.z,
+					50, TENDRIL_REACH * 0.4D, 0.7D, TENDRIL_REACH * 0.4D, 0.16D);
+			craterAt(level, boss, runtime, impact, TENDRIL_SCAR_RADIUS, TENDRIL_SCAR_EDITS);
+			playActionCue(level, BlockPos.containing(impact), runtime.action,
+					0.95F, 0.86F + runtime.cursor * 0.09F);
+		}
+		return false;
 	}
 
 	private static boolean tickEviction(ServerLevel level, AttackRuntime runtime, long elapsed) {
@@ -495,10 +980,176 @@ public final class WorldInterfaceAttackService {
 		return lease;
 	}
 
-	private static void holdAtBoss(ServerPlayer player, WorldInterfaceEntity boss, double heightOffset) {
+	/**
+	 * One step of a carry, called every tick of a lift, hold, swing or slam.
+	 *
+	 * <p>The teleport is the authority - the encounter owns where a carried player is, and nothing
+	 * they press may argue with it. The motion sent alongside it is what the client interpolates
+	 * with between ticks: without it, twenty authoritative positions a second render as twenty
+	 * discrete relocations, which is the same thing the single teleport this replaced looked like,
+	 * only more often.</p>
+	 */
+	private static void carryTo(ServerPlayer player, Vec3 position) {
+		Vec3 step = position.subtract(player.position());
 		player.setNoGravity(true);
+		player.fallDistance = 0.0F;
+		player.teleportTo(position.x, position.y, position.z);
+		player.setDeltaMovement(step);
+		player.hurtMarked = true;
+	}
+
+	/**
+	 * Where a carried player is held: just under the body, never inside it and never in the floor.
+	 *
+	 * <p>This used to be a flat five blocks over the entity position, which stopped meaning anything
+	 * once the position became a bookkeeping point that can sit below the arena. Hung off the
+	 * underside of the drawn mass instead, so the victim is held where the limbs holding them are.
+	 */
+	private static Vec3 carryHold(WorldInterfaceEntity boss, Vec3 carryStart) {
+		double under = boss.getY() + WorldInterfaceAnatomy.massBottomLift(boss.form()) - CARRY_HOLD_DROP;
+		return new Vec3(boss.getX(), Math.max(under, carryStart.y + CARRY_MIN_LIFT), boss.getZ());
+	}
+
+	/**
+	 * Flat unit bearing from the interface to a point, for the direction a victim is swung and hurled
+	 * along. Directly overhead has no outward direction to take, so the deterministic seed picks one
+	 * rather than the throw silently collapsing back to vertical.
+	 */
+	private static Vec3 outwardBearing(AttackRuntime runtime, Vec3 from, Vec3 bossPosition) {
+		Vec3 away = from.subtract(bossPosition);
+		double flat = Math.sqrt(away.x * away.x + away.z * away.z);
+		if (flat < 1.0E-3D) {
+			double angle = ((runtime.seed >>> 17) % 1000) / 1000.0D * Math.PI * 2.0D;
+			return new Vec3(Math.cos(angle), 0.0D, Math.sin(angle));
+		}
+		return new Vec3(away.x / flat, 0.0D, away.z / flat);
+	}
+
+	/** Ends a carry in place, so the last step of an arc does not become a launch. */
+	private static void settleAt(ServerPlayer player, Vec3 position) {
+		player.setNoGravity(true);
+		player.fallDistance = 0.0F;
+		player.teleportTo(position.x, position.y, position.z);
 		player.setDeltaMovement(Vec3.ZERO);
-		player.teleportTo(boss.getX(), boss.getY() + heightOffset, boss.getZ());
+		player.hurtMarked = true;
+	}
+
+	private static double easeOut(double progress) {
+		double clamped = Math.clamp(progress, 0.0D, 1.0D);
+		return 1.0D - Math.pow(1.0D - clamped, 2.4D);
+	}
+
+	private static double easeIn(double progress) {
+		double clamped = Math.clamp(progress, 0.0D, 1.0D);
+		return clamped * clamped * (1.0D + clamped * 0.6D) / 1.6D;
+	}
+
+	/**
+	 * How much harder the same attack lands at each later form.
+	 *
+	 * <p>The rotation unlocks new attacks per phase, but the ones a player already knows kept hitting
+	 * for exactly what they hit for in the first minute - so the interface got wider and slower to
+	 * kill without ever getting more dangerous. These scale what an attack does, never how much room
+	 * there is to answer it: damage, shove and the hole left in the island all grow with the form,
+	 * while the burn radius of the laser and the reach of a lash deliberately do not. Those two are
+	 * load-bearing against their own telegraphs - the beam has to stay inside what its tracking lag
+	 * covers and a lash inside what a sprint out of the marked circle covers - and widening them
+	 * would not make the fight harder, it would make it unfair in a way nobody can see.</p>
+	 *
+	 * <p>These are pre-mitigation figures: {@link WorldInterfaceDamageService#apply} puts them
+	 * through armour, resistance and protection like any other hit, so what a player actually loses
+	 * depends on what they brought. The step per form stays modest because the spread between an
+	 * unarmoured player and a fully enchanted one is already most of an order of magnitude, and
+	 * multiplying that spread again per phase is what made the later forms feel arbitrary.</p>
+	 */
+	private static float formDamage(WorldInterfaceEntity boss, float base) {
+		return base * (1.0F + boss.form() * 0.15F);
+	}
+
+	/** Area scale for the attacks whose radius is not itself the dodge window. */
+	private static double formRadius(WorldInterfaceEntity boss, double base) {
+		return base * (1.0D + boss.form() * 0.22D);
+	}
+
+	/** Drops a point onto the surface below it, which is where scars and impacts belong. */
+	private static Vec3 groundUnder(ServerLevel level, Vec3 position) {
+		int x = (int) Math.floor(position.x);
+		int z = (int) Math.floor(position.z);
+		int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+		double surface = Math.max(level.getMinY() + 1, Math.min(position.y, y));
+		return new Vec3(position.x, surface, position.z);
+	}
+
+	/**
+	 * The shared "you are the one being aimed at" tell. Every locking action calls this for the whole
+	 * of its warning, so a lock always has a sound and a body of particles on the player as well as
+	 * the screen treatment the client draws from the same envelope.
+	 */
+	private static void announceLock(ServerLevel level, AttackRuntime runtime, ServerPlayer target,
+			long elapsed, int warningTicks) {
+		if (target == null) return;
+		float progress = Math.clamp(elapsed / (float) Math.max(1, warningTicks), 0.0F, 1.0F);
+		if (elapsed == 0L) {
+			AudioService.playBounded(level, target.blockPosition(), sound(runtime.action),
+					SoundSource.HOSTILE, 0.85F, 0.9F);
+		}
+		// Tightens as the lock resolves: a ring that closes is readable at a glance, a steady ring
+		// is just decoration and says nothing about how long is left.
+		int every = progress < 0.6F ? 4 : 2;
+		if (elapsed % every != 0L) return;
+		double radius = 1.9D - progress * 1.25D;
+		int samples = 8;
+		for (int index = 0; index < samples; index++) {
+			double angle = Math.PI * 2.0D * index / samples + elapsed * 0.16D;
+			level.sendParticles(ParticleTypes.END_ROD,
+					target.getX() + Math.cos(angle) * radius, target.getY() + 0.15D,
+					target.getZ() + Math.sin(angle) * radius, 1, 0.0D, 0.0D, 0.0D, 0.0D);
+		}
+		if (progress >= 0.6F && elapsed % 4L == 0L) {
+			AudioService.playBounded(level, target.blockPosition(), ModSounds.WORLD_INTERFACE_IMPACT,
+					SoundSource.HOSTILE, 0.30F, 1.45F + progress * 0.35F);
+		}
+	}
+
+	/** The ground mark the sky lance is about to fall on; intensity carries how close that is. */
+	private static void markLanceImpact(ServerLevel level, WorldInterfaceEntity boss,
+			AttackRuntime runtime, float intensity) {
+		if (runtime.lanceImpact == null) return;
+		// Drawn at the radius that will actually be hit, so a bigger lance is a visibly bigger ring.
+		markGround(level, runtime.lanceImpact, formRadius(boss, SKY_LANCE_RADIUS), intensity);
+	}
+
+	/**
+	 * A ring on the floor saying "this is about to be hit". Shared by every attack that commits to
+	 * a spot ahead of time, so a marked circle means the same thing whichever limb drew it.
+	 */
+	private static void markGround(ServerLevel level, Vec3 impact, double radius, float intensity) {
+		int samples = Math.clamp(Math.round(10.0F + intensity * 14.0F), 8, 28);
+		for (int index = 0; index < samples; index++) {
+			double angle = Math.PI * 2.0D * index / samples;
+			level.sendParticles(ParticleTypes.END_ROD,
+					impact.x + Math.cos(angle) * radius, impact.y + 0.1D,
+					impact.z + Math.sin(angle) * radius, 1, 0.0D, 0.0D, 0.0D, 0.0D);
+		}
+		level.sendParticles(ParticleTypes.REVERSE_PORTAL, impact.x, impact.y + 0.4D, impact.z,
+				Math.round(4.0F + intensity * 16.0F), radius * 0.5D, 0.5D,
+				radius * 0.5D, 0.05D + intensity * 0.06D);
+	}
+
+	private static ServerPlayer nearestTarget(ServerLevel level, AttackRuntime runtime,
+			WorldInterfaceEntity boss) {
+		ServerPlayer nearest = null;
+		double best = Double.MAX_VALUE;
+		for (int index = 0; index < runtime.targets.size(); index++) {
+			ServerPlayer candidate = onlineTarget(level, runtime, index);
+			if (candidate == null) continue;
+			double distance = candidate.distanceToSqr(boss);
+			if (distance < best) {
+				best = distance;
+				nearest = candidate;
+			}
+		}
+		return nearest;
 	}
 
 	private static void finishControl(MinecraftServer server, AttackRuntime runtime,
@@ -542,145 +1193,37 @@ public final class WorldInterfaceAttackService {
 			removeRecovery(server, runtime.encounterId, recoveryId);
 			return null;
 		}
-		return new WeaponLease(recoveryId, player.getUUID(), slot, removed, payload.getStringOr("weapon_kind", "tool"));
+		// The slot is not left empty: a placeholder marks what was taken and what is coming back.
+		player.getInventory().setItem(slot, ConfiscationService.placeholder(recoveryId));
+		return new WeaponLease(recoveryId, player.getUUID(), slot, removed,
+				payload.getStringOr("weapon_kind", "tool"));
 	}
 
-	private static void simulateWeaponUse(ServerLevel level, WorldInterfaceEntity boss,
-			AttackRuntime runtime, ServerPlayer target) {
-		if (runtime.weapon == null) return;
-		if ("ranged".equals(runtime.weapon.kind) && target != null) {
-			Arrow arrow = EntityType.ARROW.create(level, EntitySpawnReason.EVENT);
-			if (arrow != null) {
-				arrow.setOwner(boss);
-				arrow.setPos(boss.getX(), boss.getEyeY(), boss.getZ());
-				Vec3 direction = target.getEyePosition().subtract(arrow.position());
-				arrow.shoot(direction.x, direction.y, direction.z, 1.55F, 0.0F);
-				arrow.setBaseDamage(2.0D);
-				arrow.pickup = AbstractArrow.Pickup.DISALLOWED;
-				arrow.addTag(REFLECTED_ARROW_TAG);
-				if (level.addFreshEntity(arrow)) {
-					PROJECTILES.put(arrow.getUUID(), new ProjectileLease(runtime.encounterId,
-							level.getGameTime() + REFLECTED_ARROW_TTL));
-				}
-			}
-		} else if (target != null) {
-			Vec3 away = target.position().subtract(boss.position());
-			target.knockback(0.65D, -away.x, -away.z);
-		}
-		playActionCue(level, boss.blockPosition(), runtime.action, 0.82F, 1.12F);
-	}
-
-	private static void dropHotbarSlot(ServerLevel level, WorldInterfaceState.Snapshot snapshot,
-			AttackRuntime runtime, ServerPlayer player, int slot) {
+	private static void dropHotbarSlot(ServerLevel level, AttackRuntime runtime,
+			ServerPlayer player, int slot) {
 		ItemStack stack = player.getInventory().getItem(slot);
 		if (stack.isEmpty()) return;
-		ItemStack exact = stack.copy();
-		UUID recoveryId = deterministicRecoveryId(runtime, player.getUUID(), "hotbar", slot);
-		CompoundTag payload = itemPayload(level.getServer(), exact, slot,
-				matchingItemCount(player, exact), "prepared");
-		payload.putLong("item_position", player.blockPosition().asLong());
-		payload.putString("item_dimension", level.dimension().identifier().toString());
-		WorldInterfaceState.RecoveryEntry prepared = new WorldInterfaceState.RecoveryEntry(
-				recoveryId, player.getUUID(), "hotbar_drop", payload, false);
-		if (!addRecovery(level.getServer(), runtime.encounterId, prepared)) return;
-
 		ItemStack removed = player.getInventory().removeItemNoUpdate(slot);
-		if (!ItemStack.matches(removed, exact)) {
-			restoreStackImmediately(player, slot, removed);
-			removeRecovery(level.getServer(), runtime.encounterId, recoveryId);
-			return;
-		}
+		if (removed.isEmpty()) return;
+		// An ordinary drop, with an ordinary pickup delay: anyone at the table can get to it first.
 		ItemEntity item = new ItemEntity(level, player.getX(), player.getEyeY(), player.getZ(), removed);
-		item.setDeltaMovement(Vec3.ZERO);
-		item.setInvulnerable(true);
-		item.setTarget(player.getUUID());
-		item.setUnlimitedLifetime();
-		item.addTag(RECOVERY_ITEM_TAG_PREFIX + recoveryId);
+		item.setDefaultPickUpDelay();
+		// Thrown outward with the slot order, so nine stacks do not land in one pile.
+		double angle = Math.PI * 2.0D * slot / HOTBAR_SLOTS;
+		item.setDeltaMovement(Math.cos(angle) * 0.24D, 0.22D, Math.sin(angle) * 0.24D);
 		if (!level.addFreshEntity(item)) {
 			restoreStackImmediately(player, slot, removed);
-			removeRecovery(level.getServer(), runtime.encounterId, recoveryId);
 			return;
 		}
-		long releaseTick = level.getGameTime() + DROP_PROTECTION_TICKS;
-		payload.putString("phase", "world");
-		payload.putString("item_entity", item.getUUID().toString());
-		payload.putLong("item_position", item.blockPosition().asLong());
-		payload.putString("item_dimension", level.dimension().identifier().toString());
-		payload.putLong("release_tick", releaseTick);
-		WorldInterfaceState.RecoveryEntry world = new WorldInterfaceState.RecoveryEntry(
-				recoveryId, player.getUUID(), "hotbar_drop", payload, false);
-		if (!replaceRecovery(level.getServer(), runtime.encounterId, world)) {
-			item.discard();
-			restoreStackImmediately(player, slot, removed);
-			removeRecovery(level.getServer(), runtime.encounterId, recoveryId);
-			return;
-		}
-		DROPS.put(recoveryId, new DropLease(runtime.encounterId, recoveryId, player.getUUID(),
-				item.getUUID(), releaseTick, level.dimension().identifier().toString(), item.blockPosition()));
 		playActionCue(level, player.blockPosition(), runtime.action, 0.72F, 1.0F + slot * 0.025F);
-	}
-
-	private static void spawnReflectedVolley(ServerLevel level, WorldInterfaceEntity boss,
-			AttackRuntime runtime) {
-		for (UUID capturedId : List.copyOf(runtime.capturedArrows)) {
-			Entity captured = level.getEntity(capturedId);
-			if (captured != null) captured.discard();
-		}
-		runtime.capturedArrows.clear();
-		List<ServerPlayer> liveTargets = runtime.targets.stream()
-				.filter(id -> !runtime.unavailableTargets.contains(id))
-				.map(level.getServer().getPlayerList()::getPlayer)
-				.filter(Objects::nonNull)
-				.filter(player -> player.level() == level && player.isAlive() && !player.isSpectator())
-				.toList();
-		for (int index = 0; index < REFLECTED_ARROW_COUNT; index++) {
-			Arrow arrow = EntityType.ARROW.create(level, EntitySpawnReason.EVENT);
-			if (arrow == null) throw new IllegalStateException("Unable to create reflected arrow " + index);
-			arrow.setOwner(boss);
-			double angle = Math.PI * 2.0D * index / REFLECTED_ARROW_COUNT;
-			arrow.setPos(boss.getX() + Math.cos(angle) * 2.0D, boss.getEyeY() + 6.0D,
-					boss.getZ() + Math.sin(angle) * 2.0D);
-			Vec3 target;
-			if (liveTargets.isEmpty()) {
-				target = runtime.arenaCenter.getCenter().add(Math.cos(angle) * 36.0D, 2.0D,
-						Math.sin(angle) * 36.0D);
-			} else {
-				ServerPlayer player = liveTargets.get(index % liveTargets.size());
-				target = player.getEyePosition().add(Math.cos(angle) * 1.5D, 0.0D, Math.sin(angle) * 1.5D);
-			}
-			Vec3 direction = target.subtract(arrow.position());
-			arrow.shoot(direction.x, direction.y, direction.z, 1.65F, 0.0F);
-			arrow.setBaseDamage(REFLECTED_ARROW_DAMAGE);
-			arrow.setCritArrow(false);
-			arrow.pickup = AbstractArrow.Pickup.DISALLOWED;
-			arrow.addTag(REFLECTED_ARROW_TAG);
-			if (!level.addFreshEntity(arrow)) throw new IllegalStateException("Unable to spawn reflected arrow " + index);
-			PROJECTILES.put(arrow.getUUID(), new ProjectileLease(runtime.encounterId,
-					level.getGameTime() + REFLECTED_ARROW_TTL));
-		}
-		playActionCue(level, boss.blockPosition(), runtime.action, 0.88F, 1.08F);
-	}
-
-	private static int activeReflectedArrowCount(ServerLevel level) {
-		PROJECTILES.entrySet().removeIf(entry -> {
-			Entity entity = level.getEntity(entry.getKey());
-			return entity == null || entity.isRemoved();
-		});
-		return PROJECTILES.size();
 	}
 
 	private static void finishRuntime(MinecraftServer server, AttackRuntime runtime, boolean restorePosition) {
 		ACTIVE.remove(runtime.encounterId, runtime);
 		ServerLevel level = server.getLevel(Level.END);
-		if (level != null) {
-			if (runtime.orbId != null) {
-				Entity orb = level.getEntity(runtime.orbId);
-				if (orb != null) orb.discard();
-			}
-			for (UUID arrowId : runtime.capturedArrows) {
-				Entity arrow = level.getEntity(arrowId);
-				if (arrow != null) arrow.discard();
-			}
+		if (level != null && runtime.orbId != null) {
+			Entity orb = level.getEntity(runtime.orbId);
+			if (orb != null) orb.discard();
 		}
 		if (runtime.control != null) {
 			ServerPlayer player = server.getPlayerList().getPlayer(runtime.control.playerId);
@@ -698,21 +1241,8 @@ public final class WorldInterfaceAttackService {
 
 	private static void cancelRuntime(MinecraftServer server, AttackRuntime runtime, boolean restorePosition) {
 		finishRuntime(server, runtime, restorePosition);
-		discardEncounterProjectiles(server, runtime.encounterId);
 		ServerLevel level = server.getLevel(Level.END);
 		if (level != null && level.getEntity(runtime.bossId) instanceof WorldInterfaceEntity boss) boss.clearAction();
-	}
-
-	private static void discardEncounterProjectiles(MinecraftServer server, UUID encounterId) {
-		ServerLevel level = server.getLevel(Level.END);
-		for (Map.Entry<UUID, ProjectileLease> entry : List.copyOf(PROJECTILES.entrySet())) {
-			if (!encounterId.equals(entry.getValue().encounterId)) continue;
-			if (level != null) {
-				Entity projectile = level.getEntity(entry.getKey());
-				if (projectile != null) projectile.discard();
-			}
-			PROJECTILES.remove(entry.getKey(), entry.getValue());
-		}
 	}
 
 	private static void releasePlayerControl(MinecraftServer server, AttackRuntime runtime,
@@ -734,11 +1264,8 @@ public final class WorldInterfaceAttackService {
 		if (!snapshot.valid() || snapshot.encounterId().filter(encounterId::equals).isEmpty()) return 0;
 		int restored = 0;
 		List<WorldInterfaceState.RecoveryEntry> entries = new ArrayList<>(snapshot.recoveryLedger());
-		// Successive hotbar removals of identical stacks have descending baselines. Restoring the
-		// smallest baseline first preserves the exact aggregate without duplicating picked-up drops.
 		entries.sort(Comparator
 				.comparing((WorldInterfaceState.RecoveryEntry entry) -> entry.ownerId().toString())
-				.thenComparingInt(entry -> entry.payload().getIntOr("baseline_count", -1))
 				.thenComparing(WorldInterfaceState.RecoveryEntry::kind)
 				.thenComparing(entry -> entry.id().toString()));
 		for (WorldInterfaceState.RecoveryEntry entry : entries) {
@@ -756,12 +1283,20 @@ public final class WorldInterfaceAttackService {
 				}
 				if (removeRecovery(server, encounterId, entry.id())) restored++;
 			} else if ("weapon".equals(entry.kind()) || "hotbar_drop".equals(entry.kind())) {
+				// "hotbar_drop" is no longer written - the purge makes ordinary drops now - but a
+				// save that was mid-encounter across the change still has entries under it, and
+				// handing those back is strictly better than stranding them in the ledger forever.
 				if (deliverRecovery(server, encounterId, entry.id(), owner.getUUID())) restored++;
 			}
 		}
 		return restored;
 	}
 
+	/**
+	 * Hands a confiscated stack back. The placeholder that stood in for it is the preferred landing
+	 * site, so the tool returns to wherever the player had shuffled the barrier to rather than to
+	 * whichever slot happened to be free.
+	 */
 	private static boolean deliverRecovery(MinecraftServer server, UUID encounterId,
 			UUID recoveryId, UUID preferredOwner) {
 		WorldInterfaceState.RecoveryEntry entry = recoveryEntry(server, encounterId, recoveryId).orElse(null);
@@ -782,100 +1317,31 @@ public final class WorldInterfaceAttackService {
 			TheFourthFrequency.LOGGER.warn(
 					"Discarding unrecoverable world_interface recovery entry {} for {} ({}): {}",
 					entry.id(), entry.ownerId(), entry.kind(), exception.toString());
+			ConfiscationService.clearPlaceholder(owner, entry.id());
 			if (removeRecovery(server, encounterId, entry.id())) {
 				TerminalNoticeService.denied(owner,
 						"message.thefourthfrequency.world_interface.recovery_lost");
 			}
 			return true;
 		}
-		int baseline = payload.getIntOr("baseline_count", stack.getCount());
-		Entity worldItem = findRecoveryItemEntity(server, entry.id(), payload);
-		if (worldItem == null && "hotbar_drop".equals(entry.kind())
-				&& payload.contains("item_position") && matchingItemCount(owner, stack) < baseline) {
-			ServerLevel itemLevel = recoveryItemLevel(server, payload);
-			if (itemLevel != null) {
-				itemLevel.getChunkAt(BlockPos.of(payload.getLongOr("item_position", 0L)));
-				worldItem = findRecoveryItemEntity(server, entry.id(), payload);
-			}
-		}
-		if (worldItem != null) worldItem.discard();
-
 		payload.putString("phase", "delivering");
 		WorldInterfaceState.RecoveryEntry delivering = new WorldInterfaceState.RecoveryEntry(
 				entry.id(), entry.ownerId(), entry.kind(), payload, false);
 		if (!replaceRecovery(server, encounterId, delivering)) return false;
-		int missingCount = Math.max(0, baseline - matchingItemCount(owner, stack));
-		if (missingCount > 0) {
-			ItemStack recoveryStack = stack.copyWithCount(Math.min(stack.getCount(), missingCount));
-			ItemEntity dropped = giveExact(owner, payload.getIntOr("slot", -1), recoveryStack, entry.id());
-			if (dropped != null) {
-				payload.putString("phase", "world");
-				payload.putString("item_entity", dropped.getUUID().toString());
-				payload.putLong("item_position", dropped.blockPosition().asLong());
-				payload.putString("item_dimension", dropped.level().dimension().identifier().toString());
-				long release = ((ServerLevel) owner.level()).getGameTime() + DROP_PROTECTION_TICKS;
-				payload.putLong("release_tick", release);
-				WorldInterfaceState.RecoveryEntry world = new WorldInterfaceState.RecoveryEntry(
-						entry.id(), entry.ownerId(), entry.kind(), payload, false);
-				if (!replaceRecovery(server, encounterId, world)) {
-					dropped.discard();
-					return false;
-				}
-				DROPS.put(entry.id(), new DropLease(encounterId, entry.id(), entry.ownerId(),
-						dropped.getUUID(), release, dropped.level().dimension().identifier().toString(),
-						dropped.blockPosition()));
-				return true;
-			}
-		}
-		DROPS.remove(entry.id());
+		int placeholderSlot = ConfiscationService.clearPlaceholder(owner, entry.id());
+		giveExact(owner, placeholderSlot >= 0 ? placeholderSlot : payload.getIntOr("slot", -1), stack);
 		return removeRecovery(server, encounterId, entry.id());
 	}
 
-	private static ItemEntity giveExact(ServerPlayer owner, int preferredSlot, ItemStack stack, UUID recoveryId) {
+	private static void giveExact(ServerPlayer owner, int preferredSlot, ItemStack stack) {
 		if (preferredSlot >= 0 && preferredSlot < owner.getInventory().getContainerSize()
 				&& owner.getInventory().getItem(preferredSlot).isEmpty()) {
 			owner.getInventory().setItem(preferredSlot, stack);
-			return null;
+			return;
 		}
 		ItemStack remainder = stack.copy();
 		owner.getInventory().add(remainder);
-		if (remainder.isEmpty()) return null;
-		ItemEntity dropped = owner.drop(remainder, false, true);
-		if (dropped != null) {
-			dropped.setDeltaMovement(Vec3.ZERO);
-			dropped.setInvulnerable(true);
-			dropped.setTarget(owner.getUUID());
-			dropped.setUnlimitedLifetime();
-			dropped.addTag(RECOVERY_ITEM_TAG_PREFIX + recoveryId);
-		}
-		return dropped;
-	}
-
-	private static Entity findRecoveryItemEntity(MinecraftServer server, UUID recoveryId, CompoundTag payload) {
-		ServerLevel level = recoveryItemLevel(server, payload);
-		if (level == null) return null;
-		String encoded = payload.getStringOr("item_entity", "");
-		if (!encoded.isBlank()) {
-			try {
-				Entity direct = level.getEntity(UUID.fromString(encoded));
-				if (direct != null) return direct;
-			} catch (IllegalArgumentException ignored) {
-				// Fall through to tag scan.
-			}
-		}
-		String tag = RECOVERY_ITEM_TAG_PREFIX + recoveryId;
-		for (Entity entity : level.getAllEntities()) {
-			if (entity instanceof ItemEntity item && item.getTags().contains(tag)) return item;
-		}
-		return null;
-	}
-
-	private static ServerLevel recoveryItemLevel(MinecraftServer server, CompoundTag payload) {
-		String dimensionId = payload.getStringOr("item_dimension", Level.END.identifier().toString());
-		for (ServerLevel candidate : server.getAllLevels()) {
-			if (candidate.dimension().identifier().toString().equals(dimensionId)) return candidate;
-		}
-		return null;
+		if (!remainder.isEmpty()) owner.drop(remainder, false, true);
 	}
 
 	private static boolean addRecovery(MinecraftServer server, UUID encounterId,
@@ -948,99 +1414,6 @@ public final class WorldInterfaceAttackService {
 		return ItemStack.CODEC.parse(ops, encoded).getOrThrow();
 	}
 
-	private static void maintenanceTick(MinecraftServer server) {
-		ServerLevel level = server.getLevel(Level.END);
-		if (level == null) return;
-		long now = level.getGameTime();
-		if (DROP_LEASES_RECONCILED.add(server)) reconcilePersistentDrops(server, now);
-		PROJECTILES.entrySet().removeIf(entry -> {
-			Entity entity = level.getEntity(entry.getKey());
-			if (entity == null || entity.isRemoved()) return true;
-			if (now < entry.getValue().expiresGameTick) return false;
-			entity.discard();
-			return true;
-		});
-		for (DropLease lease : List.copyOf(DROPS.values())) {
-			ServerLevel itemLevel = null;
-			for (ServerLevel candidate : server.getAllLevels()) {
-				if (candidate.dimension().identifier().toString().equals(lease.dimensionId)) {
-					itemLevel = candidate;
-					break;
-				}
-			}
-			if (itemLevel == null) continue;
-			Entity entity = itemLevel.getEntity(lease.itemEntityId);
-			if (entity instanceof ItemEntity item) {
-				if (itemLevel.getGameTime() >= lease.releaseGameTick) {
-					item.setInvulnerable(false);
-					item.setTarget(null);
-					item.setExtendedLifetime();
-					if (removeRecovery(server, lease.encounterId, lease.recoveryId)) {
-						DROPS.remove(lease.recoveryId);
-					} else {
-						item.setInvulnerable(true);
-						item.setTarget(lease.ownerId);
-						item.setUnlimitedLifetime();
-					}
-				}
-				continue;
-			}
-			if (!itemLevel.hasChunkAt(lease.lastKnownPosition)) continue;
-			ServerPlayer owner = server.getPlayerList().getPlayer(lease.ownerId);
-			if (owner != null && deliverRecovery(server, lease.encounterId,
-					lease.recoveryId, lease.ownerId)) DROPS.remove(lease.recoveryId);
-		}
-	}
-
-	private static void reconcilePersistentDrops(MinecraftServer server, long now) {
-		WorldInterfaceState.Snapshot snapshot = WorldInterfaceState.snapshot(server);
-		UUID encounterId = snapshot.valid() ? snapshot.encounterId().orElse(null) : null;
-		if (encounterId == null) return;
-		for (WorldInterfaceState.RecoveryEntry entry : snapshot.recoveryLedger()) {
-			if (entry.resolved() || !"hotbar_drop".equals(entry.kind())) continue;
-			CompoundTag payload = entry.payload();
-			if (!"world".equals(payload.getStringOr("phase", ""))
-					|| !payload.contains("item_position")) continue;
-			String encodedEntity = payload.getStringOr("item_entity", "");
-			try {
-				UUID itemEntityId = UUID.fromString(encodedEntity);
-				long releaseTick = Math.max(0L, payload.getLongOr("release_tick", now));
-				String dimensionId = payload.getStringOr("item_dimension", Level.END.identifier().toString());
-				BlockPos lastKnownPosition = BlockPos.of(payload.getLongOr("item_position", 0L));
-				DROPS.putIfAbsent(entry.id(), new DropLease(encounterId, entry.id(), entry.ownerId(),
-						itemEntityId, releaseTick, dimensionId, lastKnownPosition));
-			} catch (IllegalArgumentException ignored) {
-				// A malformed world lease remains in the durable ledger for owner-login recovery.
-			}
-		}
-	}
-
-	private static List<BlockPos> laserCandidates(ServerLevel level, Vec3 start, Vec3 end) {
-		List<BlockPos> result = new ArrayList<>();
-		Vec3 delta = end.subtract(start);
-		int steps = Math.max(1, Math.min(48, (int) Math.ceil(delta.length())));
-		for (int step = 0; step < steps; step++) {
-			double progress = step / (double) Math.max(1, steps - 1);
-			Vec3 point = start.add(delta.scale(progress));
-			int x = (int) Math.floor(point.x);
-			int z = (int) Math.floor(point.z);
-			int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z) - 1;
-			result.add(new BlockPos(x, Math.max(level.getMinY(), y), z));
-		}
-		return result;
-	}
-
-	private static List<Vec3> directionalLaserBursts(Vec3 start, Vec3 end) {
-		Vec3 delta = end.subtract(start);
-		int count = Math.clamp((int) Math.ceil(delta.length() / 6.0D), 2, 9);
-		List<Vec3> result = new ArrayList<>(count);
-		for (int index = 0; index < count; index++) {
-			double progress = index / (double) (count - 1);
-			result.add(start.add(delta.scale(progress)));
-		}
-		return result;
-	}
-
 	private static double distanceToSegmentSqr(Vec3 point, Vec3 start, Vec3 end) {
 		Vec3 segment = end.subtract(start);
 		double lengthSqr = segment.lengthSqr();
@@ -1049,21 +1422,83 @@ public final class WorldInterfaceAttackService {
 		return point.distanceToSqr(start.add(segment.scale(progress)));
 	}
 
-	private static Vec3 safeLanding(ServerLevel level, AttackRuntime runtime, Vec3 desired) {
-		Vec3 center = runtime.arenaCenter.getCenter();
-		Vec3 horizontal = new Vec3(desired.x - center.x, 0.0D, desired.z - center.z);
-		if (horizontal.lengthSqr() > 130.0D * 130.0D) horizontal = horizontal.normalize().scale(130.0D);
-		if (horizontal.lengthSqr() < 10.0D * 10.0D) return runtime.safeSpawn.getCenter();
-		int x = (int) Math.floor(center.x + horizontal.x);
-		int z = (int) Math.floor(center.z + horizontal.z);
-		int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
-		if (y <= level.getMinY() + 4) return runtime.safeSpawn.getCenter();
-		return new Vec3(x + 0.5D, y, z + 0.5D);
+	/**
+	 * Every attack here is ranged or area, so a landed hit used to be a red flash and nothing else -
+	 * no direction, no weight, no way to tell it apart from standing in the wrong place. The impulse
+	 * says where it came from, the burst says it was you, and the cue gives it a size.
+	 */
+	/**
+	 * Slams and throws now leave the floor they landed on. The arena's own scar queue already
+	 * bounds this - protected positions, a per-encounter permanent-edit ceiling and a paced
+	 * drain - so the only thing missing was that nothing but the laser ever called it, and a
+	 * fight that rearranges the world was reading as a fight happening on top of a static one.
+	 */
+	private static void craterAt(ServerLevel level, WorldInterfaceEntity boss, AttackRuntime runtime,
+			Vec3 impact, int radius, int maximumEdits) {
+		// Bigger bites the further the fight has gone. The arena's own budget still bounds the total,
+		// so a harder third phase spends that budget faster rather than exceeding it.
+		int form = boss.form();
+		EndBossArenaService.queueExplosionScar(level, BlockPos.containing(impact), radius + form,
+				maximumEdits + maximumEdits * form / 2, runtime.seed ^ BlockPos.containing(impact).asLong());
+	}
+
+	/**
+	 * Leaves the rim of a lance crater as missing-texture proxies rather than as clean air.
+	 *
+	 * <p>Every other scar in this fight removes blocks, which reads as damage. The interface is not
+	 * damaging the island so much as failing to keep rendering it, and this is the one attack big
+	 * enough to say so: the hole is ringed by world that is still solid and no longer has a texture.
+	 * Goes through the arena's own protection check, so it can no more touch bedrock, the altar or
+	 * an anchor than the crater it borders can.</p>
+	 */
+	private static void corruptAround(ServerLevel level, AttackRuntime runtime, BlockPos center) {
+		int converted = 0;
+		long seed = runtime.seed ^ center.asLong() ^ 0x4D1551_0000L;
+		for (BlockPos position : BlockPos.betweenClosed(
+				center.offset(-SKY_LANCE_CORRUPTION_RADIUS, -3, -SKY_LANCE_CORRUPTION_RADIUS),
+				center.offset(SKY_LANCE_CORRUPTION_RADIUS, 3, SKY_LANCE_CORRUPTION_RADIUS))) {
+			if (converted >= SKY_LANCE_CORRUPTION_EDITS) break;
+			double distanceSqr = position.distSqr(center);
+			// A ring, not a disc: the middle of this is the crater, which is already gone.
+			if (distanceSqr <= (double) SKY_LANCE_SCAR_RADIUS * SKY_LANCE_SCAR_RADIUS
+					|| distanceSqr > (double) SKY_LANCE_CORRUPTION_RADIUS * SKY_LANCE_CORRUPTION_RADIUS) {
+				continue;
+			}
+			BlockState state = level.getBlockState(position);
+			if (state.isAir() || state.is(ModBlocks.MISSING_TEXTURE_PROXY)) continue;
+			if (!EndBossArenaService.canDestroy(level, position, state)) continue;
+			// Scattered rather than solid, so the rim reads as the world coming apart in patches.
+			if ((mix(seed ^ position.asLong()) >>> 59) < 20L) continue;
+			level.setBlock(position, ModBlocks.MISSING_TEXTURE_PROXY.defaultBlockState(),
+					Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS);
+			converted++;
+		}
 	}
 
 	private static void damage(ServerLevel level, WorldInterfaceEntity boss,
 			ServerPlayer player, float amount) {
-		WorldInterfaceDamageService.applyExact(level, level.damageSources().mobAttack(boss), player, amount);
+		if (!WorldInterfaceDamageService.apply(level,
+				WorldInterfaceDamageService.source(level, boss), player, amount)) return;
+
+		// Heavier the larger the interface gets. The same shove that reads as a blow from a
+		// six-block embryo reads as a nudge from something thirty-three blocks across, and the
+		// escalation is the whole point of the phases.
+		double push = (0.30D + 0.022D * Math.min(amount, 20.0F))
+				* (1.0D + boss.form() * 0.22D);
+		Vec3 away = player.position().subtract(boss.position());
+		double flat = Math.sqrt(away.x * away.x + away.z * away.z);
+		Vec3 impulse = flat < 1.0E-4D
+				? new Vec3(0.0D, push, 0.0D)
+				: new Vec3(away.x / flat * push, push * 0.62D, away.z / flat * push);
+		player.push(impulse.x, impulse.y, impulse.z);
+		// Player motion is authoritative on the client, so without this the shove is never sent.
+		player.hurtMarked = true;
+
+		level.sendParticles(ParticleTypes.REVERSE_PORTAL, player.getX(),
+				player.getY() + player.getBbHeight() * 0.6D, player.getZ(),
+				Math.round(12.0F + amount * 2.5F), 0.36D, 0.52D, 0.36D, 0.15D);
+		AudioService.playBounded(level, player.blockPosition(), ModSounds.WORLD_INTERFACE_IMPACT,
+				SoundSource.HOSTILE, 0.85F, 1.06F - 0.02F * Math.min(amount, 14.0F));
 	}
 
 	private static void invalidateUnavailableTargets(ServerLevel level, AttackRuntime runtime) {
@@ -1086,19 +1521,20 @@ public final class WorldInterfaceAttackService {
 	}
 
 	private static boolean requiresTarget(WorldInterfaceAction action) {
-		return action != WorldInterfaceAction.ARROW_REFLECTION;
+		return action != WorldInterfaceAction.TENDRIL_LASH;
 	}
 
 	private static int durationTicks(WorldInterfaceAction action) {
 		return switch (action) {
-			case LASER_SWEEP -> LASER_WARNING_TICKS + 1;
-			case ENERGY_ORB -> ORB_TRACKING_TICKS;
-			case GRAB_SLAM -> GRAB_WARNING_TICKS + GRAB_HOLD_TICKS + 1;
-			case MENTAL_ASSAULT -> MENTAL_WARNING_TICKS + MENTAL_EFFECT_TICKS;
+			case LASER_SWEEP -> LASER_WARNING_TICKS + LASER_SWEEP_TICKS;
+			case ENERGY_ORB -> ORB_WARNING_TICKS + ORB_TRACKING_TICKS;
+			case SKY_LANCE -> SKY_LANCE_LOCK_TICKS + SKY_LANCE_CHARGE_TICKS + SKY_LANCE_STRIKE_TICKS;
 			case CHARGE_WEAPON_STEAL -> WEAPON_WARNING_TICKS + WEAPON_CUSTODY_TICKS + 1;
-			case GRAB_THROW -> GRAB_WARNING_TICKS + 30;
+			case GRAB_THROW -> GRAB_WARNING_TICKS + GRAB_LIFT_TICKS + THROW_WINDUP_TICKS
+					+ THROW_RELEASE_TICKS;
 			case GAZE_HOTBAR_CLEAR -> HOTBAR_WARNING_TICKS + HOTBAR_STEP_TICKS * HOTBAR_SLOTS + 1;
-			case ARROW_REFLECTION -> 120;
+			case TENDRIL_LASH -> TENDRIL_WARNING_TICKS
+					+ TENDRIL_STRIKE_INTERVAL_TICKS * TENDRIL_STRIKE_COUNT;
 			case FORCED_EVICTION -> WorldInterfaceActionScheduler.FORCED_EVICTION_WARNING_TICKS + 1;
 		};
 	}
@@ -1160,12 +1596,11 @@ public final class WorldInterfaceAttackService {
 		return switch (action) {
 			case LASER_SWEEP -> ModSounds.WORLD_INTERFACE_LASER;
 			case ENERGY_ORB -> ModSounds.WORLD_INTERFACE_ORB;
-			case GRAB_SLAM -> ModSounds.WORLD_INTERFACE_GRAB;
-			case MENTAL_ASSAULT -> ModSounds.WORLD_INTERFACE_MENTAL;
+			case SKY_LANCE -> ModSounds.WORLD_INTERFACE_MENTAL;
 			case CHARGE_WEAPON_STEAL -> ModSounds.WORLD_INTERFACE_WEAPON;
 			case GRAB_THROW -> ModSounds.WORLD_INTERFACE_THROW;
 			case GAZE_HOTBAR_CLEAR -> ModSounds.WORLD_INTERFACE_HOTBAR;
-			case ARROW_REFLECTION -> ModSounds.WORLD_INTERFACE_ARROW;
+			case TENDRIL_LASH -> ModSounds.WORLD_INTERFACE_ARROW;
 			case FORCED_EVICTION -> ModSounds.WORLD_INTERFACE_EXPULSION;
 		};
 	}
@@ -1215,18 +1650,36 @@ public final class WorldInterfaceAttackService {
 		private final BlockPos origin;
 		private final BlockPos arenaCenter;
 		private final BlockPos safeSpawn;
-		private final Set<UUID> capturedArrows = new LinkedHashSet<>();
 		private final Set<UUID> unavailableTargets = new LinkedHashSet<>();
+		/**
+		 * A short trail of where the laser's target has been, newest last. The sweep aims at the
+		 * entry {@link WorldInterfaceProtocol#LASER_TRACKING_LAG_TICKS} back, which is the whole
+		 * reason running works and standing still does not.
+		 */
+		private final Deque<Vec3> aimTrail = new ArrayDeque<>();
 		private UUID orbId;
 		private int cursor;
 		private boolean damageApplied;
 		private ControlLease control;
 		private WeaponLease weapon;
-		private boolean weaponUsed;
 		private int originalSelectedSlot = -1;
-		private int lastArrowVolley = -1;
+		private Vec3 carryStart;
+		/** Flat unit direction the grab swings and then hurls its victim along; null until grabbed. */
+		private Vec3 throwBearing;
+		private Vec3 lanceImpact;
+		private Vec3 tendrilImpact;
 		private Vec3 throwStart;
 		private Vec3 throwLanding;
+
+		private void recordAim(Vec3 position) {
+			aimTrail.addLast(position);
+			while (aimTrail.size() > LASER_TRACKING_LAG_TICKS + 1) aimTrail.removeFirst();
+		}
+
+		/** The oldest retained sample once the trail is full; null until it is. */
+		private Vec3 laggedAim(int lagTicks) {
+			return aimTrail.size() > lagTicks ? aimTrail.peekFirst() : aimTrail.peekLast();
+		}
 
 		private AttackRuntime(UUID encounterId, UUID bossId, WorldInterfaceAction action,
 				long startedActiveTick, long dueActiveTick, long sequence, long seed,
@@ -1255,12 +1708,5 @@ public final class WorldInterfaceAttackService {
 	}
 
 	private record WeaponLease(UUID recoveryId, UUID playerId, int slot, ItemStack stack, String kind) {
-	}
-
-	private record ProjectileLease(UUID encounterId, long expiresGameTick) {
-	}
-
-	private record DropLease(UUID encounterId, UUID recoveryId, UUID ownerId, UUID itemEntityId,
-			long releaseGameTick, String dimensionId, BlockPos lastKnownPosition) {
 	}
 }

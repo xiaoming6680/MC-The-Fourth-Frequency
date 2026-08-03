@@ -79,12 +79,14 @@ public final class PursuitFormController {
 				entity.getUUID(), now + PursuitFormPolicy.forForm(normalizedForm).durationTicks(),
 				player.position(), debugSession));
 		PursuitVisibilityService.isolate(player);
+		PursuitVisionService.apply(player);
 		return true;
 	}
 
 	public static void interrupt(ServerPlayer player) {
 		Runtime runtime = ACTIVE.remove(player.getUUID());
 		if (runtime == null) return;
+		PursuitVisionService.clear(player);
 		DEFEATED.remove(new DefeatKey(runtime.playerId, runtime.sessionId));
 		if (player.level() instanceof ServerLevel level) {
 			Entity entity = level.getEntity(runtime.entityId);
@@ -125,6 +127,9 @@ public final class PursuitFormController {
 				interrupt(player);
 				continue;
 			}
+			// Tops up ahead of the resolution branch as well: the capture freeze holds the client on
+			// its last live frame, and that frame should not be the one where the lights went out.
+			PursuitVisionService.maintain(player);
 			if (runtime.resolution != Resolution.NONE) {
 				tickResolution(player, runtime, level.getGameTime());
 				continue;
@@ -266,20 +271,10 @@ public final class PursuitFormController {
 
 	private static BlockPos findSpawn(ServerLevel level, ServerPlayer player) {
 		BlockPos target = player.blockPosition();
-		// The look vector loses its horizontal component when the player is looking straight up or
-		// down, and a zero-length facing makes every probe fail the hemisphere test - which aborted
-		// the chase over nothing more than where the camera happened to be pointing. Body yaw is
-		// always defined, and "behind the player" is what the rule is actually about.
-		Vec3 look = player.getLookAngle();
-		double facingX = look.x;
-		double facingZ = look.z;
-		if (facingX * facingX + facingZ * facingZ < 1.0e-4D) {
-			double yaw = Math.toRadians(player.getYRot());
-			facingX = -Math.sin(yaw);
-			facingZ = Math.cos(yaw);
-		}
-		for (PursuitSpawnPolicy.Offset offset : PursuitSpawnPolicy.hiddenOffsets(facingX, facingZ)) {
-			if (!PursuitSpawnPolicy.outsideForwardHemisphere(facingX, facingZ, offset.x(), offset.z())) continue;
+		// Where the player is looking no longer selects anything: the ring is drawn around them, not
+		// behind them, so a corrector may well arrive in plain sight.
+		for (PursuitSpawnPolicy.Offset offset : PursuitSpawnPolicy.spawnOffsets(
+				player.getRandom().nextLong())) {
 			BlockPos origin = target.offset(offset.x(), 0, offset.z());
 			// Walked outward from the player's own elevation, below before above, so the corrector
 			// arrives on the floor nearest their level rather than on whatever the scan hit first.

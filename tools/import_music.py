@@ -18,13 +18,17 @@ from pathlib import Path
 
 RATE = 44_100
 # The masters are mastered loud for streaming platforms; at unity gain they sit far above the
-# vanilla music they replace and drown the mod's own signal beds. Everything is imported at 70%.
-GAIN = 0.7
+# vanilla music they replace and drown the mod's own signal beds. This is a fraction of the master,
+# not of the previous import: re-running always starts from the lossless source.
+GAIN = 0.4
 QUALITY = "4"
 
 MENU_DIRECTORY = "主菜单BGM"
 GAME_DIRECTORY = "游戏内BGM"
+PURSUIT_DIRECTORY = "追逐战"
+ENCOUNTER_DIRECTORY = "BOSS战"
 ENDING_DIRECTORY = "击败BOSS-终末之诗BGM"
+FAILURE_ENDING_DIRECTORY = "BOSS战失败-终末之诗BGM"
 
 # (category, slug, source directory, source file). The slug becomes the asset path, so it stays
 # ASCII: the sound id derived from it is also the "now playing" translation key.
@@ -36,7 +40,16 @@ TRACKS = (
     ("game", "millennium_dream", GAME_DIRECTORY, "LUSTN - 千禧梦（中式梦核）.flac"),
     ("game", "are_you_lost", GAME_DIRECTORY, "Park Bird - Are You Lost.flac"),
     ("game", "hi", GAME_DIRECTORY, "TEMPOREX - Hi.flac"),
+    ("game", "tenshi", GAME_DIRECTORY,
+     "NEEDY GIRL OVERDOSE; Aiobahn +81 - 天使は感動する (feat. Aiobahn +81).flac"),
+    ("game", "school_rooftop", GAME_DIRECTORY, "hisohkah; WMD - School Rooftop.flac"),
+    ("game", "comfort_chain", GAME_DIRECTORY, "instupendo - Comfort Chain.flac"),
+    ("pursuit", "level", PURSUIT_DIRECTORY, "niqizhuo,Dapper Husky - level ！.flac"),
+    ("encounter", "ncpd_prowl", ENCOUNTER_DIRECTORY, "Marcin Przybyłowicz - NCPD Prowl.flac"),
+    ("encounter", "wake_up", ENCOUNTER_DIRECTORY, "MoonDeity - WAKE UP! (Sped Up).flac"),
     ("ending", "reverie", ENDING_DIRECTORY, "ILLENIUM; Dana Salah - Reverie.flac"),
+    ("ending", "fallen_down", FAILURE_ENDING_DIRECTORY,
+     "The Versions - Fallen Down (Electric Piano Version).flac"),
 )
 
 
@@ -44,7 +57,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ffmpeg", required=True, type=Path)
     parser.add_argument("--source", required=True, type=Path,
-                        help="Directory holding the three per-context master folders.")
+                        help="Directory holding the per-context master folders.")
     parser.add_argument("--output", required=True, type=Path,
                         help="assets/thefourthfrequency/sounds/music")
     args = parser.parse_args()

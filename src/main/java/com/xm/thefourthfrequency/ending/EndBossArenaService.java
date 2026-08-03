@@ -50,18 +50,19 @@ import java.util.WeakHashMap;
  * Pending scar work is intentionally memory-only; callers restore only the committed edit count.
  */
 public final class EndBossArenaService {
-	/** Legacy animation timing retained so the prelude-only Misread body remains binary compatible. */
-	public static final int WARNING_TICKS = 45;
 	public static final int MAX_PERMANENT_EDITS = WorldInterfacePolicy.MAX_PERMANENT_TERRAIN_EDITS;
 	public static final int MAX_EDITS_PER_TICK = WorldInterfacePolicy.MAX_TERRAIN_EDITS_PER_TICK;
-	public static final int MAX_LASER_EDITS = 48;
+	public static final int MAX_LASER_EDITS = 160;
+	private static final double SPIKE_SHEAR_REACH = 18.0D;
+	private static final int SPIKE_SHEAR_DEPTH = 9;
+	private static final int SPIKE_SHEAR_EDITS = 64;
 	public static final int ARENA_RADIUS = 160;
 	public static final int PORTAL_SAFE_RADIUS = 8;
 	public static final int GATEWAY_COUNT = 20;
 	public static final int GATEWAY_RADIUS = 96;
 	public static final int ANCHOR_COUNT = 10;
 
-	private static final int ALTAR_RADIUS = 5;
+	private static final int ALTAR_RADIUS = AltarShape.RADIUS;
 	private static final int EDIT_FLAGS = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE
 			| Block.UPDATE_SUPPRESS_DROPS;
 	private static final int MAX_PENDING_SCARS = 8_192;
@@ -113,7 +114,7 @@ public final class EndBossArenaService {
 			boolean alreadyPrepared = existingCore != null;
 			int altarFloorY = centralAltarFloorY(level);
 			BlockPos center = new BlockPos(0, altarFloorY, 0);
-			BlockPos altar = center.above();
+			BlockPos altar = AltarShape.corePosition(center);
 			BlockPos safeSpawn = mainIslandSurfaceAir(level, 0, ALTAR_RADIUS + 2);
 
 			buildAltar(level, center, false);
@@ -147,7 +148,7 @@ public final class EndBossArenaService {
 		return runtime.scars.enqueue(candidates, requestedMaximum, seed);
 	}
 
-	/** Laser paths have a hard per-attack permanent-edit cap of forty-eight. */
+	/** Laser paths carry the largest single-attack allowance; the arena total still bounds them. */
 	public static int queueLaserScar(ServerLevel level, Collection<BlockPos> candidates, long seed) {
 		return queueTerrainScar(level, candidates, MAX_LASER_EDITS, seed);
 	}
@@ -162,6 +163,41 @@ public final class EndBossArenaService {
 			if (position.distSqr(center) <= (double) radius * radius) candidates.add(position.immutable());
 		}
 		return queueTerrainScar(level, candidates, requestedMaximum, seed);
+	}
+
+	/**
+	 * Shears the crown off whichever End spike is nearest an impact. The third form is sixteen
+	 * times model scale against a pillar it can actually reach, so a slam beside one should take
+	 * part of it with it. The authoritative anchor, its cage and the altar are all in the protected
+	 * set, so this can dismantle the scenery without ever touching encounter-critical blocks.
+	 */
+	public static int shearNearestSpikeCrown(ServerLevel level, BlockPos impact, long seed) {
+		Objects.requireNonNull(impact, "impact");
+		SpikeFeature.EndSpike nearest = null;
+		double best = Double.MAX_VALUE;
+		for (SpikeFeature.EndSpike spike : SpikeFeature.getSpikesForLevel(level)) {
+			double dx = spike.getCenterX() - impact.getX();
+			double dz = spike.getCenterZ() - impact.getZ();
+			double distance = dx * dx + dz * dz;
+			if (distance < best) {
+				best = distance;
+				nearest = spike;
+			}
+		}
+		if (nearest == null || best > SPIKE_SHEAR_REACH * SPIKE_SHEAR_REACH) return 0;
+		int radius = nearest.getRadius();
+		List<BlockPos> candidates = new ArrayList<>();
+		// Only the top few courses: the pillar is chipped, never felled out from under its crystal.
+		for (int dy = 0; dy < SPIKE_SHEAR_DEPTH; dy++) {
+			int y = nearest.getHeight() - dy;
+			for (int dx = -radius; dx <= radius; dx++) {
+				for (int dz = -radius; dz <= radius; dz++) {
+					if (dx * dx + dz * dz > radius * radius) continue;
+					candidates.add(new BlockPos(nearest.getCenterX() + dx, y, nearest.getCenterZ() + dz));
+				}
+			}
+		}
+		return queueTerrainScar(level, candidates, SPIKE_SHEAR_EDITS, seed);
 	}
 
 	/** Runs one bounded queue slice. Exposed for deterministic GameTests. */
@@ -204,8 +240,7 @@ public final class EndBossArenaService {
 		}
 		if (runtime != null && runtime.protectedPositions.contains(pos)) return false;
 		if (state.is(WORLD_INTERFACE_IMMUNE)
-				|| state.is(ModBlocks.RESONANCE_CORE) || state.is(ModBlocks.WARP_GATE_CORE)
-				|| state.is(ModBlocks.STABILITY_ANCHOR_CAGE)
+				|| state.is(ModBlocks.RESONANCE_CORE)
 				|| state.is(Blocks.BEDROCK) || state.is(Blocks.OBSIDIAN)
 				|| state.is(Blocks.CRYING_OBSIDIAN) || state.is(Blocks.END_PORTAL)
 				|| state.is(Blocks.END_GATEWAY) || state.is(Blocks.END_PORTAL_FRAME)) return false;
@@ -290,13 +325,24 @@ public final class EndBossArenaService {
 				}
 				rememberAnchor(level, crystal);
 			}
+			// The pillar already had a crystal on it.
+			//
+			// The sweep above only discards crystals carrying this anchor's own tag, so the End's
+			// own dragon-fight crystal - which carries no tag at all - sat on the same block as the
+			// anchor, invisible as a duplicate and fully destructible. A player aiming at the anchor
+			// hit that instead, watched it explode, and found the anchor still standing: the "an
+			// anchor takes two or three hits" report, exactly.
+			for (EndCrystal stray : level.getEntitiesOfClass(EndCrystal.class,
+					new AABB(position).inflate(2.0D), candidate -> !isAuthoritativeAnchor(candidate))) {
+				stray.discard();
+			}
 			crystal.setPos(position.getX() + 0.5D, position.getY(), position.getZ() + 0.5D);
 			crystal.setShowBottom(false);
 			crystal.setInvulnerable(invulnerable);
 			for (int index = 0; index < ANCHOR_COUNT; index++) crystal.removeTag(ANCHOR_INDEX_PREFIX + index);
 			crystal.addTag(ANCHOR_TAG);
 			crystal.addTag(ANCHOR_INDEX_PREFIX + anchor.index());
-			buildAnchorCage(level, position);
+			restoreAnchorFooting(level, position);
 		}
 	}
 
@@ -365,28 +411,30 @@ public final class EndBossArenaService {
 		return new BlockPos(x, Math.max(level.getMinY() + 2, y), z);
 	}
 
+	/**
+	 * Writes the altar and clears the air above it. The shape itself lives in {@link AltarShape} so
+	 * that this and {@code ResonanceCoreBlock.buildAltar} cannot drift into two different altars.
+	 */
 	private static void buildAltar(ServerLevel level, BlockPos center, boolean includeCore) {
 		for (int dx = -ALTAR_RADIUS; dx <= ALTAR_RADIUS; dx++) {
 			for (int dz = -ALTAR_RADIUS; dz <= ALTAR_RADIUS; dz++) {
-				BlockPos floor = center.offset(dx, 0, dz);
-				int edge = Math.max(Math.abs(dx), Math.abs(dz));
-				BlockState state;
-				if (edge == ALTAR_RADIUS) state = Blocks.CRYING_OBSIDIAN.defaultBlockState();
-				else if (dx == 0 || dz == 0) state = Blocks.PURPUR_BLOCK.defaultBlockState();
-				else if ((Math.abs(dx) + Math.abs(dz)) % 3 == 0) state = Blocks.AMETHYST_BLOCK.defaultBlockState();
-				else state = Blocks.POLISHED_BLACKSTONE_BRICKS.defaultBlockState();
-				level.setBlock(floor, state, EDIT_FLAGS);
-				for (int dy = 1; dy <= 4; dy++) {
-					BlockPos clearance = floor.above(dy);
+				int top = AltarShape.topOffset(dx, dz);
+				for (int dy = 0; dy <= top; dy++) {
+					level.setBlock(center.offset(dx, dy, dz), AltarShape.state(dx, dy, dz, top), EDIT_FLAGS);
+				}
+				for (int dy = top + 1; dy <= top + AltarShape.HEADROOM; dy++) {
+					BlockPos clearance = center.offset(dx, dy, dz);
 					BlockState existing = level.getBlockState(clearance);
-					if (clearance.equals(center.above()) && existing.is(ModBlocks.RESONANCE_CORE)) continue;
+					if (clearance.equals(AltarShape.corePosition(center)) && existing.is(ModBlocks.RESONANCE_CORE)) continue;
 					if (!existing.isAir() && !existing.is(Blocks.BEDROCK)) {
 						level.setBlock(clearance, Blocks.AIR.defaultBlockState(), EDIT_FLAGS);
 					}
 				}
 			}
 		}
-		if (includeCore) level.setBlock(center.above(), ModBlocks.RESONANCE_CORE.defaultBlockState(), EDIT_FLAGS);
+		if (includeCore) {
+			level.setBlock(AltarShape.corePosition(center), ModBlocks.RESONANCE_CORE.defaultBlockState(), EDIT_FLAGS);
+		}
 	}
 
 	private static List<BlockPos> buildGateways(ServerLevel level) {
@@ -397,31 +445,42 @@ public final class EndBossArenaService {
 			int x = (int) Math.round(Math.cos(angle) * GATEWAY_RADIUS);
 			int z = (int) Math.round(Math.sin(angle) * GATEWAY_RADIUS);
 			level.getChunkAt(new BlockPos(x, 64, z));
-			BlockPos existing = findBlockInColumn(level, x, z, ModBlocks.WARP_GATE_CORE);
-			int y = existing == null
-					? Math.max(64, level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z) + 3)
-					: existing.getY();
+			int y = Math.max(64, level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z) + 3);
 			BlockPos core = new BlockPos(x, y, z);
 			if (!unique.add(core)) throw new IllegalStateException("Gateway position collision at " + core);
-			buildVanillaGatewayOutline(level, core);
+			clearGatewayStructure(level, core);
 			cores.add(core);
 		}
 		return List.copyOf(cores);
 	}
 
-	private static void buildVanillaGatewayOutline(ServerLevel level, BlockPos core) {
+	/**
+	 * The warp gate structure is no longer built. The slot positions are still computed, because
+	 * they remain the addresses the encounter snapshot points its deposit particles at, but nothing
+	 * is placed in the world any more and nothing is drawn there either - and any structure left
+	 * behind by an older save is removed here, so a world that was prepared before this change does
+	 * not keep a ring of dead bedrock.
+	 */
+	private static void clearGatewayStructure(ServerLevel level, BlockPos core) {
 		for (int dy = -2; dy <= 2; dy++) {
 			for (Direction direction : Direction.Plane.HORIZONTAL) {
 				if (dy == 0 || Math.abs(dy) == 1) {
-					level.setBlock(core.relative(direction, 2).offset(0, dy, 0),
-							Blocks.BEDROCK.defaultBlockState(), EDIT_FLAGS);
+					clearIfLegacyGatewayBlock(level, core.relative(direction, 2).offset(0, dy, 0));
 				}
 			}
-			if (Math.abs(dy) == 2) {
-				level.setBlock(core.offset(0, dy, 0), Blocks.BEDROCK.defaultBlockState(), EDIT_FLAGS);
-			}
+			if (Math.abs(dy) == 2) clearIfLegacyGatewayBlock(level, core.offset(0, dy, 0));
 		}
-		level.setBlock(core, ModBlocks.WARP_GATE_CORE.defaultBlockState(), EDIT_FLAGS);
+		clearIfLegacyGatewayBlock(level, core);
+	}
+
+	private static void clearIfLegacyGatewayBlock(ServerLevel level, BlockPos pos) {
+		// Only the pieces this method used to place are removed; naturally generated End terrain
+		// that happens to sit in the same column is left exactly where it is. The gate core block is
+		// no longer registered, so an older save already loads those positions as air; the bedrock
+		// frame around them is the part that still has to be taken down.
+		if (level.getBlockState(pos).is(Blocks.BEDROCK)) {
+			level.setBlock(pos, Blocks.AIR.defaultBlockState(), EDIT_FLAGS);
+		}
 	}
 
 	private static List<AnchorSlot> ensureAnchorSlots(ServerLevel level, boolean alreadyPrepared) {
@@ -438,7 +497,13 @@ public final class EndBossArenaService {
 			SpikeFeature.EndSpike spike = spikes.get(index);
 			BlockPos position = new BlockPos(spike.getCenterX(), spike.getHeight() + 1, spike.getCenterZ());
 			level.getChunkAt(position);
-			if (alreadyPrepared) level.waitForEntities(new ChunkPos(position), 0);
+			// Unconditional, and it was not. The spike feature puts a crystal on exactly this block,
+			// and entities from a chunk that getChunkAt has just generated are not in the section
+			// storage the instant it returns. Gating the wait on the arena already being prepared was
+			// precisely backwards: the first prepare is the one that generates the chunk, so it is the
+			// only one that can race the crystal it just caused to exist. The sweep below then found
+			// nothing, the anchor went up, and the vanilla crystal loaded in on top of it.
+			level.waitForEntities(new ChunkPos(position), 0);
 			UUID uuid = deterministicAnchorUuid(level, index);
 			Entity loaded = findLoadedEntity(level, uuid);
 			if (loaded != null && !(loaded instanceof EndCrystal)) {
@@ -458,29 +523,48 @@ public final class EndBossArenaService {
 				}
 				rememberAnchor(level, existing);
 			} else if (existing != null) {
+				// The untagged vanilla crystal can come back after the anchor exists -- respawning the
+				// dragon re-seeds the spikes -- so the sweep has to run here too, not only where the
+				// anchor is first created. Skipped for the anchor itself, which is standing on the
+				// same block by design.
+				removeCrystalsAt(level, position, existing);
 				rememberAnchor(level, existing);
 				existing.setShowBottom(false);
 				existing.addTag(ANCHOR_TAG);
 				existing.addTag(ANCHOR_INDEX_PREFIX + index);
 			}
-			buildAnchorCage(level, position);
+			restoreAnchorFooting(level, position);
 			slots.add(new AnchorSlot(index, position, uuid));
 		}
 		return List.copyOf(slots);
 	}
 
-	private static void buildAnchorCage(ServerLevel level, BlockPos crystalPosition) {
-		level.setBlock(crystalPosition.below(), ModBlocks.STABILITY_ANCHOR_CAGE.defaultBlockState(), EDIT_FLAGS);
-		for (Direction direction : Direction.Plane.HORIZONTAL) {
-			level.setBlock(crystalPosition.relative(direction),
-					ModBlocks.STABILITY_ANCHOR_CAGE.defaultBlockState(), EDIT_FLAGS);
+	/**
+	 * The anchor sits bare on the spike it grew from. The cage - one block under the crystal and one
+	 * on each of the four sides - is no longer placed at all: it wrapped a band of bright custom
+	 * texture around the one thing in the arena a player is meant to be looking at.
+	 *
+	 * <p>The block is no longer registered either, so a world prepared before this change loads
+	 * those five positions as air. The four flanks were air to begin with and are left that way;
+	 * the one underneath was the spike's own bedrock cap before the cage overwrote it, so an
+	 * unsupported crystal gets its cap back rather than floating over a hole.</p>
+	 */
+	private static void restoreAnchorFooting(ServerLevel level, BlockPos crystalPosition) {
+		BlockPos footing = crystalPosition.below();
+		if (level.getBlockState(footing).isAir()) {
+			level.setBlock(footing, Blocks.BEDROCK.defaultBlockState(), EDIT_FLAGS);
 		}
 	}
 
 	private static void removeCrystalsAt(ServerLevel level, BlockPos position) {
+		removeCrystalsAt(level, position, null);
+	}
+
+	/** Clears the spike top of everything except {@code keep}, which is the anchor that belongs there. */
+	private static void removeCrystalsAt(ServerLevel level, BlockPos position, EndCrystal keep) {
 		AABB bounds = new AABB(position).inflate(2.0D);
 		for (EndCrystal crystal : level.getEntitiesOfClass(EndCrystal.class, bounds, Entity::isAlive)) {
-			crystal.discard();
+			if (crystal != keep) crystal.discard();
 		}
 	}
 
@@ -541,7 +625,10 @@ public final class EndBossArenaService {
 		Set<BlockPos> positions = new HashSet<>();
 		for (int dx = -ALTAR_RADIUS; dx <= ALTAR_RADIUS; dx++) {
 			for (int dz = -ALTAR_RADIUS; dz <= ALTAR_RADIUS; dz++) {
-				for (int dy = -2; dy <= 6; dy++) positions.add(arena.center.offset(dx, dy, dz));
+				// Down through the footing, up past the pillars and the air the terrace stands in.
+				for (int dy = -2; dy <= AltarShape.MAX_OFFSET + AltarShape.HEADROOM; dy++) {
+					positions.add(arena.center.offset(dx, dy, dz));
+				}
 			}
 		}
 		for (BlockPos core : arena.gatewayCorePositions) {
@@ -678,6 +765,15 @@ public final class EndBossArenaService {
 						|| !level.hasChunkAt(position)) continue;
 				BlockState state = level.getBlockState(position);
 				if (protectedPositions.contains(position) || !canDestroy(level, position, state)) continue;
+				// Erosion outranks a scar.
+				//
+				// A lost encounter deliberately keeps draining this queue, and the failure erosion
+				// commits its missing-texture blocks into the same ground. Left to run, the queue
+				// carved those straight back out to air - so the island a table lost on visibly shed
+				// a slab of the very damage it was supposed to keep, right as the boss vanished.
+				// A block that has stopped being able to describe itself is already the final state
+				// of that column; there is nothing further for a scar to take.
+				if (state.is(ModBlocks.MISSING_TEXTURE_PROXY)) continue;
 				if (level.setBlock(position, Blocks.AIR.defaultBlockState(), EDIT_FLAGS)) {
 					changed++;
 					permanentEdits++;

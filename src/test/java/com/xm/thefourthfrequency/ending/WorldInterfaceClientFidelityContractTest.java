@@ -23,29 +23,38 @@ class WorldInterfaceClientFidelityContractTest {
 			}
 		}
 		assertTrue(model.contains("ANIMATED_BONE_COUNT = 15"));
-		assertTrue(model.contains("MAX_VISIBLE_STATIC_PARTS = 208"));
-		assertTrue(model.contains("STATIC_PART_BUDGET = {64, 128, MAX_VISIBLE_STATIC_PARTS}"));
+		assertTrue(model.contains("MAX_VISIBLE_STATIC_PARTS = 1_024"));
+		assertTrue(model.contains("STATIC_PART_BUDGET = {512, 768, MAX_VISIBLE_STATIC_PARTS}"));
 		String setup = model.substring(model.indexOf("public void setupAnim"));
 		assertFalse(setup.contains("addOrReplaceChild"), "form geometry must remain bake-time static");
 	}
 
 	@Test
-	void thirtyOneReusableClipsServeAllFourteenWireActions() throws Exception {
+	void reusableClipsServeEveryLiveWireAction() throws Exception {
 		String animations = read("client_render/WorldInterfaceAnimations.java");
-		assertTrue(animations.contains("PROTOCOL_ACTION_COUNT = 14"));
-		assertTrue(animations.contains("CLIPS_PER_ACTION = 2"));
-		assertTrue(animations.contains("AUTHORED_CLIP_COUNT = 31"));
-		assertEquals(31, count(animations, "public static final AnimationDefinition "));
-		for (String pair : new String[]{
-				"{LASER_AIM, LASER_APERTURE}", "{ORB_CHARGE, ORB_RELEASE}",
-				"{GRAB_REACH, GRAB_SLAM}", "{MENTAL_FOCUS, MENTAL_DISTORTION}",
-				"{WEAPON_REACH, WEAPON_HOLD}", "{THROW_CAPTURE, THROW_RELEASE}",
-				"{HOTBAR_GAZE, HOTBAR_PURGE}", "{ARROW_CATCH, ARROW_REFLECTION}",
-				"{EVICTION_CORRUPTION, FORCED_EXPULSION}", "{SUMMON_CORE, SUMMON_LIMBS}",
+		assertTrue(animations.contains("PROTOCOL_ACTION_COUNT = 13"));
+		assertTrue(animations.contains("CLIPS_PER_ACTION = 3"));
+		assertTrue(animations.contains("AUTHORED_CLIP_COUNT = 37"));
+		assertEquals(37, count(animations, "public static final AnimationDefinition "));
+		// Wire id 3 held the retired grab-slam. The table is indexed by wire id, so the slot has to
+		// stay - collapsing it would silently shift every action after it onto the wrong clips.
+		assertTrue(animations.contains("// 3: the grab-slam is retired"),
+				"the retired wire id must keep its slot in the clip table");
+		// Each attack owns an authored recovery, so the release has somewhere to settle instead of
+		// the body simply stopping. The resolution and morph actions keep their original two.
+		for (String composition : new String[]{
+				"{LASER_AIM, LASER_APERTURE, LASER_RECOVER}", "{ORB_CHARGE, ORB_RELEASE, ORB_RECOVER}",
+				"{LANCE_FOCUS, LANCE_DESCENT, LANCE_RECOVER}",
+				"{WEAPON_REACH, WEAPON_HOLD, WEAPON_RECOVER}",
+				"{THROW_CAPTURE, THROW_RELEASE, THROW_RECOVER}",
+				"{HOTBAR_GAZE, HOTBAR_PURGE, HOTBAR_RECOVER}",
+				"{TENDRIL_REAR, TENDRIL_LASH, TENDRIL_RECOVER}",
+				"{EVICTION_CORRUPTION, FORCED_EXPULSION, EXPULSION_RECOVER}",
+				"{SUMMON_CORE, SUMMON_LIMBS}",
 				"{MORPH_SECOND_CORE, MORPH_SECOND_LIMBS}",
 				"{MORPH_THIRD_CORE, MORPH_THIRD_LIMBS}",
 				"{SUCCESS_COLLAPSE, SUCCESS_FADE}", "{FAILURE_BLACKEN, FAILURE_ESCAPE}"}) {
-			assertTrue(animations.contains(pair), pair);
+			assertTrue(animations.contains(composition), composition);
 		}
 	}
 
@@ -54,19 +63,21 @@ class WorldInterfaceClientFidelityContractTest {
 		String beams = read("client_render/WorldInterfaceBeamBatchRenderer.java");
 		String presentation = read("client_ui/WorldInterfacePresentationController.java");
 		String renderer = read("client_render/WorldInterfaceRenderer.java");
-		assertTrue(beams.contains("MAX_GATEWAYS = WorldInterfaceProtocol.MAX_GATEWAYS"));
 		assertTrue(beams.contains("RENDER_LAYER_COUNT = 1"));
-		// Camera-facing shafts halved the old axis-aligned pair's vertex cost.
-		assertTrue(beams.contains("MAX_VERTICES_PER_GATE = 8"));
-		assertTrue(beams.contains("FULL_DETAIL_DISTANCE = 36.0D"));
-		assertTrue(beams.contains("RENDER_CUTOFF_DISTANCE = 112.0D"));
+		// The gate ring is gone: the structures stopped being built, so the shafts were twenty
+		// lights standing in empty air. Nothing may put it back.
+		assertFalse(beams.contains("extractGateways"));
+		assertFalse(beams.contains("MAX_VERTICES_PER_GATE"));
+		// The per-family allowances are headroom now, not ceilings to design against; what still
+		// matters is that every family is declared and they all resolve to the one batch below.
+		assertTrue(beams.contains("MAX_VERTICES_PER_TETHER = 16"));
+		assertTrue(beams.contains("FULL_DETAIL_DISTANCE = 96.0D"));
+		assertTrue(beams.contains("RENDER_CUTOFF_DISTANCE = 192.0D"));
 		assertTrue(beams.contains("WorldRenderEvents.END_EXTRACTION.register"));
 		assertTrue(beams.contains("WorldRenderEvents.BEFORE_TRANSLUCENT.register"));
 		// The whole point of folding the laser, tethers and orb halos in here: still one layer.
 		assertEquals(1, count(beams, "getBuffer(RenderTypes.lightning())"));
-		assertTrue(beams.contains("deltaX * deltaX + deltaZ * deltaZ"),
-				"gateway LOD must use horizontal distance so the radius-96 ring remains visible");
-		assertTrue(beams.contains("MAX_BATCH_VERTICES = MAX_GATEWAYS * MAX_VERTICES_PER_GATE"),
+		assertTrue(beams.contains("MAX_BATCH_VERTICES = MAX_ANCHOR_TETHERS * MAX_VERTICES_PER_TETHER"),
 				"every primitive family must stay inside one declared vertex budget");
 		assertTrue(beams.contains("public static void resetSession()"),
 				"entity references must be droppable so a disconnect cannot strand a stale level");
@@ -76,7 +87,7 @@ class WorldInterfaceClientFidelityContractTest {
 		assertTrue(presentation.contains("canStartSilent()"));
 		assertTrue(presentation.contains("stopAmbientLoops()"));
 		assertFalse(presentation.contains("AMBIENT_LOOP_TICKS"));
-		assertTrue(renderer.contains("MAX_RENDER_LAYERS = 2"));
+		assertTrue(renderer.contains("MAX_RENDER_LAYERS = 6"));
 	}
 
 	@Test
@@ -86,7 +97,11 @@ class WorldInterfaceClientFidelityContractTest {
 		// collapse was a visible hitch at the worst possible moment.
 		assertFalse(presentation.contains("levelRenderer.allChanged()"));
 		assertTrue(presentation.contains("setSectionRangeDirty("));
-		assertTrue(presentation.contains("EROSION_RADIUS_BLOCKS = 160"));
+		// The radius is the policy's, not the renderer's. Two different numbers meant the render
+		// reached four fifths further than the server ever committed, so the island healed most of
+		// its damage the instant the encounter cleared.
+		assertTrue(presentation.contains("EROSION_RADIUS_BLOCKS = WorldInterfacePolicy.EROSION_RADIUS_BLOCKS"),
+				"render and commit must erode the same disc");
 	}
 
 	@Test
@@ -95,7 +110,11 @@ class WorldInterfaceClientFidelityContractTest {
 		assertTrue(post.contains("if (active != null && !isOwned(active)) return;"),
 				"the pursuit chain must survive an overlapping encounter action");
 		assertTrue(post.contains("clearOwned("));
-		for (String effect : new String[]{"world_interface_mental", "world_interface_mental_peak",
+		// One shared lock treatment across every action that telegraphs, rather than a chain owned
+		// by a single attack: being singled out has to look the same whoever is doing the singling.
+		assertTrue(post.contains("WorldInterfaceProtocol.lockWarningTicks("),
+				"the screen treatment must run on the protocol's own lock clock");
+		for (String effect : new String[]{"world_interface_lock", "world_interface_lock_peak",
 				"world_interface_expulsion"}) {
 			assertTrue(Files.exists(Path.of("src/main/resources/assets/thefourthfrequency/post_effect",
 					effect + ".json")), "missing post effect: " + effect);

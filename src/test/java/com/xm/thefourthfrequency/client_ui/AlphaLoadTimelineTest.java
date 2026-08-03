@@ -139,14 +139,86 @@ final class AlphaLoadTimelineTest {
 	}
 
 	@Test
-	void firstEntryUsesTheAlreadyVisibleHalfProgressAndOnlyKeepsThePause() {
+	void thePreludeIsLongEnoughToBeBelievedAndItsProgressBarLosesGround() {
 		assertEquals(0, AlphaLoadTimeline.NORMAL_PROGRESS_END_TICK);
-		assertEquals(20, AlphaLoadTimeline.NORMAL_PAUSE_TICKS);
+		// The whole sequence depends on the player settling into an ordinary wait first, which
+		// one second never bought. Guard the floor rather than the exact value.
+		assertTrue(AlphaLoadTimeline.NORMAL_PAUSE_TICKS >= 40,
+				"The prelude must be long enough for the stalled bar to become a question");
 		assertTrue(AlphaLoadTimeline.initialNormalFrame(0));
-		assertEquals(0.5F, AlphaLoadTimeline.initialNormalProgress(0));
-		assertEquals(0.5F, AlphaLoadTimeline.initialNormalProgress(
-				AlphaLoadTimeline.GLITCH_START_TICK - 1));
 		assertFalse(AlphaLoadTimeline.initialNormalFrame(AlphaLoadTimeline.GLITCH_START_TICK));
+
+		// It creeps up, so that what follows registers as a loss rather than as a value.
+		assertEquals(0.5F, AlphaLoadTimeline.initialNormalProgress(0));
+		float peak = AlphaLoadTimeline.initialNormalProgress(
+				AlphaLoadTimeline.PROGRESS_REGRESSION_TICK);
+		assertTrue(peak > 0.5F, "The bar must gain ground before it loses any: " + peak);
+
+		// Then it slides back, and the slide is the point: a bar that snaps to a lower value
+		// reads as one bad frame and is forgiven. Never rising, and never dropping far enough in
+		// a single tick to be mistaken for a glitch.
+		float previous = peak;
+		for (int tick = AlphaLoadTimeline.PROGRESS_REGRESSION_TICK + 1;
+				tick < AlphaLoadTimeline.GLITCH_START_TICK; tick++) {
+			float value = AlphaLoadTimeline.initialNormalProgress(tick);
+			assertTrue(value <= previous, "The bar must not recover at tick " + tick);
+			assertTrue(previous - value < 0.05F,
+					"The bar must slide rather than snap at tick " + tick + ": " + (previous - value));
+			previous = value;
+		}
+		// It has to land exactly where the corruption phase pins the bar. Anything else turns the
+		// handoff into the single jump this whole slide exists to avoid.
+		assertEquals(0.5F, previous,
+				"The prelude must hand the bar over at the value the corruption phase holds");
+		assertTrue(peak > previous, "The bar must end lower than it reached: " + peak);
+
+		// The slide has to finish, and be held, while the screen still looks ordinary - the whole
+		// effect is that this happens before anything has visibly corrupted.
+		assertTrue(AlphaLoadTimeline.PROGRESS_REGRESSION_TICK
+				+ AlphaLoadTimeline.PROGRESS_REGRESSION_SLIDE_TICKS
+				< AlphaLoadTimeline.GLITCH_START_TICK,
+				"The bar must finish losing ground before the first glitch");
+	}
+
+	@Test
+	void theRecordingAdmitsItSeesThePlayerOnceMoreOnAFrameThatHasStopped() {
+		// Not the instant the frame locks: the freeze has to be established as a freeze first.
+		assertFalse(AlphaLoadTimeline.frozenObserverVisible(
+				AlphaLoadTimeline.FREEZE_START_TICK));
+		assertTrue(AlphaLoadTimeline.frozenObserverVisible(AlphaLoadTimeline.FREEZE_START_TICK
+				+ AlphaLoadTimeline.FROZEN_OBSERVER_DELAY_TICKS));
+		// It belongs to the frozen wall and must not survive it.
+		assertFalse(AlphaLoadTimeline.frozenObserverVisible(
+				AlphaLoadTimeline.BLACKOUT_START_TICK));
+		assertFalse(AlphaLoadTimeline.frozenObserverVisible(
+				AlphaLoadTimeline.OBSERVER_MESSAGE_START_TICK));
+		// Every other layer is locked while it shows, which is the entire point.
+		int shown = AlphaLoadTimeline.FREEZE_START_TICK
+				+ AlphaLoadTimeline.FROZEN_OBSERVER_DELAY_TICKS;
+		assertEquals(AlphaLoadTimeline.failureMotionTick(AlphaLoadTimeline.FREEZE_START_TICK),
+				AlphaLoadTimeline.failureMotionTick(shown));
+	}
+
+	@Test
+	void deadAirTakesOverTheWindowTitleAndTheRecoveredBarGivesItselfAway() {
+		// The title bar is the only channel that survives dead air, so it carries it alone.
+		assertFalse(AlphaLoadTimeline.deadAirWindowTitle(
+				AlphaLoadTimeline.BLACKOUT_START_TICK - 1));
+		assertTrue(AlphaLoadTimeline.deadAirWindowTitle(AlphaLoadTimeline.BLACKOUT_START_TICK));
+		assertFalse(AlphaLoadTimeline.deadAirWindowTitle(
+				AlphaLoadTimeline.LEGACY_RECOVERY_START_TICK),
+				"1.0.0 must own the frame the picture returns, not a dead-air placeholder");
+
+		// The fault lands after the screen has had time to look trustworthy again, and before
+		// the player is allowed to leave - a fault nobody is still watching is not a fault.
+		assertTrue(AlphaLoadTimeline.recoveryFaultTick() > AlphaLoadTimeline.LEGACY_RECOVERY_START_TICK
+				+ AlphaLoadTimeline.RECOVERY_LOCK_TICKS,
+				"The bar must fail only after the tracking has settled");
+		assertTrue(AlphaLoadTimeline.recoveryFaultTick() < AlphaLoadTimeline.MIN_LOADING_SCREEN_TICKS,
+				"The fault must be visible before the screen may close");
+		assertFalse(AlphaLoadTimeline.recoveryProgressFault(
+				AlphaLoadTimeline.recoveryFaultTick() - 1));
+		assertTrue(AlphaLoadTimeline.recoveryProgressFault(AlphaLoadTimeline.recoveryFaultTick()));
 	}
 
 	@Test
@@ -189,7 +261,10 @@ final class AlphaLoadTimelineTest {
 				AlphaLoadTimeline.LEGACY_RECOVERY_START_TICK - 1));
 		assertFalse(AlphaLoadTimeline.blackoutFrame(
 				AlphaLoadTimeline.LEGACY_RECOVERY_START_TICK));
-		assertEquals(40, AlphaLoadTimeline.BLACKOUT_TICKS);
+		// Dead air is a beat, not a wait. With nothing rendered inside it, past about a second
+		// and a half it stops reading as a lost signal and starts reading as a hang.
+		assertTrue(AlphaLoadTimeline.BLACKOUT_TICKS >= 20 && AlphaLoadTimeline.BLACKOUT_TICKS <= 32,
+				"Dead air length: " + AlphaLoadTimeline.BLACKOUT_TICKS);
 		assertFalse(AlphaLoadTimeline.legacyRecoveryFrame(
 				AlphaLoadTimeline.LEGACY_RECOVERY_START_TICK - 1));
 		assertTrue(AlphaLoadTimeline.legacyRecoveryFrame(
