@@ -36,6 +36,10 @@ import java.util.UUID;
 public final class TerminalRuntimeService {
 	private static final int LIVE_SYNC_TICKS = 20;
 	private static final int NAVIGATION_SYNC_TICKS = 4;
+	/** How long the dial must be held inside the window before the hidden file is granted. */
+	static final int RECEIVER_LOCK_TICKS = 20;
+	/** Snapshot cadence while a lock is counting up, so the readout can actually be watched. */
+	private static final int RECEIVER_LOCK_SYNC_TICKS = 2;
 	private static final Map<UUID, ViewState> OPEN_VIEWS = new LinkedHashMap<>();
 	private static final Map<UUID, Integer> REMEMBERED_MODES = new LinkedHashMap<>();
 	/**
@@ -85,6 +89,8 @@ public final class TerminalRuntimeService {
 		// page while the wire still claims the other.
 		ViewState view = new ViewState(hand, TerminalControlPolicy.mode(opening.wireMode()), initialPage,
 				TerminalControlPolicy.tuning(tuning), 0L, 0L, "", serverTick, TerminalToolService.NO_TOOL);
+		view.forcedPageUntouched = openRecords;
+		view.pageBeforeForcedOpen = remembered.ordinal();
 		OPEN_VIEWS.put(player.getUUID(), view);
 		sendSnapshot(player, view);
 		sendNavigation(player);
@@ -105,6 +111,9 @@ public final class TerminalRuntimeService {
 				applyTuning(player, view, value);
 			}
 			case TerminalControlPayload.REFRESH -> { if (value != 0) return; }
+			// No client sends this any more - the expandable signal-card feed that offered "set as
+			// bearing" was removed once it turned out nothing ever drew it. The handler stays so an
+			// older client on a newer server is still answered rather than silently ignored.
 			case TerminalControlPayload.SELECT_FRAGMENT_TARGET -> {
 				if (value < 0 || value >= 12) return;
 				if (!FragmentInvestigationService.selectCandidate(player, value)) return;
@@ -149,18 +158,16 @@ public final class TerminalRuntimeService {
 			case TerminalControlPayload.VISIT_PAGE -> {
 				if (!TerminalTaskService.visitPage(player, value)) return;
 				view.page = TerminalPage.fromIndex(value).ordinal();
+				// The client announces the forced RECORDS page as soon as it opens, to mark the log
+				// read. That announcement is the warning's, not the player's, so it does not count as
+				// leaving the page the terminal should reopen on.
+				if (view.page != TerminalPage.RECORDS.ordinal()) view.forcedPageUntouched = false;
 				REMEMBERED_PAGES.put(player.getUUID(), view.page);
 			}
-			case TerminalControlPayload.CLAIM_TASK_REWARD -> {
-				TerminalTaskService.ClaimResult result = TerminalTaskService.claim(player, value);
-				if (result == TerminalTaskService.ClaimResult.INVENTORY_FULL) {
-					TerminalNoticeService.denied(player,
-							"message.thefourthfrequency.task.inventory_full");
-				} else if (result != TerminalTaskService.ClaimResult.CLAIMED
-						&& result != TerminalTaskService.ClaimResult.STALE) {
-					return;
-				}
-			}
+			// Kept for clients built before rewards became automatic. It delivers nothing on its own -
+			// claim() only runs the catch-up pass - so there is no outcome here worth a notice: the
+			// reward, if one was still owed, announces itself through the usual completion line.
+			case TerminalControlPayload.CLAIM_TASK_REWARD -> TerminalTaskService.claim(player, value);
 			case TerminalControlPayload.CLOSE -> {
 				if (value != 0) return;
 				remember(player.getUUID(), view);
@@ -256,8 +263,12 @@ public final class TerminalRuntimeService {
 				continue;
 			}
 			advanceNearbyReceiver(player, view, now);
+			// The hold is only RECEIVER_LOCK_TICKS long, so at the idle cadence the whole count would
+			// pass between two snapshots and the panel would jump from nothing to a granted file. The
+			// faster rate applies only while the dial is actually inside the window.
 			if (now >= view.nextSyncTick) {
-				view.nextSyncTick = now + LIVE_SYNC_TICKS;
+				view.nextSyncTick = now + (receiverLockTicks(player, view) > 0
+						? RECEIVER_LOCK_SYNC_TICKS : LIVE_SYNC_TICKS);
 				sendSnapshot(player, view);
 			}
 			if (now >= view.nextNavigationSyncTick) {
@@ -317,10 +328,14 @@ public final class TerminalRuntimeService {
 				tag.getStringOr(TerminalData.ACTIVE_ANOMALY_ID, "none"),
 				(int) Math.clamp(tag.getLongOr(TerminalData.ACTIVE_ANOMALY_UNTIL, 0L) - now, 0L, 1200L),
 				files, -1, objective.id(), objective.progress(), objective.target(),
-				objective.index(), objective.claimable(), objective.rewardItemId(), objective.rewardCount());
+				objective.index(), objective.claimable(), objective.rewardItemId(), objective.rewardCount(),
+				!tag.getBooleanOr(TerminalData.ONBOARDING_DONE, false),
+				// The same call that decides which of the six item forms this player is holding, so
+				// the lamp on the panel and the lamp on the device are one statement, not two.
+				TerminalData.attentionActive(tag));
 		ServerPlayNetworking.send(player, payload);
 		ServerPlayNetworking.send(player, TerminalToolService.snapshot(player, view.selectedTool,
-				view.tuning, receiverLockTicks(player, view, now)));
+				view.tuning, receiverLockTicks(player, view)));
 	}
 
 	public static java.util.List<TerminalFilePayload> visibleFiles(CompoundTag tag) {
@@ -430,7 +445,12 @@ public final class TerminalRuntimeService {
 
 	private static void remember(UUID id, ViewState view) {
 		REMEMBERED_MODES.put(id, view.mode);
-		REMEMBERED_PAGES.put(id, view.page);
+		// A pursuit warning forces one open onto RECORDS. That page is the warning's choice, not the
+		// player's, so it must not become what the terminal reopens on: the redirect is consumed
+		// after a single open, but remembering it made every later open land on RECORDS anyway - the
+		// flag was spent and the effect stayed. Once the player navigates anywhere themselves the
+		// override is dropped and the normal memory takes over.
+		REMEMBERED_PAGES.put(id, view.forcedPageUntouched ? view.pageBeforeForcedOpen : view.page);
 		REMEMBERED_TUNING.put(id, view.tuning);
 	}
 
@@ -526,6 +546,10 @@ public final class TerminalRuntimeService {
 				: TerminalPage.initialPage(rememberedMode(playerId)).ordinal();
 	}
 
+	public static boolean viewOpenForTesting(ServerPlayer player) {
+		return OPEN_VIEWS.containsKey(player.getUUID());
+	}
+
 	public static int rememberedTuning(UUID playerId) {
 		return REMEMBERED_TUNING.getOrDefault(playerId, TerminalControlPolicy.DEFAULT_TUNING);
 	}
@@ -555,15 +579,27 @@ public final class TerminalRuntimeService {
 			view.fragmentLockedSinceTick = now;
 			return;
 		}
-		if (now - view.fragmentLockedSinceTick >= 20L
+		if (now - view.fragmentLockedSinceTick >= RECEIVER_LOCK_TICKS
 				&& FragmentInvestigationService.completeNearby(player, view.tuning)) resetReceiver(view, now);
 	}
 
-	private static int receiverLockTicks(ServerPlayer player, ViewState view, long now) {
+	/**
+	 * Progress towards the {@value #RECEIVER_LOCK_TICKS}-tick hold that grants a hidden file.
+	 *
+	 * <p>Reads the server tick count itself rather than taking a clock from the caller. It used to be
+	 * handed {@code level.getGameTime()} while {@link ViewState#fragmentLockedSinceTick} is written
+	 * from {@code server.getTickCount()} - two clocks that only agree on a world that has never been
+	 * reloaded. On every other world the game time is far ahead of this session's tick count, so the
+	 * difference clamped straight to the maximum: the panel announced a lock the moment the dial
+	 * entered the window, a second before the file was actually granted, and never counted up. A
+	 * player who trusted the readout and moved on took nothing with them.</p>
+	 */
+	private static int receiverLockTicks(ServerPlayer player, ViewState view) {
 		var nearby = FragmentInvestigationService.nearby(player).orElse(null);
 		if (nearby == null || !nearby.key().equals(view.fragmentCandidateKey)
 				|| !TerminalControlPolicy.receiverLocked(view.tuning, nearby.tuning())) return 0;
-		return (int) Math.clamp(now - view.fragmentLockedSinceTick, 0L, 20L);
+		long now = player.level().getServer().getTickCount();
+		return (int) Math.clamp(now - view.fragmentLockedSinceTick, 0L, RECEIVER_LOCK_TICKS);
 	}
 
 	private static void resetReceiver(ViewState view, long now) {
@@ -583,6 +619,10 @@ public final class TerminalRuntimeService {
 		private String fragmentCandidateKey;
 		private long fragmentLockedSinceTick;
 		private int selectedTool;
+		/** True while this view is still sitting on a page a pursuit warning chose for it. */
+		private boolean forcedPageUntouched;
+		/** The page the player had left the terminal on before that warning took over. */
+		private int pageBeforeForcedOpen;
 
 		private ViewState(InteractionHand hand, int mode, int initialPage, int tuning, long nextSyncTick,
 				long nextNavigationSyncTick, String fragmentCandidateKey, long fragmentLockedSinceTick,

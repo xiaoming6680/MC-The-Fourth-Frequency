@@ -5,7 +5,12 @@ import java.util.List;
 
 /** Deterministic timing and text corruption rules for terminal navigation feedback. */
 public final class TerminalNavigationVisualPolicy {
-	private static final int[] GLITCH_GLYPHS = {'\uFFFD', '\u2593', '\u256B', '\u00A4', '?'};
+	/**
+	 * Package-private rather than private so {@link SkyInstrumentPolicy} can mask with the same
+	 * glyphs. A second copy would let the two surfaces drift apart, and a terminal that corrupts
+	 * text two different ways reads as two different faults.
+	 */
+	static final int[] GLITCH_GLYPHS = {'\uFFFD', '\u2593', '\u256B', '\u00A4', '?'};
 
 	private TerminalNavigationVisualPolicy() {
 	}

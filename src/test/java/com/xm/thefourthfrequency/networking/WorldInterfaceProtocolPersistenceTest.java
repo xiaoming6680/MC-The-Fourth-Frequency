@@ -16,9 +16,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 final class WorldInterfaceProtocolPersistenceTest {
 	private static final UUID ENCOUNTER_ID = UUID.fromString("ab8e8138-776c-4a0c-8b48-7bc41292c034");
 	private static final long ABOVE_SIGNED_INT_MAX = (long) Integer.MAX_VALUE + 1L;
+	private static final List<BlockPos> ANCHOR_POSITIONS = java.util.stream.IntStream
+			.range(0, WorldInterfaceProtocol.MAX_ANCHORS)
+			.mapToObj(index -> new BlockPos(index * 8, 80, index * 5)).toList();
 
 	@Test
 	void everyFinalePayloadRoundTripsAboveTheSignedIntBoundary() {
+		assertEquals(2, WorldInterfaceProtocol.VERSION);
 		AltarSnapshotS2C altar = new AltarSnapshotS2C(WorldInterfaceProtocol.VERSION, ENCOUNTER_ID,
 				ABOVE_SIGNED_INT_MAX, 91L, WorldInterfaceProtocol.Stage.WAITING_TERMINALS.wireId(),
 				new BlockPos(0, 65, 0), List.of(ENCOUNTER_ID), List.of("player"), 1, true,
@@ -30,12 +34,13 @@ final class WorldInterfaceProtocolPersistenceTest {
 				WorldInterfaceProtocol.ANCHOR_MASK, 4_000L, false, 9_000L,
 				WorldInterfaceProtocol.GatewayState.PURPLE.wireId(),
 				List.of(new BlockPos(1, 70, 1), new BlockPos(-1, 70, -1)),
+				ANCHOR_POSITIONS,
 				WorldInterfaceProtocol.Outcome.NONE.wireId(), 0.4F);
 		BossActionS2C action = new BossActionS2C(ENCOUNTER_ID, ABOVE_SIGNED_INT_MAX + 2L,
 				WorldInterfaceProtocol.BossAction.GRAB_THROW.wireId(), 9_100L, 80,
 				List.of(ENCOUNTER_ID), 0x51A2L, 3);
 		PoemStartS2C poem = new PoemStartS2C(ENCOUNTER_ID, Long.MAX_VALUE,
-				WorldInterfaceProtocol.Outcome.SUCCESS.wireId(), "world-identity-for-replay");
+				WorldInterfaceProtocol.Outcome.SUCCESS.wireId(), "world-identity-for-replay", 7);
 		PoemCompleteC2S acknowledgement = new PoemCompleteC2S(ENCOUNTER_ID, Long.MAX_VALUE,
 				WorldInterfaceProtocol.PoemCompletion.READ);
 
@@ -53,7 +58,17 @@ final class WorldInterfaceProtocolPersistenceTest {
 		assertThrows(IllegalArgumentException.class, () -> new PoemStartS2C(ENCOUNTER_ID, 0L,
 				WorldInterfaceProtocol.Outcome.NONE.wireId()));
 		assertThrows(IllegalArgumentException.class, () -> new PoemStartS2C(ENCOUNTER_ID, 0L,
-				WorldInterfaceProtocol.Outcome.FAILURE.wireId(), "x".repeat(129)));
+				WorldInterfaceProtocol.Outcome.FAILURE.wireId(), "x".repeat(129), 0));
+		assertThrows(IllegalArgumentException.class, () -> new PoemStartS2C(ENCOUNTER_ID, 0L,
+				WorldInterfaceProtocol.Outcome.FAILURE.wireId(), "world", 11));
+		assertThrows(IllegalArgumentException.class, () -> new WorldInterfaceSnapshotS2C(
+				WorldInterfaceProtocol.VERSION, ENCOUNTER_ID, 0L,
+				WorldInterfaceProtocol.Stage.PHASE_1.wireId(),
+				WorldInterfaceProtocol.Form.LISTENING_EMBRYO.wireId(), UUID.randomUUID(), BlockPos.ZERO,
+				600.0F, 600.0F, WorldInterfaceProtocol.ANCHOR_MASK, 0L, false, 0L,
+				WorldInterfaceProtocol.GatewayState.PURPLE.wireId(), List.of(),
+				java.util.Collections.nCopies(WorldInterfaceProtocol.MAX_ANCHORS, BlockPos.ZERO),
+				WorldInterfaceProtocol.Outcome.NONE.wireId(), 0.0F));
 		assertThrows(IllegalArgumentException.class,
 				() -> WorldInterfaceProtocol.BossAction.fromWireId(Integer.MAX_VALUE));
 		assertThrows(IllegalArgumentException.class, () -> new AltarSnapshotS2C(

@@ -66,7 +66,9 @@ public final class StructureNavigationService {
 		mask = switch (objective) {
 			case "bring_iron" -> progressiveMask(TerminalStructureTarget.VILLAGE,
 					TerminalStructureTarget.MINESHAFT, TerminalStructureTarget.RUINED_PORTAL, hintTier);
-			case "enter_nether", "collect_blaze_rods", "return_from_nether" -> progressiveMask(
+			// find_fortress belongs with these: the objective is in the Nether, so the only thing the
+			// overworld navigator can usefully offer is the way back down.
+			case "enter_nether", "find_fortress", "collect_blaze_rods", "return_from_nether" -> progressiveMask(
 					TerminalStructureTarget.RUINED_PORTAL, TerminalStructureTarget.VILLAGE,
 					TerminalStructureTarget.MINESHAFT, hintTier);
 			case "craft_eye" -> progressiveMask(TerminalStructureTarget.VILLAGE,

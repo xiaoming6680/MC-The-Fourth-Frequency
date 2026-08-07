@@ -112,13 +112,58 @@ public final class PursuitSessionService {
 		sendPresentation(player, record.getStringOr(TerminalData.PURSUIT_SESSION_ID, ""),
 				PursuitPresentationPayload.BLACKOUT,
 				record.getIntOr(TerminalData.PURSUIT_SESSION_FORM, 0));
+		// Must precede the teleport, not follow it. A cross-dimension teleportTo runs
+		// ChunkMap.addEntity synchronously, which pushes ClientboundAddEntityPacket to every nearby
+		// player (and every nearby entity back to this player) before this method sees the next
+		// line. A client that receives an add-entity for a player it has no PlayerInfo entry for
+		// drops the entity outright and only logs a warning, and nothing ever re-sends it until the
+		// tracker cycles - so restoring afterwards left the returning player invisible to everyone
+		// who was in range at the moment of arrival, and them invisible to the returning player.
+		// Vanilla PlayerList.placeNewPlayer observes the same ordering for the same reason.
+		PursuitVisibilityService.restore(player);
 		player.teleportTo(source, safe.getX() + 0.5D, safe.getY(), safe.getZ() + 0.5D,
 				Set.of(), yaw, pitch, true);
-		PursuitVisibilityService.restore(player);
 		// interrupt() above already clears this for a session that reached the mirror; this also
 		// covers a return from the prelude, and a recovery join where no runtime exists any more but
 		// the effect was persisted with the player.
 		PursuitVisionService.clear(player);
+		PursuitRecoveryLedger.settleAndDeliver(player);
+		clearSession(data, player, resolution);
+		return true;
+	}
+
+	/**
+	 * Books a session closed for a player who is already out of the mirror, without moving them.
+	 *
+	 * <p>{@link #returnToSource} is the wrong close there, in two ways. It teleports, and with the
+	 * player outside the mirror the destination it picks is the session's entry point - so someone
+	 * who died in the mirror and respawned would be pulled off their respawn point and put back at
+	 * the coordinates the chase started from, next to whatever killed them, and an operator's
+	 * teleport would be silently undone a tick after it landed. It also sends BLACKOUT to cover a
+	 * transition that is not happening.</p>
+	 *
+	 * <p>Everything else it does is bookkeeping that still has to run. The slot lease is one of only
+	 * {@link PursuitSlotManager#MAX_ACTIVE_PURSUITS} server-wide, and a record left with
+	 * {@code PURSUIT_ACTIVE} set makes {@link PursuitDirector} skip that player on every pass.</p>
+	 */
+	public static boolean abandonSession(ServerPlayer player, String resolution) {
+		PENDING_TRANSFERS.remove(player.getUUID());
+		PursuitFormController.interrupt(player);
+		PursuitSnapshotBuilder.cancel(player.getUUID());
+		// Nothing else undoes isolate() for this player: without this they stay missing from
+		// everyone's tab list, and everyone else from theirs, until they relog.
+		PursuitVisibilityService.restore(player);
+		// interrupt() covers a session that reached the mirror; this also covers one abandoned
+		// during the prelude, where no runtime was ever created.
+		PursuitVisionService.clear(player);
+		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
+		if (data.terminalRecord(player.getUUID()).isEmpty()) {
+			// No record left to clear, but the lease is real and has to come back regardless -
+			// clearSession is the only other thing that would have released it.
+			PursuitSlotManager.release(player.getUUID());
+			sendPresentation(player, "", PursuitPresentationPayload.CLEAR, 0);
+			return false;
+		}
 		PursuitRecoveryLedger.settleAndDeliver(player);
 		clearSession(data, player, resolution);
 		return true;

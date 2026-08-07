@@ -70,8 +70,14 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 		List<AnomalyClientScenario> scenarios = selection.anomalyId()
 				.map(id -> List.of(AnomalyClientScenario.require(id)))
 				.orElseGet(AnomalyClientScenario::definitions);
-		if (selection.anomalyId().isEmpty() && scenarios.size() != 16)
-			throw new AssertionError("Full anomaly suite must contain exactly sixteen scenarios");
+		// Counted from the catalog rather than written down. As a literal this said sixteen while the
+		// catalog had grown to nineteen, so the full suite refused to start over a number that only
+		// described an older version of the mod - and assertCatalogCoverage above already proves the
+		// scenario list and the catalog agree.
+		int expected = AnomalyClientScenario.definitions().size();
+		if (selection.anomalyId().isEmpty() && scenarios.size() != expected)
+			throw new AssertionError("Full anomaly suite must cover every catalog scenario: "
+					+ scenarios.size() + " of " + expected);
 
 		acknowledgeFirstRunNoticeIfNeeded(context);
 		context.waitForScreen(TitleScreen.class);
@@ -202,7 +208,11 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 			case LIGHTS -> {
 				// The dropout is gated to night, so the fixture has to supply one.
 				level.setDayTime(18_000L);
-				state.light = player.blockPosition().offset(4, 1, 0);
+				// Clear of Relay Station Zero. The dropout refuses to touch blocks within six columns
+				// of the station, and the test player stands on it - a light four blocks away was
+				// inside that shield, so the precondition correctly found nothing to extinguish and
+				// the scenario could never start. Still well inside the sixteen-block scan radius.
+				state.light = player.blockPosition().offset(12, 1, 0);
 				level.setBlockAndUpdate(state.light, Blocks.GLOWSTONE.defaultBlockState());
 				state.rememberBlock(level, state.light);
 			}
@@ -257,6 +267,15 @@ public final class AnomalyClientGameTest implements FabricClientGameTest {
 			level.setBlock(origin.offset(x, 0, z), Blocks.AIR.defaultBlockState(), 2);
 			level.setBlock(origin.offset(x, 1, z), Blocks.AIR.defaultBlockState(), 2);
 			level.setBlock(origin.offset(x, 2, z), Blocks.AIR.defaultBlockState(), 2);
+		}
+		// A watcher only takes a spot it can be seen against something. On a bare platform every
+		// candidate had open air behind it, so the spawn found nowhere to stand and the scenario
+		// could not start at all - the fixture was building the clearing but not its far wall.
+		for (int x = -18; x <= 18; x++) for (int y = 0; y <= 3; y++) {
+			level.setBlock(origin.offset(x, y, -18), Blocks.STONE.defaultBlockState(), 2);
+			level.setBlock(origin.offset(x, y, 18), Blocks.STONE.defaultBlockState(), 2);
+			level.setBlock(origin.offset(-18, y, x), Blocks.STONE.defaultBlockState(), 2);
+			level.setBlock(origin.offset(18, y, x), Blocks.STONE.defaultBlockState(), 2);
 		}
 		state.serverWatcherCountBefore = watcherCount(level, player);
 	}

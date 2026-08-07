@@ -6,13 +6,7 @@
 				"discipline": "Production",
 				"titles": [
 					{
-						"title": "Creator & Director",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "Producer",
+						"title": "Creator & Producer",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -23,13 +17,7 @@
 				"discipline": "Design",
 				"titles": [
 					{
-						"title": "Game Design",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "Systems & Balance Design",
+						"title": "Game & Systems Design",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -58,25 +46,13 @@
 				"discipline": "Narrative",
 				"titles": [
 					{
-						"title": "World Bible",
+						"title": "World Bible & Script",
 						"names": [
 							"XIAOMING6680"
 						]
 					},
 					{
-						"title": "Script & Terminal Writing",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "Damaged Files & Full Journal",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "End Poem",
+						"title": "Documents & End Poem",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -93,25 +69,13 @@
 				"discipline": "Engineering",
 				"titles": [
 					{
-						"title": "Client",
+						"title": "Client & Server",
 						"names": [
 							"XIAOMING6680"
 						]
 					},
 					{
-						"title": "Server",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "Networking Protocol",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "Save Data & Persistence",
+						"title": "Networking & Persistence",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -134,19 +98,13 @@
 				"discipline": "Art",
 				"titles": [
 					{
-						"title": "Entity Models & Textures",
+						"title": "Models & Textures",
 						"names": [
 							"XIAOMING6680"
 						]
 					},
 					{
-						"title": "UI & HUD",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "Staging & Visual Effects",
+						"title": "UI & Visual Effects",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -157,13 +115,7 @@
 				"discipline": "Audio",
 				"titles": [
 					{
-						"title": "Music Selection & Scene Scoring",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "Audio Implementation",
+						"title": "Music Selection & Implementation",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -174,19 +126,7 @@
 				"discipline": "Quality Assurance",
 				"titles": [
 					{
-						"title": "Functional Testing",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "Automated Testing",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "Release Acceptance",
+						"title": "Testing & Release Acceptance",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -197,13 +137,7 @@
 				"discipline": "Documentation",
 				"titles": [
 					{
-						"title": "Architecture & Testing Docs",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "World Bible",
+						"title": "Architecture Docs & World Bible",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -287,10 +221,8 @@
 				"discipline": "",
 				"titles": [
 					{
-						"title": "For everyone who listened all the way to the end of this frequency",
-						"names": [
-							"XIAOMING6680"
-						]
+						"title": "For everyone who listened to the end",
+						"names": []
 					}
 				]
 			}

@@ -1,6 +1,8 @@
 package com.xm.thefourthfrequency.client_render;
 
+import com.xm.thefourthfrequency.ending.WorldInterfaceActionScheduler;
 import com.xm.thefourthfrequency.networking.WorldInterfaceProtocol;
+import net.minecraft.util.Mth;
 
 /**
  * Single source for the encounter's purple to gold to red escalation language.
@@ -31,6 +33,61 @@ public final class WorldInterfacePalette {
 			case PHASE_3, SUCCESS_RESOLUTION, FAILURE_RESOLUTION, PORTAL_OPEN, COMPLETE -> 2;
 			default -> 0;
 		};
+	}
+
+	/**
+	 * A sawtooth on the third form's volley clock: zero just after one salvo, one just before the
+	 * next.
+	 *
+	 * <p>The third phase fires on a fixed interval, and nothing on the body said so - the volleys
+	 * arrived out of a body that looked exactly the same a second earlier, which is most of why the
+	 * last phase read as random rather than as fast. Ramping the emissive brightness along this
+	 * makes the boss visibly charge before every salvo, so the rhythm becomes something a player can
+	 * play against instead of something that happens to them.
+	 *
+	 * <p>Deliberately a modulation rather than a fourth palette band: {@code PHASE_BAND_COUNT} is 3
+	 * and stays 3.
+	 */
+	public static float volleyRamp(float ageInTicks) {
+		float interval = WorldInterfaceActionScheduler.VOLLEY_INTERVAL_TICKS;
+		float phase = (ageInTicks % interval) / interval;
+		// Eased so the last third of the wind-up is where most of the brightening happens.
+		return phase * phase;
+	}
+
+	/**
+	 * The same volley clock as {@link #volleyRamp}, but continuous.
+	 *
+	 * <p><b>Anything covering a large part of the screen must use this one.</b> {@code volleyRamp} is
+	 * a sawtooth: it climbs to 1 and drops to 0 between two consecutive ticks, every two seconds.
+	 * That discontinuity is invisible on a small piece of geometry - the kernel lattice reads it as
+	 * "charged, then discharged", which is exactly right - but driving a full-screen parameter with
+	 * it means the whole frame changes at once on that tick.
+	 *
+	 * <p>It did. The atmosphere controller fed the sawtooth into fog distance and sky tint, both of
+	 * which cover the entire view, so every two seconds a large area of the screen shifted colour
+	 * and visibility in a single frame. Measured at up to 38% of the frame changing solidly between
+	 * ticks; with this substituted it drops to under 3%, which is ordinary animation.
+	 *
+	 * <p>A raised cosine has the same period and peak but no discontinuity anywhere, including at
+	 * the wrap.
+	 */
+	public static float volleyBreath(float ageInTicks) {
+		float interval = WorldInterfaceActionScheduler.VOLLEY_INTERVAL_TICKS;
+		float phase = (ageInTicks % interval) / interval;
+		return 0.5F - 0.5F * Mth.cos(phase * Mth.TWO_PI);
+	}
+
+	/**
+	 * The third form's red shift, applied on top of a band rather than as a band of its own.
+	 *
+	 * <p>{@code PHASE_BAND_COUNT} is asserted at three, and correctly: a fourth band would mean
+	 * every consumer of this palette had to learn a new state. Berserk is not a new state, it is
+	 * the third one pushed harder.
+	 */
+	public static float redBerserk(int band, float intensity) {
+		float base = RED[clampBand(band)];
+		return Math.min(1.0F, base + (1.0F - base) * Math.clamp(intensity, 0.0F, 1.0F));
 	}
 
 	public static float red(int band) {

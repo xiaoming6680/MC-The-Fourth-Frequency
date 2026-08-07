@@ -3,7 +3,9 @@ package com.xm.thefourthfrequency.entity;
 import com.xm.thefourthfrequency.audio.AudioService;
 import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.ending.EndBossArenaService;
+import com.xm.thefourthfrequency.ending.WorldInterfaceBlastService;
 import com.xm.thefourthfrequency.ending.WorldInterfaceDamageService;
+import com.xm.thefourthfrequency.networking.WorldInterfaceProtocol;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.core.particles.PowerParticleOption;
@@ -73,7 +75,14 @@ public final class WorldInterfaceEnergyOrbEntity extends Entity implements ItemS
 	public static final float MIN_SCALE = 1.0F;
 	public static final float MAX_SCALE = 2.2F;
 	public static final double IMPACT_RADIUS = 4.0D;
-	public static final float IMPACT_DAMAGE = 12.0F;
+	/**
+	 * Lowered from twelve. The bolt is the encounter's most frequent attack and the widest, and at
+	 * the top of the form curve it was taking most of an unarmoured player's bar in one landing -
+	 * which turns a telegraphed area weapon into something that has to be avoided perfectly rather
+	 * than read and moved away from. The blast keeps its reach and its new weight on the camera; what
+	 * it stops doing is deciding the fight on a single connection.
+	 */
+	public static final float IMPACT_DAMAGE = 9.0F;
 	/**
 	 * Damage multiplier per form.
 	 *
@@ -161,9 +170,18 @@ public final class WorldInterfaceEnergyOrbEntity extends Entity implements ItemS
 		return entityData.get(SCALE);
 	}
 
+	/**
+	 * The sprite the orb is drawn as. Only the texture - nothing about the projectile's behaviour,
+	 * damage or trail is taken from the item.
+	 *
+	 * <p>The dragon-breath bottle was the wrong read at speed: a glass flask with a stopper, drawn
+	 * at up to six blocks across and spinning, which at a glance is an item that got thrown rather
+	 * than a shot that was fired. The fire charge is the sprite vanilla already uses for a blaze's
+	 * projectile, so it is the shape players have been taught means incoming.</p>
+	 */
 	@Override
 	public ItemStack getItem() {
-		return Items.DRAGON_BREATH.getDefaultInstance();
+		return Items.FIRE_CHARGE.getDefaultInstance();
 	}
 
 	@Override
@@ -312,9 +330,27 @@ public final class WorldInterfaceEnergyOrbEntity extends Entity implements ItemS
 						0, Math.cos(angle), 0.16D, Math.sin(angle), 0.3D + ring * 0.06D);
 			}
 		}
-		AudioService.playBounded(level, BlockPos.containing(impact), SoundEvents.GENERIC_EXPLODE.value(),
-				SoundSource.HOSTILE, 1.0F, 0.94F - power * 0.09F);
+		AudioService.playWithReach(level, BlockPos.containing(impact), SoundEvents.GENERIC_EXPLODE.value(),
+				SoundSource.HOSTILE, 1.0F, 0.94F - power * 0.09F, AudioService.BLAST_REACH_BLOCKS);
+		// And the camera. The bolt is an entity: it detonates wherever it happens to meet terrain or a
+		// player, on a tick nothing else can predict, and in the third phase it is thrown from the
+		// volley lane which the action envelope does not describe at all. There is no clock to derive
+		// this from, which is the whole reason WorldInterfaceBlastS2C exists.
+		if (encounterId != null) {
+			WorldInterfaceBlastService.emit(level, encounterId, impact, radius * BLAST_SHAKE_REACH,
+					power >= 1 ? WorldInterfaceProtocol.BlastGrade.HEAVY
+							: WorldInterfaceProtocol.BlastGrade.MEDIUM);
+		}
 	}
+
+	/**
+	 * How far past its own blast the detonation is felt, as a multiple of the damage radius.
+	 *
+	 * <p>Deliberately much wider than the radius that hurts. A blast you can feel from outside the
+	 * part that kills you is what tells the rest of the table it happened; one that stops exactly
+	 * where the damage stops is a private event.
+	 */
+	private static final double BLAST_SHAKE_REACH = 7.0D;
 
 	/** Grows with the form that fired it; the third one is not throwing the same shot as the first. */
 	private double impactRadius() {

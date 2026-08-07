@@ -64,10 +64,15 @@ keystore.properties
 # Local Codex/agent state and planning notes
 /.agents/
 /.codex/
+/.claude/
 /.planning/
 /task_plan.md
 /findings.md
 /progress.md
+/CLAUDE.md
+
+# Retired documents kept locally for reference only; see archive/README.md
+/archive/
 
 # Operating system files
 .DS_Store

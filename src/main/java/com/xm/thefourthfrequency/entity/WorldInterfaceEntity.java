@@ -16,6 +16,7 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.level.Level;
 import net.minecraft.sounds.SoundEvent;
+import net.minecraft.util.Mth;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.AABB;
@@ -42,8 +43,48 @@ public final class WorldInterfaceEntity extends Monster {
 			WorldInterfaceEntity.class, EntityDataSerializers.LONG);
 	private static final EntityDataAccessor<Integer> ACTION_DURATION = SynchedEntityData.defineId(
 			WorldInterfaceEntity.class, EntityDataSerializers.INT);
+	/**
+	 * How much of the virtual pool is left, 1 down to 0.
+	 *
+	 * <p>Synchronised rather than looked up per side. The structural sag in {@code WorldInterfaceRig}
+	 * is driven by it - by the end of a fight it is putting a third of a radian into every neck - so
+	 * the client reading it off the HUD snapshot while the server read it off the saved state would
+	 * be two different poses, which is precisely what binding the boxes to the bones is meant to
+	 * stop. The renderer reads this too, so the drawn wear and the hittable wear are one number.
+	 */
+	private static final EntityDataAccessor<Float> HEALTH_FRACTION = SynchedEntityData.defineId(
+			WorldInterfaceEntity.class, EntityDataSerializers.FLOAT);
+	/**
+	 * Where the three heads are looking, in radians, relative to the body's own facing.
+	 *
+	 * <p>Synchronised for the same reason {@link #HEALTH_FRACTION} is: {@code WorldInterfaceRig} turns
+	 * it into a pose, the server stands the head hit boxes on that pose and the client draws the same
+	 * one, so both sides have to be answering with the same number. Resolving it independently -
+	 * the server against its chosen target, the client against whoever is nearest the camera - would
+	 * be two different poses, and a head drawn somewhere other than where it can be hit is exactly
+	 * what binding the boxes to the bones exists to prevent.
+	 *
+	 * <p>Relative rather than absolute so it survives the body turning underneath it: the yaw the
+	 * heads add is on top of {@code yBodyRot}, which is already interpolated on the client.
+	 */
+	private static final EntityDataAccessor<Float> GAZE_YAW = SynchedEntityData.defineId(
+			WorldInterfaceEntity.class, EntityDataSerializers.FLOAT);
+	private static final EntityDataAccessor<Float> GAZE_PITCH = SynchedEntityData.defineId(
+			WorldInterfaceEntity.class, EntityDataSerializers.FLOAT);
+	/**
+	 * Radians of change worth a tracker update.
+	 *
+	 * <p>Half a degree. The gaze is recomputed every tick and a raw float assignment would mark the
+	 * entity dirty every one of them, for a rotation nobody can see move.
+	 */
+	private static final float GAZE_EPSILON = 0.009F;
 
 	private UUID encounterId;
+	private WorldInterfaceRig.Pose cachedPose;
+	private long cachedPoseTick = Long.MIN_VALUE;
+	/** Last tick's gaze, for the renderer to interpolate from. See {@link #renderGazeYaw}. */
+	private float gazeYawO;
+	private float gazePitchO;
 	public final AnimationState idleAnimationState = new AnimationState();
 	public final AnimationState actionAnimationState = new AnimationState();
 	private int animatedAction = Integer.MIN_VALUE;
@@ -94,7 +135,10 @@ public final class WorldInterfaceEntity extends Monster {
 		builder.define(FORM, FORM_LISTENING)
 				.define(ACTION, 0)
 				.define(ACTION_START_TICK, 0L)
-				.define(ACTION_DURATION, 0);
+				.define(ACTION_DURATION, 0)
+				.define(HEALTH_FRACTION, 1.0F)
+				.define(GAZE_YAW, 0.0F)
+				.define(GAZE_PITCH, 0.0F);
 	}
 
 	@Override
@@ -104,6 +148,11 @@ public final class WorldInterfaceEntity extends Monster {
 
 	@Override
 	public void tick() {
+		// Captured before the tick, the way vanilla captures yRotO: on the client the synchronised
+		// gaze is rewritten by packets between ticks, so this pair is "where the heads were looking"
+		// and "where they are looking now", which is exactly what the renderer interpolates across.
+		gazeYawO = gazeYaw();
+		gazePitchO = gazePitch();
 		super.tick();
 		idleAnimationState.startIfStopped(tickCount);
 		int currentAction = actionId();
@@ -139,6 +188,7 @@ public final class WorldInterfaceEntity extends Monster {
 		int clamped = Math.clamp(form, FORM_LISTENING, FORM_INTERFACE);
 		if (clamped == form()) return;
 		entityData.set(FORM, clamped);
+		cachedPoseTick = Long.MIN_VALUE;
 		refreshDimensions();
 	}
 
@@ -155,6 +205,7 @@ public final class WorldInterfaceEntity extends Monster {
 	}
 
 	public void showAction(int actionId, long startTick, int duration) {
+		cachedPoseTick = Long.MIN_VALUE;
 		entityData.set(ACTION, Math.max(0, actionId));
 		entityData.set(ACTION_START_TICK, Math.max(0L, startTick));
 		entityData.set(ACTION_DURATION, Math.max(0, duration));
@@ -162,6 +213,101 @@ public final class WorldInterfaceEntity extends Monster {
 
 	public void clearAction() {
 		showAction(0, 0L, 0);
+	}
+
+	public float healthFraction() {
+		return Math.clamp(entityData.get(HEALTH_FRACTION), 0.0F, 1.0F);
+	}
+
+	/** Server-only: publish the pool fraction the pose and the presentation both read. */
+	public void setHealthFraction(float fraction) {
+		float clamped = Math.clamp(fraction, 0.0F, 1.0F);
+		if (Math.abs(clamped - entityData.get(HEALTH_FRACTION)) < 1.0E-4F) return;
+		entityData.set(HEALTH_FRACTION, clamped);
+	}
+
+	public float gazeYaw() {
+		return entityData.get(GAZE_YAW);
+	}
+
+	public float gazePitch() {
+		return entityData.get(GAZE_PITCH);
+	}
+
+	/**
+	 * The gaze as the renderer should draw it, interpolated across the frame.
+	 *
+	 * <p><b>Render-only, and the reason it has to exist.</b> The gaze is a synchronised value, so it
+	 * changes in whole-tick steps - at the rate the server turns the heads that is nearly six degrees
+	 * at a time, applied to a skull seven blocks across. Drawn straight, the head sat still for three
+	 * frames and then jumped, which reads as the head blinking from one place to another rather than
+	 * as it turning. Interpolating between the last two values is the same treatment vanilla gives
+	 * every rotation it synchronises, for the same reason.
+	 *
+	 * <p>The hit boxes deliberately do <em>not</em> use this: {@link #rigPose()} poses from the raw
+	 * value on both sides, so the box a player swings at and the box the server tests are still one
+	 * pose. What the renderer adds is up to one tick of lead on where that pose is heading, and since
+	 * almost all of the look-at is rotation about the chain's own axis, the positional difference it
+	 * can introduce is a fraction of the slack the head box already carries.
+	 */
+	public float renderGazeYaw(float partialTick) {
+		return Mth.lerp(partialTick, gazeYawO, gazeYaw());
+	}
+
+	public float renderGazePitch(float partialTick) {
+		return Mth.lerp(partialTick, gazePitchO, gazePitch());
+	}
+
+	/**
+	 * Server-only: publish where the heads are looking, relative to the body's facing.
+	 *
+	 * <p>Eased rather than assigned. The chosen target changes the moment somebody else becomes the
+	 * nearest participant, and a raw assignment snapped three heads across the arena on that tick;
+	 * approaching the wanted bearing at a fixed rate makes a change of mind read as the storm looking
+	 * away from one player and over at another.
+	 */
+	public void setGaze(float yawRadians, float pitchRadians) {
+		if (!Float.isFinite(yawRadians) || !Float.isFinite(pitchRadians)) return;
+		float yaw = approachAngle(gazeYaw(), yawRadians);
+		float pitch = approachAngle(gazePitch(), pitchRadians);
+		if (Math.abs(yaw - gazeYaw()) >= GAZE_EPSILON) entityData.set(GAZE_YAW, yaw);
+		if (Math.abs(pitch - gazePitch()) >= GAZE_EPSILON) entityData.set(GAZE_PITCH, pitch);
+	}
+
+	/**
+	 * Radians per tick the gaze may travel: about nine degrees.
+	 *
+	 * <p>Faster than the body, which turns at 2.2 degrees a tick, because that is the whole division
+	 * of labour - the storm comes round slowly and the heads lead it. Slow enough that a change of
+	 * target still reads as looking away from one player and over at another rather than as a cut.
+	 */
+	private static final float GAZE_TURN_PER_TICK = 0.16F;
+
+	private static float approachAngle(float current, float wanted) {
+		float delta = wanted - current;
+		if (Math.abs(delta) <= GAZE_TURN_PER_TICK) return wanted;
+		return current + Math.copySign(GAZE_TURN_PER_TICK, delta);
+	}
+
+	/** Milliseconds into the published action, as both sides measure it. */
+	public long actionAgeMillis() {
+		return (long) (Math.max(0L, level().getGameTime() - actionStartTick()) * 50L);
+	}
+
+	/**
+	 * The posed skeleton for this tick, computed once and shared by every hit proxy.
+	 *
+	 * <p>Twenty proxies asking the rig independently would pose the whole storm twenty times a tick
+	 * for an identical answer. This is also what guarantees they agree with each other: one pose, one
+	 * clock, one set of boxes.
+	 */
+	public WorldInterfaceRig.Pose rigPose() {
+		if (cachedPose == null || cachedPoseTick != tickCount) {
+			cachedPose = WorldInterfaceRig.pose(form(), tickCount, healthFraction(), actionId(),
+					actionAgeMillis(), gazeYaw(), gazePitch());
+			cachedPoseTick = tickCount;
+		}
+		return cachedPose;
 	}
 
 	/**

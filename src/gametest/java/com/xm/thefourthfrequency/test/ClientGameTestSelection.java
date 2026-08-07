@@ -6,7 +6,7 @@ import java.util.Optional;
 
 /** Strict parser for the Gradle-to-client-GameTest selection contract. */
 public record ClientGameTestSelection(Suite suite, Optional<String> anomalyId) {
-	public enum Suite { ALL, MAINLINE, TOOLS_UI, NOTICE_ENTRY, ALPHA_RELAUNCH, ANOMALIES, ANOMALY_META_SMOKE, REWORK_FORMS, WATCHER_MODEL, WORLD_INTERFACE }
+	public enum Suite { ALL, MAINLINE, TOOLS_UI, NOTICE_ENTRY, ALPHA_RELAUNCH, ANOMALIES, ANOMALY_META_SMOKE, REWORK_FORMS, WATCHER_MODEL, WORLD_INTERFACE, TERMINAL_HANDHELD, SCREEN_FILTERS }
 
 	public ClientGameTestSelection {
 		anomalyId = anomalyId == null ? Optional.empty() : anomalyId;
@@ -32,6 +32,8 @@ public record ClientGameTestSelection(Suite suite, Optional<String> anomalyId) {
 			case "rework-forms" -> Suite.REWORK_FORMS;
 			case "watcher-model" -> Suite.WATCHER_MODEL;
 			case "world-interface" -> Suite.WORLD_INTERFACE;
+			case "terminal-3d" -> Suite.TERMINAL_HANDHELD;
+			case "screen-filters" -> Suite.SCREEN_FILTERS;
 			default -> throw new IllegalArgumentException("Unknown client test suite: " + suiteValue);
 		};
 		String normalized = anomalyValue == null ? "" : anomalyValue.trim();
@@ -47,4 +49,18 @@ public record ClientGameTestSelection(Suite suite, Optional<String> anomalyId) {
 	public boolean runsReworkForms() { return suite == Suite.ALL || suite == Suite.REWORK_FORMS; }
 	public boolean runsWatcherModel() { return suite == Suite.ALL || suite == Suite.WATCHER_MODEL; }
 	public boolean runsWorldInterface() { return suite == Suite.ALL || suite == Suite.WORLD_INTERFACE; }
+	/**
+	 * The screen filters are in the full run as well as on their own.
+	 *
+	 * <p>A post-effect chain that fails to compile does not crash and does not stop anything - the
+	 * chain simply never installs, and the treatment is silently missing. That failure mode is why
+	 * this cannot be left to a targeted suite somebody remembers to run.
+	 */
+	public boolean runsScreenFilters() {
+		return suite == Suite.ALL || suite == Suite.SCREEN_FILTERS;
+	}
+
+	public boolean runsTerminalHandheld() {
+		return suite == Suite.ALL || suite == Suite.TERMINAL_HANDHELD;
+	}
 }

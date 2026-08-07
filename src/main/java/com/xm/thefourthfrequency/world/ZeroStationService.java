@@ -2,6 +2,7 @@ package com.xm.thefourthfrequency.world;
 
 import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.content.TerminalData;
+import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
@@ -11,11 +12,15 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.storage.LevelData;
+import net.minecraft.world.phys.AABB;
 
 import java.util.Arrays;
 import java.util.IdentityHashMap;
@@ -51,6 +56,39 @@ public final class ZeroStationService {
 		ServerLifecycleEvents.SERVER_STOPPED.register(ACTIVE_BUILDS::remove);
 		ServerTickEvents.END_SERVER_TICK.register(ZeroStationService::onServerTick);
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> onPlayerJoin(handler.player));
+		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> {
+			if (!alive) returnRespawnToTheStationFloor(newPlayer);
+		});
+	}
+
+	/**
+	 * Puts a bedless respawn back on the station floor instead of on its roof.
+	 *
+	 * <p>Pinning {@code respawnRadius} to 0 stops the scatter, but not this: vanilla still resolves
+	 * the world spawn's <em>height</em> through {@code PlayerSpawnFinder}, which reads the surface
+	 * heightmap at that column. The station has a roof, so the surface at the station's own centre
+	 * is the roof - and a player with no bed respawns on top of the building they are supposed to
+	 * wake up inside. The join path never saw this because it teleports explicitly.
+	 *
+	 * <p>Deliberately narrow. Overworld only, only within the station's own footprint - which is
+	 * where a player is if and only if the world spawn is what placed them - and only when they are
+	 * above the floor. A player who has a bed respawns at it and never comes near this; a player who
+	 * walked onto the roof under their own power is standing on it, not arriving on it.
+	 *
+	 * <p>Shared by the respawn hook and the join hook. Both have the same failure: vanilla resolves
+	 * the world spawn's height through the surface heightmap, and the surface of the station's own
+	 * column is its roof.
+	 */
+	private static void returnRespawnToTheStationFloor(ServerPlayer player) {
+		if (player.level().dimension() != Level.OVERWORLD) return;
+		BlockPos station = FrequencyWorldData.get(player.level().getServer())
+				.stationPosition().orElse(null);
+		if (station == null) return;
+		int reach = ZeroStationLayout.HALF_WIDTH + 2;
+		if (Math.abs(player.getBlockX() - station.getX()) > reach
+				|| Math.abs(player.getBlockZ() - station.getZ()) > reach
+				|| player.getBlockY() <= station.getY()) return;
+		player.teleportTo(station.getX() + 0.5D, station.getY(), station.getZ() + 0.5D);
 	}
 
 	private static void onServerStarted(MinecraftServer server) {
@@ -62,6 +100,7 @@ public final class ZeroStationService {
 			BlockPos stationCenter = chooseSite(level, level.getRespawnData().pos());
 			data.allocateStation(stationCenter);
 			prepareSafeCenter(level, stationCenter);
+			pinRespawnToTheStation(server, level);
 			TheFourthFrequency.LOGGER.info("Allocated Relay Station Zero at {}", stationCenter);
 		}
 
@@ -83,6 +122,28 @@ public final class ZeroStationService {
 			int cursor = Math.min(data.stationBuildCursor(), plan.size());
 			ACTIVE_BUILDS.put(server, new BuildState(plan, cursor));
 		}
+	}
+
+	/**
+	 * Makes the world spawn mean the station centre rather than somewhere near it.
+	 *
+	 * <p>Setting the respawn position is not on its own enough. {@code PlayerSpawnFinder} scatters
+	 * every arrival that has no bed of its own across a disc of {@code respawnRadius} blocks around
+	 * that point, and the vanilla default is ten - wider than the station is. So the host, who is
+	 * placed once at world creation, wakes up inside; and everyone joining afterwards, plus everyone
+	 * respawning without a bed, is dropped somewhere in the surrounding terrain. From their side the
+	 * station is a building they have to find rather than the room the story starts in.
+	 *
+	 * <p>Written once, on the tick the station is first allocated, and never again: it is the
+	 * opening of the story rather than a permanent claim on the rule, so a table that later sets its
+	 * own spawn radius keeps it.
+	 *
+	 * <p>The per-player teleport in {@link #onPlayerJoin} stays as it was. It covers the first
+	 * arrival, which is also the one the terminal is handed out on; this covers every later one, and
+	 * every death without a bed.
+	 */
+	private static void pinRespawnToTheStation(MinecraftServer server, ServerLevel level) {
+		level.getGameRules().set(GameRules.RESPAWN_RADIUS, 0, server);
 	}
 
 	/**
@@ -141,7 +202,48 @@ public final class ZeroStationService {
 			}
 		}
 		Arrays.sort(heights);
+		if (holdsBlockEntities(level, centerX, centerZ, heights[heights.length / 2])) return null;
 		return heights;
+	}
+
+	/**
+	 * Whether anything with a block entity stands where the station would be built.
+	 *
+	 * <p>Rejecting those sites is the only way to keep a buried treasure or a shipwreck chest out of
+	 * the station's footprint, and there is no version of overwriting one that is acceptable. The
+	 * clearing pass sets air with {@code UPDATE_NEIGHBORS}, and {@code LevelChunk#setBlockState} calls
+	 * {@code affectNeighborsAfterRemoval} whenever that bit is set - which is where a container spills
+	 * its inventory. So the loot ends up strewn across the beach: not lost, but scattered by something
+	 * the player never did, with no way to tell what it was. Dropping the bit instead would keep the
+	 * items in the chest but leave sand and gravel unsettled; deleting the contents outright would be
+	 * exactly the silent swallowing this mod promises never to do.
+	 *
+	 * <p>Read per chunk rather than per block: the map a chunk already keeps is a handful of entries,
+	 * where probing every column of the footprint would be several hundred lookups per candidate.
+	 *
+	 * @param surfaceY the footprint's median surface, which the vertical envelope is measured from
+	 */
+	private static boolean holdsBlockEntities(ServerLevel level, int centerX, int centerZ, int surfaceY) {
+		int minX = centerX - ZeroStationLayout.HALF_WIDTH;
+		int maxX = centerX + ZeroStationLayout.HALF_WIDTH;
+		// The porch reaches two blocks past the hull on the near side; take that on both, cheaply.
+		int minZ = centerZ - ZeroStationLayout.HALF_DEPTH - 2;
+		int maxZ = centerZ + ZeroStationLayout.HALF_DEPTH + 2;
+		int minY = surfaceY + ZeroStationLayout.FOUNDATION_BOTTOM;
+		int maxY = surfaceY + ZeroStationLayout.WALL_TOP + 2;
+		for (int chunkX = minX >> 4; chunkX <= maxX >> 4; chunkX++) {
+			for (int chunkZ = minZ >> 4; chunkZ <= maxZ >> 4; chunkZ++) {
+				if (!level.hasChunk(chunkX, chunkZ)) continue;
+				for (BlockPos occupied : level.getChunk(chunkX, chunkZ).getBlockEntities().keySet()) {
+					if (occupied.getX() >= minX && occupied.getX() <= maxX
+							&& occupied.getZ() >= minZ && occupied.getZ() <= maxZ
+							&& occupied.getY() >= minY && occupied.getY() <= maxY) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -174,6 +276,13 @@ public final class ZeroStationService {
 		}
 
 		ServerLevel level = server.overworld();
+		if (build.sweepTicksLeft >= 0) {
+			if (build.sweepTicksLeft % DROP_SWEEP_INTERVAL == 0) {
+				sweepConstructionDrops(level, build.plan);
+			}
+			if (--build.sweepTicksLeft < 0) ACTIVE_BUILDS.remove(server);
+			return;
+		}
 		int end = Math.min(build.cursor + BLOCKS_PER_TICK, build.plan.size());
 		for (int index = build.cursor; index < end; index++) {
 			ZeroStationLayout.Placement placement = build.plan.get(index);
@@ -182,16 +291,91 @@ public final class ZeroStationService {
 			if (level.getBlockState(placement.position()).equals(placement.state())) {
 				continue;
 			}
-			level.setBlock(placement.position(), placement.state(), 3);
+			// Never write over a block entity. Siting already rejects footprints that hold one, so
+			// this is the case where every candidate held one and the fallback site was used anyway -
+			// and a chest is worth more than a complete wall. Clearing it would call
+			// affectNeighborsAfterRemoval and empty its inventory onto the ground; leaving it means
+			// the station has a gap with somebody's loot still in it, which the player can at least
+			// read as a thing that was already here.
+			if (level.getBlockEntity(placement.position()) != null) continue;
+			// SUPPRESS_DROPS is belt and braces: setBlock does not run loot tables the way
+			// destroyBlock does, so ordinary terrain does not drop either way. It costs nothing and
+			// says what is intended if that ever stops being true.
+			level.setBlock(placement.position(), placement.state(),
+					Block.UPDATE_ALL | Block.UPDATE_SUPPRESS_DROPS);
 		}
 		build.cursor = end;
 		FrequencyWorldData data = FrequencyWorldData.get(server);
 		data.advanceStationBuildCursor(build.cursor, build.plan.size());
 
-		if (build.cursor == build.plan.size()) {
-			ACTIVE_BUILDS.remove(server);
+		if (build.cursor == build.plan.size() && build.sweepTicksLeft < 0) {
+			build.sweepTicksLeft = DROP_SWEEP_TICKS;
 			TheFourthFrequency.LOGGER.info("Relay Station Zero initialization completed in {} bounded placements",
 					build.plan.size());
+		}
+	}
+
+	/**
+	 * How long the drop sweep keeps running after the last block is placed.
+	 *
+	 * <p>One pass on the completion tick is not enough, which is what the first attempt at this did.
+	 * Suppressing drops at the placement covers what the plan itself removes, but the aftermath
+	 * arrives late and on its own schedule: sand and gravel above the envelope have to fall, and
+	 * leaves left without a log decay on the random tick - which can be most of a minute later, and
+	 * lands wherever the drops scatter to. A player who walks out of the station and finds sand on
+	 * the beach is looking at that.
+	 */
+	private static final int DROP_SWEEP_TICKS = 20 * 90;
+	/** How often the sweep actually looks. Every tick would be an entity query for nothing. */
+	private static final int DROP_SWEEP_INTERVAL = 10;
+	/** Slack past the plan's own volume, for drops that scattered on the way down. */
+	private static final double DROP_SWEEP_SLACK = 6.0D;
+
+	/**
+	 * Clears the items the build left behind, once, on the tick it finishes.
+	 *
+	 * <p>Suppressing drops at the placement covers what the plan itself removes, and that is most of
+	 * it - but not all. Clearing a block updates its neighbours, so sand and gravel above the
+	 * envelope fall, floating trees shed their leaves, and anything that was attached to a wall the
+	 * station replaced breaks on its own a tick later. None of that goes through
+	 * {@code setBlock}'s flags, and all of it lands on the floor of a room whose entire point is
+	 * that there is nothing in it.
+	 *
+	 * <p>Two things bound it. The plan's own volume plus {@link #DROP_SWEEP_SLACK}, so it can only
+	 * reach where the construction reached; and {@code getOwner() == null}, which is the difference
+	 * between an item a block turned into and an item a player threw. A player who empties their
+	 * inventory onto the station floor during the sweep window keeps every bit of it - their drops
+	 * carry a thrower, and terrain's never do.
+	 */
+	private static void sweepConstructionDrops(ServerLevel level, List<ZeroStationLayout.Placement> plan) {
+		if (plan.isEmpty()) return;
+		BlockPos first = plan.getFirst().position();
+		int minX = first.getX();
+		int minY = first.getY();
+		int minZ = first.getZ();
+		int maxX = minX;
+		int maxY = minY;
+		int maxZ = minZ;
+		for (ZeroStationLayout.Placement placement : plan) {
+			BlockPos position = placement.position();
+			minX = Math.min(minX, position.getX());
+			minY = Math.min(minY, position.getY());
+			minZ = Math.min(minZ, position.getZ());
+			maxX = Math.max(maxX, position.getX());
+			maxY = Math.max(maxY, position.getY());
+			maxZ = Math.max(maxZ, position.getZ());
+		}
+		AABB volume = new AABB(minX, minY, minZ, maxX + 1, maxY + 1, maxZ + 1)
+				.inflate(DROP_SWEEP_SLACK);
+		int removed = 0;
+		for (ItemEntity item : level.getEntitiesOfClass(ItemEntity.class, volume,
+				item -> item.getOwner() == null)) {
+			item.discard();
+			removed++;
+		}
+		if (removed > 0) {
+			TheFourthFrequency.LOGGER.info("Cleared {} item(s) left by Relay Station Zero construction",
+					removed);
 		}
 	}
 
@@ -212,6 +396,11 @@ public final class ZeroStationService {
 	}
 
 	private static void onPlayerJoin(ServerPlayer player) {
+		// Before the terminal check, and independent of it. Vanilla places an arriving player at the
+		// world spawn's *column surface*, which over the station is its roof - and the teleport below
+		// only runs for someone being handed a terminal, so on a server every guest who had already
+		// been issued one, and every rejoin, kept arriving on top of the building.
+		returnRespawnToTheStationFloor(player);
 		if (!issueTerminalIfNeeded(player)) {
 			return;
 		}
@@ -222,6 +411,8 @@ public final class ZeroStationService {
 	private static final class BuildState {
 		private final List<ZeroStationLayout.Placement> plan;
 		private int cursor;
+		/** Ticks of drop sweeping left once the placements are done. Negative while still building. */
+		private int sweepTicksLeft = -1;
 
 		private BuildState(List<ZeroStationLayout.Placement> plan, int cursor) {
 			this.plan = plan;

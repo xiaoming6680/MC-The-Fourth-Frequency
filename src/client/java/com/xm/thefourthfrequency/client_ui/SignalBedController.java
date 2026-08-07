@@ -84,7 +84,21 @@ public final class SignalBedController {
 		// be dismissed as a shader. The bed's own sixty-tick fade lines up with the anomaly's
 		// arrival, so the sound is already there by the time the colour is worth noticing.
 		if (AnomalyPresentationController.isRedHorizonActive()) wanted.add(Layer.CARRIER);
+
+		// The sky monitor is a receiver, and a receiver losing its subject gets louder rather than
+		// quieter. These stack onto whatever the anomaly already asked for, so opening the weather
+		// tool during one is audibly worse than standing under it - which is the point of a tool
+		// that claims to be listening to the sky.
+		int monitorStage = openWeatherToolStage();
+		if (monitorStage >= 1) wanted.add(Layer.STATIC);
+		if (monitorStage >= 2) wanted.add(Layer.CARRIER);
 		return wanted;
+	}
+
+	/** Stage of the weather tool's sky monitor, or 0 whenever that page is not the one on screen. */
+	private static int openWeatherToolStage() {
+		if (!(Minecraft.getInstance().screen instanceof TerminalScreen terminal)) return 0;
+		return terminal.skyMonitorStage();
 	}
 
 	private static void reconcile(Minecraft client, Set<Layer> wanted) {

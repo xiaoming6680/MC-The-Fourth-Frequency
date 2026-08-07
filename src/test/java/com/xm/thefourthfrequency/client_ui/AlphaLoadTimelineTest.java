@@ -110,6 +110,36 @@ final class AlphaLoadTimelineTest {
 	}
 
 	@Test
+	void theVignetteTiesTheLayersTogetherAndOutlivesTheDeadAir() {
+		// Absent while the screen is still ordinary.
+		assertEquals(0.0F, AlphaLoadTimeline.vignetteStrength(
+				AlphaLoadTimeline.GLITCH_START_TICK - 1));
+		// Arrives with the other damage and deepens with it.
+		assertTrue(AlphaLoadTimeline.vignetteStrength(AlphaLoadTimeline.FLOOD_START_TICK)
+				> AlphaLoadTimeline.vignetteStrength(AlphaLoadTimeline.FAILURE_TICK));
+		assertTrue(AlphaLoadTimeline.vignetteStrength(AlphaLoadTimeline.FAILURE_TICK)
+				> AlphaLoadTimeline.vignetteStrength(AlphaLoadTimeline.GLITCH_START_TICK));
+
+		// It is the picture that is lost during dead air, not the screen. Cutting the edges with
+		// the picture would quietly admit the whole thing was drawn.
+		assertTrue(AlphaLoadTimeline.vignetteStrength(AlphaLoadTimeline.BLACKOUT_START_TICK
+				+ AlphaLoadTimeline.BLACKOUT_TICKS / 2) > 0.0F,
+				"A powered screen receiving nothing still has edges");
+
+		// Like the scanlines, it settles onto a floor rather than back to nothing.
+		float settled = AlphaLoadTimeline.vignetteStrength(
+				AlphaLoadTimeline.LEGACY_RECOVERY_START_TICK
+						+ AlphaLoadTimeline.RECOVERY_LOCK_TICKS);
+		assertTrue(settled > 0.0F && settled < AlphaLoadTimeline.vignetteStrength(
+				AlphaLoadTimeline.FLOOD_START_TICK), "Residual vignette: " + settled);
+
+		for (int tick = 0; tick <= AlphaLoadTimeline.MIN_LOADING_SCREEN_TICKS; tick++) {
+			float value = AlphaLoadTimeline.vignetteStrength(tick);
+			assertTrue(value >= 0.0F && value <= 1.0F, "Out of range at tick " + tick + ": " + value);
+		}
+	}
+
+	@Test
 	void rampIsBoundedAndMonotonic() {
 		assertEquals(0.0F, AlphaLoadTimeline.ramp(4, 10, 8));
 		assertEquals(1.0F, AlphaLoadTimeline.ramp(18, 10, 8));

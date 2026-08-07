@@ -6,9 +6,9 @@ import com.xm.thefourthfrequency.networking.TerminalNavigationPayload;
 import com.xm.thefourthfrequency.networking.TerminalSnapshotPayload;
 import com.xm.thefourthfrequency.networking.TerminalLogEntryPayload;
 import com.xm.thefourthfrequency.networking.TerminalFilePayload;
-import com.xm.thefourthfrequency.terminal.SignalBand;
 import com.xm.thefourthfrequency.terminal.TerminalRecordPolicy;
 import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
+import com.xm.thefourthfrequency.terminal.TerminalTaskService;
 import com.xm.thefourthfrequency.terminal.TerminalNavigationMath;
 import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
 import net.minecraft.network.chat.Component;
@@ -39,6 +39,17 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 	public int tuning() { return Math.clamp(payload.tuning(), 0, 100); }
 	public int visualStage() { return Math.clamp(payload.visualStage(), 0, 2); }
 	public int bandStage() { return Math.clamp(payload.bandStage(), 0, 3); }
+	/** Whether this player still owes the first-boot walkthrough. */
+	public boolean onboardingRequired() { return payload.onboardingRequired(); }
+	/**
+	 * Whether the terminal is asking for the player's attention: the amber lamp on the hardware
+	 * column. Decided on the server by the same call that chooses the held item's form, so this is
+	 * read straight through rather than re-derived from the unread counts that happen to be here.
+	 */
+	public boolean attentionActive() { return payload.attentionActive(); }
+	/** Day number the status strip prints, counting the first day as one rather than zero. */
+	public int worldDay() { return (int) Math.max(0L, payload.gameTime() / 24_000L) + 1; }
+	public long worldDayTime() { return Math.floorMod(payload.gameTime(), 24_000L); }
 	public boolean localFileUnlocked() { return payload.localFileUnlocked(); }
 	public int unreadCount() { return Math.max(0, payload.unreadCount()); }
 	public int unreadFileCount() { return Math.max(0, payload.unreadFileCount()); }
@@ -62,20 +73,40 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 		return Component.translatable("terminal.thefourthfrequency.objective." + payload.objectiveId(),
 				payload.objectiveProgress(), payload.objectiveTarget());
 	}
-	public List<TerminalLogEntryPayload> signalToolEntries() {
-		return payload.signalEvents().stream().filter(entry -> entry.band() == SignalBand.UNKNOWN.wireId()
-				|| entry.type().startsWith("fragment_")).toList();
+	/**
+	 * This objective as it reads once finished, whatever progress the snapshot happened to carry.
+	 *
+	 * <p>Used by the home card's completion hold, which shows the task the player just finished
+	 * rather than the one that replaced it. The snapshot it comes from is the last one before the
+	 * reward landed, so its own progress is typically one short of the target it just reached.</p>
+	 */
+	public Component completedObjectiveLine() {
+		return TerminalTaskService.completedObjectiveLine(payload.objectiveId(), objectiveTarget());
 	}
-	public List<TerminalLogEntryPayload> recordEntries() {
+	/**
+	 * The record log, exactly as the Records page lists it.
+	 *
+	 * @param navigator whether the navigation tool exists yet. An optional investigation the player
+	 *                  has no navigator for is not a lead, it is a line of text they cannot do
+	 *                  anything with, so it stays out of the log until the tool that can act on it
+	 *                  exists.
+	 *                  <p>The flag is threaded through here rather than applied by the page, because
+	 *                  the home card's "recent" line is defined as the newest entry of <em>this</em>
+	 *                  list. While the page filtered and this did not, a player without a navigator
+	 *                  was told on the home page that a suspicious signal had been found somewhere,
+	 *                  opened Records to look it up, and found it absent - the terminal contradicting
+	 *                  itself about its own log.</p>
+	 */
+	public List<TerminalLogEntryPayload> recordEntries(boolean navigator) {
 		Set<Integer> seenCandidateLocations = new HashSet<>();
 		return payload.signalEvents().stream()
 				.filter(entry -> TerminalRecordPolicy.visibleInRecords(entry.type()))
 				.filter(entry -> !entry.type().startsWith("fragment_candidate_")
-						|| seenCandidateLocations.add(entry.variant()))
+						|| (navigator && seenCandidateLocations.add(entry.variant())))
 				.toList();
 	}
-	public Component latestSignalEvent() {
-		List<TerminalLogEntryPayload> entries = recordEntries();
+	public Component latestSignalEvent(boolean navigator) {
+		List<TerminalLogEntryPayload> entries = recordEntries(navigator);
 		if (entries.isEmpty()) return Component.translatable("terminal.thefourthfrequency.home.no_recent");
 		TerminalLogEntryPayload latest = entries.getFirst();
 		return Component.literal("[" + signalTime(latest) + "] ").append(signalEvent(latest));
@@ -105,7 +136,6 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 		String id = HiddenFilePolicy.fileId(index);
 		return payload.files().stream().filter(file -> file.id().equals(id)).findFirst().orElse(null);
 	}
-	public boolean fragmentReceived(int index) { return fragmentFile(index) != null; }
 	public int discoveredHiddenFileCount() {
 		return (int) payload.files().stream().filter(file -> HiddenFilePolicy.isHiddenFile(file.id())).count();
 	}
@@ -312,6 +342,9 @@ public record TerminalSnapshot(TerminalSnapshotPayload payload) {
 				.withColor(ChatFormatting.DARK_GRAY).withObfuscated(true));
 	}
 
+	// Not on any render path today: the anomaly log surface these two describe was never built. They
+	// stay because they are the only handle on the ~50 authored log.type/log.summary strings, and
+	// dropping them would quietly turn that copy into unreachable resources.
 	public Component anomalyType(TerminalLogEntryPayload entry) {
 		return Component.translatable("terminal.thefourthfrequency.log.type." + entry.type());
 	}

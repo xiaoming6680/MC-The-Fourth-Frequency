@@ -18,19 +18,33 @@ import net.minecraft.world.phys.Vec3;
 /**
  * Ephemeral hit proxy owned by exactly one {@link WorldInterfaceEntity}.
  *
- * <p>One proxy per limb the model draws, each a column standing on that limb from tip to root. The
- * parent's own collision box grows upward from its position and so only ever covers the mass; the
- * limbs hang {@link WorldInterfaceAnatomy#tentacleDrop} blocks the other way, and they are the
- * entire part of the interface a player on the ground can see near them. The proxies used to be
- * bunched above the position alongside the body, which left that whole underside outside every
- * hitbox in the encounter and gave a melee-only player nothing to swing at.</p>
+ * <p>One proxy per part of the storm a player can actually see near them: the three heads, and the
+ * business end of each drawn limb. Together with the parent's own box over the mass, that is eight
+ * damageable parts at first form, ten at second and fourteen at third, and every one of them stands
+ * where {@link WorldInterfaceAnatomy} says the drawn geometry is. The model reads the same
+ * functions to place its bones, so "hittable" and "visible" cannot drift apart.
+ *
+ * <p><b>What this replaces.</b> A proxy used to be a single column spanning an entire limb, root to
+ * tip - tens of blocks of invisible hitbox standing in air the tentacle merely swings through. It
+ * made melee both unfair and unsatisfying at once: swinging anywhere near a limb connected whether
+ * or not the blade went near it, and the heads, which are the thing a player is looking at, could
+ * not be hit at all. Damage still routes to the parent either way; what changed is where a hit has
+ * to land to count.
  *
  * <p>Forms below the third draw fewer limbs than there are proxies. The surplus parks on the body
  * axis inside the parent's box rather than standing in open air, so no proxy is ever hittable
- * somewhere nothing is drawn.</p>
+ * somewhere nothing is drawn.
  */
 public final class WorldInterfacePartEntity extends Entity {
-	public static final int PART_COUNT = 10;
+	/**
+	 * Three heads, then two proxies on each of their necks, then one per limb. Index order is fixed:
+	 * the wire carries the index.
+	 */
+	public static final int HEAD_PARTS = WorldInterfaceAnatomy.HEAD_COUNT;
+	public static final int NECK_PARTS = WorldInterfaceAnatomy.HEAD_COUNT
+			* WorldInterfaceAnatomy.NECK_SEGMENTS_PER_HEAD;
+	public static final int LIMB_PARTS = 10;
+	public static final int PART_COUNT = HEAD_PARTS + NECK_PARTS + LIMB_PARTS;
 	private static final EntityDataAccessor<Integer> PARENT_ID = SynchedEntityData.defineId(
 			WorldInterfacePartEntity.class, EntityDataSerializers.INT);
 	private static final EntityDataAccessor<Integer> PART_INDEX = SynchedEntityData.defineId(
@@ -41,11 +55,41 @@ public final class WorldInterfacePartEntity extends Entity {
 	 */
 	private static final EntityDataAccessor<Integer> FORM = SynchedEntityData.defineId(
 			WorldInterfacePartEntity.class, EntityDataSerializers.INT);
+	/** A head box is this much wider than the drawn skull, so a near miss on a moving head lands. */
+	private static final double HEAD_HIT_SLACK = WorldInterfaceAnatomy.HEAD_HIT_SLACK;
+	/** Where a parked surplus proxy sits, and how big it is. Never the thing anyone aims at. */
+	private static final float PARKED_SIZE = 2.0F;
+
+	/**
+	 * The box for this tick, in world space, recomputed from the posed skeleton.
+	 *
+	 * <p>Held rather than derived from the position because a neck or a limb is a <em>segment</em>,
+	 * not a point: a clip can lay a neck out sideways, and a box grown symmetrically around the
+	 * middle of it would be a cube of mostly empty air. What is stored is the half-extent of the
+	 * axis-aligned box that actually contains the bone, which is only knowable once the bone has been
+	 * posed - so {@link #tick} computes it and {@link #makeBoundingBox} spends it.
+	 *
+	 * <p>Three primitives rather than a {@code Vec3}, and not for tidiness: {@code Entity}'s
+	 * constructor calls {@code setPos}, which calls {@link #makeBoundingBox}, and a subclass's field
+	 * initialisers have not run at that point. A reference field is still null there and the entity
+	 * dies in its own constructor; a primitive is simply zero, which makes the box the empty one
+	 * vanilla would have had anyway until the first tick poses it.
+	 */
+	private double halfX;
+	private double halfY;
+	private double halfZ;
 
 	public WorldInterfacePartEntity(EntityType<? extends WorldInterfacePartEntity> type, Level level) {
 		super(type, level);
 		noPhysics = true;
 		setNoGravity(true);
+		setHalfExtents(PARKED_SIZE * 0.5D, PARKED_SIZE * 0.5D, PARKED_SIZE * 0.5D);
+	}
+
+	private void setHalfExtents(double x, double y, double z) {
+		halfX = x;
+		halfY = y;
+		halfZ = z;
 	}
 
 	@Override
@@ -75,6 +119,24 @@ public final class WorldInterfacePartEntity extends Entity {
 		return Math.clamp(entityData.get(FORM), 0, WorldInterfaceAnatomy.FORM_COUNT - 1);
 	}
 
+	/** True if this proxy stands on one of the three heads rather than on a neck or a limb. */
+	public boolean isHead() {
+		return partIndex() < HEAD_PARTS;
+	}
+
+	/** True if this proxy stands on a neck. The three necks are drawn at every form. */
+	public boolean isNeck() {
+		int index = partIndex();
+		return index >= HEAD_PARTS && index < HEAD_PARTS + NECK_PARTS;
+	}
+
+	/** True if the part this proxy stands on is currently drawn. */
+	public boolean isActive() {
+		int index = partIndex();
+		return index < HEAD_PARTS + NECK_PARTS
+				|| index - HEAD_PARTS - NECK_PARTS < WorldInterfaceAnatomy.tentacleCount(form());
+	}
+
 	@Override
 	public void tick() {
 		super.tick();
@@ -85,58 +147,99 @@ public final class WorldInterfacePartEntity extends Entity {
 		}
 		int form = Math.clamp(parent.form(), 0, WorldInterfaceAnatomy.FORM_COUNT - 1);
 		if (!level().isClientSide() && form != entityData.get(FORM)) entityData.set(FORM, form);
-		snapTo(parent.position().add(offset(form, partIndex(), parent.tickCount)),
-				parent.getYRot(), parent.getXRot());
+		bindToBone(parent, form);
 		setDeltaMovement(Vec3.ZERO);
 	}
 
 	/**
-	 * Where this proxy sits relative to the interface's position.
+	 * Puts this proxy on the bone it stands for, as that bone is posed <em>this tick</em>.
 	 *
-	 * <p>Deliberately at the parent's own altitude rather than down at the limb tip. A proxy is a
-	 * column tens of blocks tall, and Minecraft files an entity into the section its <em>position</em>
-	 * lands in, not the sections its box covers; {@code getEntities} then only visits sections within
-	 * a couple of blocks of the query. Standing this on the tip filed it some twenty-eight blocks
-	 * under the arena floor, so a player swinging at a limb right in front of them queried their own
-	 * sections, never reached the one holding the proxy, and hit nothing at all. The box still hangs
-	 * the full length of the limb -- see {@link #makeBoundingBox} -- it is only the bookkeeping point
-	 * that moved up to where the players are.
+	 * <p>The proxies used to be placed from a static reproduction of the model's bind pose, which is
+	 * where the bones would be if nothing were animating them - and something always is. A clip can
+	 * carry the centre skull the better part of twenty blocks at third form, the structural sag bends
+	 * every neck further as the pool drains, and the limb proxies orbited the body on a timer the
+	 * drawn tentacles never followed at all. {@link WorldInterfaceRig} poses the real skeleton, the
+	 * model draws that same pose, and what is left here is reading two points off it.
+	 *
+	 * <p>Heads take a box around the skull. Necks and limbs take a box around the <em>segment</em>,
+	 * because a bone laid out sideways by a clip is not described by a column: the endpoints are
+	 * posed, the extents are whatever contains them, and the proxy is filed at the midpoint.
 	 */
-	private static Vec3 offset(int form, int index, int tick) {
-		int limbs = WorldInterfaceAnatomy.tentacleCount(form);
-		if (index >= limbs) return new Vec3(0.0D, WorldInterfaceAnatomy.tentacleRootLift(form), 0.0D);
-		double radius = WorldInterfaceAnatomy.tentacleRadius(form);
-		double angle = tick * 0.005D + index * (Math.PI * 2.0D / limbs);
-		return new Vec3(Math.cos(angle) * radius, 0.0D, Math.sin(angle) * radius);
+	private void bindToBone(WorldInterfaceEntity parent, int form) {
+		WorldInterfaceRig.Pose pose = parent.rigPose();
+		float yaw = parent.yBodyRot;
+		int index = partIndex();
+		if (index < HEAD_PARTS) {
+			double radius = headRadius(pose, index);
+			setHalfExtents(radius, radius, radius);
+			snapTo(parent.position().add(WorldInterfaceAnatomy.rotate(pose.headOffset(index), yaw)),
+					parent.getYRot(), parent.getXRot());
+			return;
+		}
+		if (index < HEAD_PARTS + NECK_PARTS) {
+			int neck = index - HEAD_PARTS;
+			int head = neck / WorldInterfaceAnatomy.NECK_SEGMENTS_PER_HEAD;
+			int joint = neck % WorldInterfaceAnatomy.NECK_SEGMENTS_PER_HEAD;
+			span(parent, WorldInterfaceAnatomy.rotate(pose.neckJointOffset(head, joint), yaw),
+					WorldInterfaceAnatomy.rotate(pose.neckJointOffset(head, joint + 1), yaw),
+					WorldInterfaceAnatomy.neckSegmentRadius(form, head));
+			return;
+		}
+		int limb = index - HEAD_PARTS - NECK_PARTS;
+		if (limb >= WorldInterfaceAnatomy.tentacleCount(form)) {
+			// Parked inside the parent's own box, where nothing is drawn and nothing is hittable.
+			setHalfExtents(PARKED_SIZE * 0.5D, PARKED_SIZE * 0.5D, PARKED_SIZE * 0.5D);
+			snapTo(parent.position().add(0.0D, WorldInterfaceAnatomy.tentacleRootLift(form), 0.0D),
+					parent.getYRot(), parent.getXRot());
+			return;
+		}
+		span(parent, WorldInterfaceAnatomy.rotate(pose.tendrilTipOffset(limb, false), yaw),
+				WorldInterfaceAnatomy.rotate(pose.tendrilTipOffset(limb, true), yaw),
+				WorldInterfaceAnatomy.tentacleHitWidth(form) * 0.5D);
 	}
 
-	@Override
-	public EntityDimensions getDimensions(Pose pose) {
-		int form = form();
-		if (partIndex() >= WorldInterfaceAnatomy.tentacleCount(form)) {
-			return EntityDimensions.fixed(2.0F, 2.0F);
-		}
-		return EntityDimensions.fixed((float) WorldInterfaceAnatomy.tentacleHitWidth(form),
-				(float) (WorldInterfaceAnatomy.tentacleDrop(form)
-						+ WorldInterfaceAnatomy.tentacleRootLift(form)));
+	/** Files the proxy at the middle of a posed bone and sizes its box to contain the whole of it. */
+	private void span(WorldInterfaceEntity parent, Vec3 near, Vec3 far, double radius) {
+		Vec3 centre = near.add(far).scale(0.5D);
+		setHalfExtents(Math.abs(far.x - near.x) * 0.5D + radius,
+				Math.abs(far.y - near.y) * 0.5D + radius,
+				Math.abs(far.z - near.z) * 0.5D + radius);
+		snapTo(parent.position().add(centre), parent.getYRot(), parent.getXRot());
+	}
+
+	/** Head half-extent for a posed skeleton, so a morph pinch shrinks the box with the skull. */
+	private static double headRadius(WorldInterfaceRig.Pose pose, int index) {
+		return pose.renderScale() * WorldInterfaceRig.skullHalfUnits(index)
+				/ WorldInterfaceRig.UNITS_PER_BLOCK * HEAD_HIT_SLACK;
 	}
 
 	/**
-	 * The limb column, hung from the root down to the tip around a position that sits at the body.
+	 * Reported dimensions, for the handful of vanilla paths that ask rather than reading the box.
 	 *
-	 * <p>{@link EntityDimensions} can only grow a box upward from the position it is given, which is
-	 * why this is spelled out instead: the limbs hang, but the proxy has to be filed up here to be
-	 * findable. Surplus proxies keep the plain centred box; they park on the body axis and are never
-	 * the thing anyone is aiming at.
+	 * <p>Derived from the same half-extents the box is built from, so the two cannot disagree; the
+	 * box itself is authoritative because a posed bone is not always symmetric about its midpoint in
+	 * the way {@link EntityDimensions} assumes.
+	 */
+	@Override
+	public EntityDimensions getDimensions(Pose pose) {
+		double width = Math.max(halfX, halfZ) * 2.0D;
+		return EntityDimensions.fixed((float) width, (float) (halfY * 2.0D));
+	}
+
+	/**
+	 * The box, centred on the proxy's own position.
+	 *
+	 * <p>Unlike vanilla's, this is centred rather than grown upward: a proxy stands on the middle of
+	 * a bone, not at the foot of a column. The proxy is also filed at that midpoint rather than at a
+	 * limb's tip, which matters for more than tidiness - Minecraft files an entity into the section
+	 * its <em>position</em> lands in and {@code getEntities} only visits sections near the query, so
+	 * a proxy filed tens of blocks under the arena floor was unreachable by a player swinging at the
+	 * limb directly in front of them.
 	 */
 	@Override
 	protected AABB makeBoundingBox(Vec3 position) {
-		int form = form();
-		if (partIndex() >= WorldInterfaceAnatomy.tentacleCount(form)) return super.makeBoundingBox(position);
-		double half = WorldInterfaceAnatomy.tentacleHitWidth(form) * 0.5D;
-		return new AABB(position.x - half, position.y - WorldInterfaceAnatomy.tentacleDrop(form),
-				position.z - half, position.x + half,
-				position.y + WorldInterfaceAnatomy.tentacleRootLift(form), position.z + half);
+		return new AABB(position.x - halfX, position.y - halfY, position.z - halfZ,
+				position.x + halfX, position.y + halfY, position.z + halfZ);
 	}
 
 	@Override
@@ -148,12 +251,15 @@ public final class WorldInterfacePartEntity extends Entity {
 	@Override
 	public boolean hurtServer(ServerLevel level, DamageSource source, float amount) {
 		WorldInterfaceEntity parent = parent();
-		return parent != null && parent.hurtServer(level, source, amount);
+		// A parked proxy stands on nothing drawn, so it must not be a damage surface: letting it
+		// take hits would put a hittable volume inside the body at forms that draw fewer limbs.
+		if (parent == null || !isActive()) return false;
+		return parent.hurtServer(level, source, amount);
 	}
 
-	@Override public boolean hurtClient(DamageSource source) { return true; }
-	@Override public boolean isPickable() { return true; }
-	@Override public boolean canBeHitByProjectile() { return true; }
+	@Override public boolean hurtClient(DamageSource source) { return isActive(); }
+	@Override public boolean isPickable() { return isActive(); }
+	@Override public boolean canBeHitByProjectile() { return isActive(); }
 	@Override public boolean isPushable() { return false; }
 	@Override protected void readAdditionalSaveData(ValueInput input) { }
 	@Override protected void addAdditionalSaveData(ValueOutput output) { }

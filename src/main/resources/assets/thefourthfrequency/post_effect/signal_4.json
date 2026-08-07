@@ -1,0 +1,137 @@
+{
+  "targets": {
+    "treated": {}
+  },
+  "passes": [
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "thefourthfrequency:post/analog_signal",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "minecraft:main"
+        }
+      ],
+      "output": "treated",
+      "uniforms": {
+        "SignalConfig": [
+          {
+            "name": "Strength",
+            "type": "float",
+            "value": 1.0
+          },
+          {
+            "name": "Chroma",
+            "type": "float",
+            "value": 12.0
+          },
+          {
+            "name": "Wobble",
+            "type": "float",
+            "value": 9.0
+          },
+          {
+            "name": "WobblePitch",
+            "type": "float",
+            "value": 16.0
+          },
+          {
+            "name": "ScanDepth",
+            "type": "float",
+            "value": 0.28
+          },
+          {
+            "name": "ScanPitch",
+            "type": "float",
+            "value": 3.0
+          },
+          {
+            "name": "RollHeight",
+            "type": "float",
+            "value": 46.0
+          },
+          {
+            "name": "RollSpeed",
+            "type": "float",
+            "value": 15.0
+          },
+          {
+            "name": "Grain",
+            "type": "float",
+            "value": 0.18
+          },
+          {
+            "name": "Halation",
+            "type": "float",
+            "value": 0.7
+          },
+          {
+            "name": "Vignette",
+            "type": "float",
+            "value": 0.52
+          },
+          {
+            "name": "Desaturate",
+            "type": "float",
+            "value": 0.7
+          },
+          {
+            "name": "TearBands",
+            "type": "float",
+            "value": 22.0
+          },
+          {
+            "name": "TearShift",
+            "type": "float",
+            "value": 0.2
+          },
+          {
+            "name": "TearLoss",
+            "type": "float",
+            "value": 0.2
+          },
+          {
+            "name": "TearHoldTicks",
+            "type": "float",
+            "value": 7.0
+          },
+          {
+            "name": "Tint",
+            "type": "vec4",
+            "value": [
+              0.92,
+              0.86,
+              0.88,
+              0.28
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/blit",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "treated"
+        }
+      ],
+      "output": "minecraft:main",
+      "uniforms": {
+        "BlitConfig": [
+          {
+            "name": "ColorModulate",
+            "type": "vec4",
+            "value": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -91,6 +91,8 @@ public final class StoryProgressService {
 		if (!SurvivalMilestone.IRON.present(milestones)) return new Objective("bring_iron", iron,
 				SurvivalProgressService.REQUIRED_IRON);
 		if (!SurvivalMilestone.ENTERED_NETHER.present(milestones)) return new Objective("enter_nether", 0, 1);
+		if (!SurvivalMilestone.FOUND_FORTRESS.present(milestones))
+			return new Objective("find_fortress", 0, 1);
 		int blazeRods = Math.clamp(tag.getIntOr(TerminalData.BLAZE_ROD_SAMPLE_COUNT, 0), 0,
 				SurvivalProgressService.REQUIRED_BLAZE_RODS);
 		if (!SurvivalMilestone.COLLECTED_BLAZE_RODS.present(milestones)) return new Objective(

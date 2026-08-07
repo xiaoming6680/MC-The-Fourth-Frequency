@@ -42,6 +42,8 @@ final class WorldInterfaceSequenceContractTest {
 						"de91b49b-a83f-47bc-8632-8f8dbe172254"), BlockPos.ZERO,
 				600.0F, 600.0F, WorldInterfaceProtocol.ANCHOR_MASK, 0L, true, 0L,
 				WorldInterfaceProtocol.GatewayState.PURPLE.wireId(), List.of(),
+				java.util.stream.IntStream.range(0, WorldInterfaceProtocol.MAX_ANCHORS)
+						.mapToObj(index -> new BlockPos(index, 70, index)).toList(),
 				WorldInterfaceProtocol.Outcome.NONE.wireId(), 0.0F);
 	}
 }

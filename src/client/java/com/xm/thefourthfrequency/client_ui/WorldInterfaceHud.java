@@ -10,6 +10,7 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.ARGB;
+import net.minecraft.world.level.Level;
 
 import java.util.Locale;
 import java.util.UUID;
@@ -32,7 +33,7 @@ public final class WorldInterfaceHud {
 	private static final float DAMAGE_FLASH_TICKS = 7.0F;
 	private static final float BAND_FLASH_TICKS = 26.0F;
 	/** How long a felled anchor's light takes to cross the gauge. */
-	private static final float ANCHOR_SWEEP_TICKS = 30.0F;
+	private static final float ANCHOR_SWEEP_TICKS = 60.0F;
 	/** Half-width of the travelling band, as a fraction of the gauge. */
 	private static final float ANCHOR_SWEEP_REACH = 0.18F;
 	/** Pixels per drawn slice of the band. Fine enough to read as a gradient, coarse enough to be cheap. */
@@ -92,8 +93,18 @@ public final class WorldInterfaceHud {
 	private static void render(GuiGraphics graphics, DeltaTracker tickCounter) {
 		Minecraft client = Minecraft.getInstance();
 		WorldInterfaceClientState.Projection projection = WorldInterfaceClientState.snapshot();
+		// The panel is a readout of an arena, so it is drawn only to someone standing in it.
+		//
+		// Without the dimension test this followed players home. The server sends encounter snapshots
+		// to every frozen roster member wherever they are - the respawn and poem ledgers need them
+		// off-island - and PORTAL_OPEN is still combatVisible(), so the stage a table spends walking
+		// back out through the exit is exactly the stage this drew in. Worse in multiplayer:
+		// completeIfAllPoemsAcknowledged only reaches COMPLETE once *every* member has acked their
+		// poem and had their respawn restored, so the first person home kept a frozen gauge and a
+		// paused collapse clock nailed to the top of their screen until the last teammate finished -
+		// indefinitely, if one of them was AFK or never read it.
 		if (client.player == null || client.level == null || client.options.hideGui
-				|| !projection.combatVisible()) {
+				|| client.level.dimension() != Level.END || !projection.combatVisible()) {
 			resetBarState();
 			return;
 		}
@@ -299,11 +310,18 @@ public final class WorldInterfaceHud {
 				- Math.round(collapse * WorldInterfaceProtocol.COLLAPSE_DURATION_TICKS));
 		String clock = String.format(Locale.ROOT, "%d:%02d", remainingTicks / 1_200L,
 				(remainingTicks / 20L) % 60L);
-		Component collapseLabel = Component.translatable(encounter.timerPaused()
-				? "hud.thefourthfrequency.world_interface.collapse_paused"
-				: "hud.thefourthfrequency.world_interface.collapse", clock);
+		// A won encounter is no longer counting down to anything, so it does not get a clock - and it
+		// certainly does not get "[paused]", which describes a deadline that is still coming. The rail
+		// beside this is running backwards off the same repair fraction the island is healing on, so
+		// the line names what the bar is now showing.
+		boolean repairing = encounter.outcome() == WorldInterfaceProtocol.Outcome.SUCCESS;
+		Component collapseLabel = repairing
+				? Component.translatable("hud.thefourthfrequency.world_interface.collapse_repairing")
+				: Component.translatable(encounter.timerPaused()
+						? "hud.thefourthfrequency.world_interface.collapse_paused"
+						: "hud.thefourthfrequency.world_interface.collapse", clock);
 		graphics.drawString(font, collapseLabel, left, y,
-				collapse >= 0.85D ? 0xFFFF8C91 : 0xFFD5A991, false);
+				repairing ? 0xFF9BE6B4 : collapse >= 0.85D ? 0xFFFF8C91 : 0xFFD5A991, false);
 		drawAnchors(graphics, font, encounter, left, barWidth, y, accent);
 	}
 
@@ -313,9 +331,11 @@ public final class WorldInterfaceHud {
 		int stripWidth = ANCHOR_COUNT * ANCHOR_CELL + (ANCHOR_COUNT - 1) * ANCHOR_GAP;
 		int stripLeft = left + barWidth - stripWidth;
 		int alive = Integer.bitCount(encounter.anchorAliveMask() & WorldInterfaceProtocol.ANCHOR_MASK);
-		Component label = Component.translatable("hud.thefourthfrequency.world_interface.anchors",
-				alive, ANCHOR_COUNT);
-		graphics.drawString(font, label, stripLeft - font.width(label) - 6, y, LABEL_DIM, false);
+		Component label = anchorSweep > 0.0F
+				? Component.translatable("hud.thefourthfrequency.world_interface.anchor_shift")
+				: Component.translatable("hud.thefourthfrequency.world_interface.anchors", alive, ANCHOR_COUNT);
+		graphics.drawString(font, label, stripLeft - font.width(label) - 6, y,
+				anchorSweep > 0.0F ? 0xFFFFE0A0 : LABEL_DIM, false);
 		int lampTop = y + 1;
 		for (int index = 0; index < ANCHOR_COUNT; index++) {
 			int x = stripLeft + index * (ANCHOR_CELL + ANCHOR_GAP);

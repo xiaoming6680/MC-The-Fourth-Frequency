@@ -1,5 +1,8 @@
 package com.xm.thefourthfrequency.mixin;
 
+import com.xm.thefourthfrequency.client_ui.AnalogFilter;
+import com.xm.thefourthfrequency.client_ui.ExitDecayTimeline;
+import com.xm.thefourthfrequency.client_ui.FailureMenuLockState;
 import com.xm.thefourthfrequency.client_ui.MenuErosionState;
 import com.xm.thefourthfrequency.client_ui.PursuitPresentationClient;
 import net.minecraft.client.Minecraft;
@@ -46,6 +49,14 @@ public abstract class PauseScreenErosionMixin {
 			return;
 		}
 		if (!Minecraft.getInstance().hasSingleplayerServer()) return;
+		// An ending releases the exit, whichever way it went. The erosion is pressure from a run that
+		// is still going, and LATE is where it stops warning and starts holding the door shut - but
+		// the epilogue hands the world back and spends a minute of action bars saying the story is
+		// over and the menu is where "over" lives. Only a win used to clear this, through the
+		// RESTORED stage the server sends for a successful finale, so a lost run at the story ceiling
+		// met a greyed-out quit button and the message asking them to press it. The noise below is
+		// not part of the release: a world that was lost should still look like one.
+		if (FailureMenuLockState.locked()) return;
 		switch (MenuErosionState.stage()) {
 			case MID -> disconnectButton.setMessage(Component.translatable(
 					"message.thefourthfrequency.menu_erosion.escape_window"));
@@ -54,18 +65,44 @@ public abstract class PauseScreenErosionMixin {
 		}
 	}
 
+	/**
+	 * The exit control failing, drawn on the control itself.
+	 *
+	 * <p>This used to be nine drifting hexadecimal strings laid across the whole pause screen. That
+	 * read as text pasted over the menu rather than as the menu being in trouble, and it said
+	 * nothing about the one thing it was about - the way out. So the damage moves onto the door: the
+	 * same grain, scanlines and mistracking bar the loading screen and the terminal's weather card
+	 * use, clipped to the button's own rectangle.
+	 *
+	 * <p>Drawn after the button, so it sits on top of the label rather than under it, and bounded to
+	 * the button's box, so nothing else on the screen is touched. Rates come from
+	 * {@link ExitDecayTimeline} and are all far below the flash ceiling - see that class.
+	 */
 	@Inject(method = "render", at = @At("TAIL"))
-	private void thefourthfrequency$lateNoise(GuiGraphics graphics, int mouseX, int mouseY,
+	private void thefourthfrequency$corruptTheExit(GuiGraphics graphics, int mouseX, int mouseY,
 			float partialTick, CallbackInfo callback) {
-		if (!Minecraft.getInstance().hasSingleplayerServer()
+		if (disconnectButton == null || !Minecraft.getInstance().hasSingleplayerServer()
 				|| MenuErosionState.stage() != MenuErosionState.Stage.LATE) return;
-		long phase = System.currentTimeMillis() / 90L;
-		for (int row = 0; row < 9; row++) {
-			int y = 34 + row * 18;
-			int x = 10 + Math.floorMod((int) (phase * 31 + row * 67), Math.max(1, graphics.guiWidth() - 130));
-			String noise = Integer.toHexString((int) (phase * 0x9E3779B9L + row * 0x45D9F3BL)).toUpperCase();
-			graphics.drawString(Minecraft.getInstance().font, Component.literal(noise + "//" + noise),
-					x, y, 0xAA8D2AB5, false);
-		}
+		int left = disconnectButton.getX();
+		int top = disconnectButton.getY();
+		int right = left + disconnectButton.getWidth();
+		int bottom = top + disconnectButton.getHeight();
+		if (right <= left || bottom <= top) return;
+
+		long now = System.currentTimeMillis();
+		int frame = (int) (now / 55L);
+		AnalogFilter.grain(graphics, left, top, right, bottom,
+				ExitDecayTimeline.grainStrength(now), frame);
+		AnalogFilter.scanlines(graphics, left, top, right, bottom, 3,
+				ExitDecayTimeline.scanlineStrength(), frame);
+
+		float progress = ExitDecayTimeline.rollProgress(now);
+		float strength = ExitDecayTimeline.rollStrength(progress);
+		if (strength <= 0.0F) return;
+		int barHeight = Math.max(2, (bottom - top) / 3);
+		// Enters above the control and leaves below it, so the pass reads as something crossing the
+		// button rather than as a band switching on inside it.
+		int barTop = Math.round(top - barHeight + progress * (bottom - top + barHeight));
+		AnalogFilter.rollBar(graphics, left, top, right, bottom, barTop, barHeight, strength);
 	}
 }

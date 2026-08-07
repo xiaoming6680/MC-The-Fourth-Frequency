@@ -8,12 +8,18 @@ import net.minecraft.resources.Identifier;
 
 /** Binds one server-authorized World Interface outcome to the next vanilla WinScreen. */
 public final class WorldInterfaceVanillaPoemClient {
-	private static final Identifier SUCCESS_ZH_CN = poem("end_success_zh_cn.txt");
+	private static final Identifier SUCCESS_ALL_ZH_CN = poem("end_success_zh_cn.txt");
+	private static final Identifier SUCCESS_PARTIAL_ZH_CN = poem("end_success_partial_zh_cn.txt");
+	private static final Identifier SUCCESS_PRESERVED_ZH_CN = poem("end_success_preserved_zh_cn.txt");
 	private static final Identifier FAILURE_ZH_CN = poem("end_failure_zh_cn.txt");
-	private static final Identifier SUCCESS_EN_US = poem("end_success_en_us.txt");
+	private static final Identifier SUCCESS_ALL_EN_US = poem("end_success_en_us.txt");
+	private static final Identifier SUCCESS_PARTIAL_EN_US = poem("end_success_partial_en_us.txt");
+	private static final Identifier SUCCESS_PRESERVED_EN_US = poem("end_success_preserved_en_us.txt");
 	private static final Identifier FAILURE_EN_US = poem("end_failure_en_us.txt");
 	private static final Identifier CREDITS_ZH_CN = poem("credits_zh_cn.json");
 	private static final Identifier CREDITS_EN_US = poem("credits_en_us.json");
+	private static final Identifier POSTCREDITS_ZH_CN = poem("postcredits_zh_cn.txt");
+	private static final Identifier POSTCREDITS_EN_US = poem("postcredits_en_us.txt");
 	private static PoemStartS2C pending;
 	private static WorldInterfaceProtocol.Outcome scoredOutcome = WorldInterfaceProtocol.Outcome.NONE;
 
@@ -51,17 +57,32 @@ public final class WorldInterfaceVanillaPoemClient {
 		releaseScore();
 	}
 
-	private static synchronized void releaseScore() {
+	/**
+	 * Hands the score back to the ordinary playlist.
+	 *
+	 * <p>Callable from the success cleanup because <em>when</em> this happens matters: restoring the
+	 * resource packs rebuilds the sound engine, and anything the music director still wants at that
+	 * moment is started again from the top.</p>
+	 */
+	public static synchronized void releaseScore() {
 		scoredOutcome = WorldInterfaceProtocol.Outcome.NONE;
 	}
 
 	public static Identifier poemResource(PoemStartS2C poem) {
 		boolean chinese = chineseSelected();
 		return switch (poem.outcome()) {
-			case SUCCESS -> chinese ? SUCCESS_ZH_CN : SUCCESS_EN_US;
+			case SUCCESS -> successResource(poem.destroyedAnchors(), chinese);
 			case FAILURE -> chinese ? FAILURE_ZH_CN : FAILURE_EN_US;
 			case NONE -> throw new IllegalArgumentException("A vanilla End poem requires a resolved outcome");
 		};
+	}
+
+	private static Identifier successResource(int destroyedAnchors, boolean chinese) {
+		if (destroyedAnchors <= 0) return chinese ? SUCCESS_PRESERVED_ZH_CN : SUCCESS_PRESERVED_EN_US;
+		if (destroyedAnchors >= WorldInterfaceProtocol.MAX_ANCHORS) {
+			return chinese ? SUCCESS_ALL_ZH_CN : SUCCESS_ALL_EN_US;
+		}
+		return chinese ? SUCCESS_PARTIAL_ZH_CN : SUCCESS_PARTIAL_EN_US;
 	}
 
 	/**
@@ -70,6 +91,11 @@ public final class WorldInterfaceVanillaPoemClient {
 	 */
 	public static Identifier creditsResource() {
 		return chineseSelected() ? CREDITS_ZH_CN : CREDITS_EN_US;
+	}
+
+	/** The closing quote the credits roll ends on, replacing the vanilla one on the same axis. */
+	public static Identifier postcreditsResource() {
+		return chineseSelected() ? POSTCREDITS_ZH_CN : POSTCREDITS_EN_US;
 	}
 
 	private static boolean chineseSelected() {
@@ -89,10 +115,9 @@ public final class WorldInterfaceVanillaPoemClient {
 			}
 			if (poem.outcome() == WorldInterfaceProtocol.Outcome.SUCCESS) {
 				if (sent) DimensionViewDistanceController.armUnlockAfterSuccessfulReturn();
-				// A won run hands the world back, so the ending track stops owning the score here and
-				// the overworld playlist resumes behind the return. A lost one never gets that far:
-				// the failure presentation is the remainder of the session, and it keeps its music.
-				releaseScore();
+				// The score was already handed back at the top of the success cleanup, before the
+				// resource-pack restore: this callback runs after that restore has finished, and by
+				// then the sound engine has been torn down and rebuilt at least once.
 			}
 			// Packet ordering is intentional: the durable poem ACK reaches the server before PERFORM_RESPAWN.
 			vanillaFinish.run();

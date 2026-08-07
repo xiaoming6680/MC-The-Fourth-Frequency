@@ -259,7 +259,9 @@ public final class WorldInterfaceRitualService {
 			if (snapshot.stage() != WorldInterfaceStage.WAITING_TERMINALS || !readyToCommit(snapshot)) {
 				return reject(snapshot, "sacrifice_not_ready");
 			}
-			double maximumHealth = 600.0D * snapshot.frozenRoster().size();
+			// readyToCommit() above already proved the roster is non-empty, and the deposit paths
+			// cap it at MAX_ROSTER_SIZE, so the policy's 1..8 precondition holds here.
+			double maximumHealth = WorldInterfacePolicy.maxHealth(snapshot.frozenRoster().size());
 			MutationResult committed = WorldInterfaceState.mutate(server,
 					snapshot.encounterId().orElseThrow(), snapshot.revision(),
 					state -> state.commitSacrifice(maximumHealth));

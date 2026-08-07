@@ -7,6 +7,8 @@ import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.content.ModEntities;
 import com.xm.thefourthfrequency.content.ResonanceCoreBlockEntity;
 import com.xm.thefourthfrequency.content.TerminalData;
+import com.xm.thefourthfrequency.entity.StabilityAnchorEntity;
+import com.xm.thefourthfrequency.entity.StabilityAnchorGeometry;
 import com.xm.thefourthfrequency.entity.WorldInterfaceAnatomy;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfacePartEntity;
@@ -30,8 +32,9 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
+import net.minecraft.core.particles.ColorParticleOption;
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.core.particles.PowerParticleOption;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -45,12 +48,11 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
-import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
 import net.minecraft.world.entity.boss.enderdragon.EnderDragon;
+import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.StairBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.portal.TeleportTransition;
@@ -81,7 +83,14 @@ import java.util.WeakHashMap;
  */
 public final class EndBossEncounterService {
 	private static final UUID NIL_UUID = new UUID(0L, 0L);
-	private static final int SUMMON_DURATION_TICKS = 100;
+	/**
+	 * The summon window, taken from the shared timeline rather than restated.
+	 *
+	 * <p>Was 100 ticks - five seconds of the boss standing still in silence before the fight began.
+	 * The ceremony that replaced it is in {@link WorldInterfaceSummonTimeline}, which both this and
+	 * the client read, so the two cannot disagree about how long the arrival takes.
+	 */
+	private static final int SUMMON_DURATION_TICKS = WorldInterfaceSummonTimeline.TOTAL_TICKS;
 	/**
 	 * The successful ending, in order: the body falls, the body goes, the dragon arrives, the dragon
 	 * opens the way out.
@@ -95,15 +104,46 @@ public final class EndBossEncounterService {
 	 * <p>Nothing overlaps now. Each beat waits for the one before it to be visibly finished.</p>
 	 */
 	private static final int ANCHORS_SKYWARD_TICKS = 20;
-	/** The collapse and fade clips run 6.0s; the body is only discarded once they have played out. */
-	private static final int BOSS_REMOVAL_TICKS = 120;
-	/** A second of empty sky, so the body going is its own beat and not a cut. */
-	private static final int DRAGON_SPAWN_TICKS = 140;
-	/** The five seconds the dragon spends prising the altar open, from the tick it arrives. */
-	private static final int DRAGON_PORTAL_WORK_TICKS = 100;
+	/** The collapse and fade clips run 9.0s; the body is only discarded once they have played out. */
+	private static final int BOSS_REMOVAL_TICKS = 180;
+	/**
+	 * Blocks per tick at the top of the death ascent.
+	 *
+	 * <p>Deliberately a fraction of {@link #FAILURE_ESCAPE_TOP_SPEED}. A loss is the interface
+	 * getting away, so it leaves fast enough to be lost; a win is it coming apart on the way up, and
+	 * every part of that has to stay readable from the altar for the whole nine seconds.</p>
+	 */
+	private static final double DEATH_ASCENT_TOP_SPEED = 0.42D;
+	/** Ticks spent accelerating into the climb, so the body drifts loose before it rises. */
+	private static final int DEATH_ASCENT_RAMP_TICKS = 70;
+	/** Two seconds of empty sky, so the body going is its own beat and not a cut. */
+	private static final int DRAGON_SUMMON_TICKS = 220;
+	/**
+	 * The call, and the longest single beat of the ending.
+	 *
+	 * <p>The dragon used to be added to the world twenty ticks after the body was discarded, with
+	 * nothing in between and nothing announcing it: one tick there was empty sky and the next tick
+	 * there was a dragon in it, at seventy-two blocks out, already flying. Whatever the ending was
+	 * trying to say about what the players had just spared, "it was there all along" is not it.</p>
+	 *
+	 * <p>So the sky is opened first, and the opening takes long enough to be watched. Six seconds of
+	 * the orbit being drawn in light before anything flies along it, which is also what makes the
+	 * arrival land - the players know where to be looking by the time it happens.</p>
+	 */
+	private static final int DRAGON_SUMMON_DURATION_TICKS = 120;
+	/** The dragon is added on the tick the summon peaks, never before it. */
+	private static final int DRAGON_SPAWN_TICKS = DRAGON_SUMMON_TICKS + DRAGON_SUMMON_DURATION_TICKS;
+	/**
+	 * The eight seconds the dragon spends prising the altar open, from the tick it arrives.
+	 *
+	 * <p>Five was not enough to read as work. The whole descent from the resting orbit to the low
+	 * circle happens inside this window, so at a hundred ticks the dragon was still straightening
+	 * out of its dive when the exit finished opening underneath it.</p>
+	 */
+	private static final int DRAGON_PORTAL_WORK_TICKS = 160;
 	private static final int SUCCESS_PORTAL_TICKS = DRAGON_SPAWN_TICKS + DRAGON_PORTAL_WORK_TICKS;
 	/** First line while it is still working; the second lands on the tick the exit exists. */
-	private static final int DRAGON_FIRST_LINE_TICKS = 200;
+	private static final int DRAGON_FIRST_LINE_TICKS = DRAGON_SPAWN_TICKS + 70;
 	private static final int RESOLUTION_DURATION_TICKS = 260;
 	private static final int SNAPSHOT_INTERVAL_TICKS = 10;
 	private static final int HEAL_INTERVAL_TICKS = 20;
@@ -114,32 +154,70 @@ public final class EndBossEncounterService {
 	/** Slow enough that the core's telegraph shapes stay readable while it tracks a strafing player. */
 	private static final float BODY_TURN_DEGREES_PER_TICK = 2.2F;
 	/**
-	 * The morph is flown rather than played in place.
+	 * The morph is a flight: the storm leaves, changes where nobody can see it, and comes back.
 	 *
-	 * <p>A body twenty-five blocks across cannot credibly turn into a different body in front of
-	 * you; the renderer's pinch hid the swap frame but the thing still visibly deflated and
-	 * reinflated on the spot. So it leaves: straight up and out of sight, changes where nobody is
-	 * looking, and comes back down as the next form. The apex is half the window, which is also
-	 * where the pinch bottoms out, so on the one angle where a player can still follow it -- looking
-	 * straight up -- the swap still happens behind nothing.
+	 * <p>It was played in place for a while, on the reasoning that four seconds with nothing in the
+	 * arena to hit is four seconds the encounter has stopped. That is a real cost and it is being
+	 * paid on purpose. A body twenty-five blocks across cannot credibly become a different body in
+	 * front of you - the renderer's pinch shuts the shell and draws the next one out of it, which
+	 * covers the swap frame but does not hide that a silhouette the player has spent two minutes
+	 * learning has just been replaced in place. Taking it out of sight is what makes the next form an
+	 * arrival rather than a substitution, and the two morphs are the beats the whole fight is shaped
+	 * around.
+	 *
+	 * <p>Six seconds. It was four, and at that length the climb and the return were over before
+	 * either read as travel - the storm hopped rather than left. Lengthening it also lines the apex
+	 * up with the authored clip for the first time: {@code WorldInterfaceRig} plays the shell tear
+	 * over three seconds, and the reveal now falls exactly there instead of a second before the
+	 * animation has finished. Still inside the encounter's own rule that the player is never left
+	 * with nothing to do for long.
 	 */
-	private static final int MORPH_FLIGHT_TICKS = 60;
-	private static final int MORPH_APEX_TICKS = MORPH_FLIGHT_TICKS / 2;
-	/** Blocks per tick. Thirty ticks of this puts the whole silhouette well past useful sight. */
-	private static final double MORPH_CLIMB_SPEED = 3.6D;
-	private static final double MORPH_DIVE_SPEED = 3.2D;
+	private static final int MORPH_FLIGHT_TICKS = 120;
+	/** The apex: where the shell splits, the form is set, and the shockwave lands. */
+	private static final int MORPH_REVEAL_TICKS = MORPH_FLIGHT_TICKS / 2;
+	/** Ticks the body is locked in place while it anchors, before the climb starts. */
+	private static final int MORPH_ANCHOR_TICKS = 12;
+	/** How far the body sinks into its own crouch before it launches. */
+	private static final double MORPH_INTAKE_DIP = 3.5D;
 	/**
-	 * The interface's roar: the vanilla dragon growl, pitched down per form.
+	 * Blocks above the arena floor the climb reaches, where the form is actually changed.
 	 *
-	 * <p>Borrowed rather than generated on purpose. The growl is the sound the End already means,
-	 * and a player who has fought the dragon reads it before they have identified anything on
-	 * screen; dropping it an octave and a bit says "that, but the thing it was guarding against".
-	 * The pitch falls as the body grows, so the same cue reports which form is out there from
+	 * <p>Just under the height the summon descends from, and for the same reason: it is far enough
+	 * that the body reads as gone from anywhere on the island, and the renderer is pinching it to
+	 * under a third of its size at exactly that moment.
+	 */
+	private static final double MORPH_ASCENT_HEIGHT = 110.0D;
+	/**
+	 * The interface's roar: the vanilla dragon growl and the wither's, layered and pitched down.
+	 *
+	 * <p>Borrowed rather than generated on purpose. Both halves are sounds the game has already
+	 * taught the player, and neither one alone says the right thing. The dragon's growl is what the
+	 * End means - a player who has fought it reads the shape before they have identified anything on
+	 * screen - but on its own it says "the dragon", and this is not the dragon. The wither's is the
+	 * other boss roar vanilla owns, and it brings the grain the growl has none of.
+	 *
+	 * <p>Stacked, with the wither under the growl and pitched further down, they stop being either
+	 * one. The pitch falls as the body grows, so the same cue reports which form is out there from
 	 * across the island.
 	 */
 	private static final float[] ROAR_PITCH_BY_FORM = {0.82F, 0.68F, 0.56F};
-	/** Long enough to stay atmosphere rather than turning into a metronome. */
-	private static final int ROAR_INTERVAL_TICKS = 260;
+	/**
+	 * The wither layer's pitch, lower again than the growl it sits under.
+	 *
+	 * <p>Deliberately not the same table. Two samples at one pitch read as one sample with a chorus
+	 * on it; separated by roughly a fourth they read as one throat with two registers in it.
+	 */
+	private static final float[] ROAR_WITHER_PITCH_BY_FORM = {0.68F, 0.56F, 0.46F};
+	/** How loud the wither layer sits under the growl. It is grain, not a second roar. */
+	private static final float ROAR_WITHER_VOLUME = 0.62F;
+	/**
+	 * Ticks between idle roars, per form.
+	 *
+	 * <p>One flat interval meant the third form - the one that is supposed to be unbearable - roared
+	 * exactly as often as the first. Tightening it per form makes the presence itself escalate, and
+	 * the shortest of the three is still long enough not to become a metronome.
+	 */
+	private static final int[] ROAR_INTERVAL_BY_FORM = {200, 170, 140};
 	/** Beat the interface holds over the ruin before it starts climbing away from a lost encounter. */
 	private static final int FAILURE_ESCAPE_HOLD_TICKS = 30;
 	/** Ticks the ascent takes to reach full speed. */
@@ -155,9 +233,6 @@ public final class EndBossEncounterService {
 	private static final Map<MinecraftServer, Set<UUID>> ALTAR_VIEWERS =
 			Collections.synchronizedMap(new WeakHashMap<>());
 	private static final Map<MinecraftServer, Map<UUID, Long>> PROJECTILE_HITS =
-			Collections.synchronizedMap(new WeakHashMap<>());
-	/** Encounters whose one-time anchor-cost warning has already absorbed a first strike. */
-	private static final Map<MinecraftServer, Set<UUID>> ANCHOR_WARNINGS =
 			Collections.synchronizedMap(new WeakHashMap<>());
 	private static final Map<MinecraftServer, Map<UUID, Long>> MELEE_HITS =
 			Collections.synchronizedMap(new WeakHashMap<>());
@@ -330,6 +405,11 @@ public final class EndBossEncounterService {
 			boss.discard();
 			return;
 		}
+		// Published before anything else can return early: the pose the hit boxes stand on reads it,
+		// so a stale fraction is a set of boxes sagging by the wrong amount rather than a cosmetic
+		// lag in the bar.
+		boss.setHealthFraction(snapshot.maxVirtualHealth() <= 0.0D ? 1.0F
+				: (float) (snapshot.virtualHealth() / snapshot.maxVirtualHealth()));
 		int form = formForStage(snapshot.stage());
 		// Until it reaches the top of the morph climb it is still the old body, so the form is not
 		// pushed here: driveMorphFlight owns it for the length of the flight.
@@ -339,35 +419,143 @@ public final class EndBossEncounterService {
 			driveFailureEscape(level, boss, snapshot);
 			return;
 		}
-		if (snapshot.stage().isResolution() || snapshot.stage() == WorldInterfaceStage.PORTAL_OPEN) {
+		// A win climbs too, and it has to climb from here for the same reason the loss does. This is
+		// the entity's own AI step, which is where the move itself happens; a second tick source
+		// writing velocity from the service tick lands on either side of that move depending on
+		// registration order, so the body took some ticks off and jumped through others.
+		if (snapshot.stage().isResolution()) {
+			driveDeathAscent(level, boss, snapshot);
+			return;
+		}
+		if (snapshot.stage() == WorldInterfaceStage.PORTAL_OPEN) {
 			boss.setDeltaMovement(Vec3.ZERO);
 			return;
 		}
 		if (!snapshot.stage().isCombat()) {
 			hoverAt(boss, snapshot.arenaCenter(), PRELUDE_HOVER_HEIGHT, level.getGameTime());
+			// Watching before it is fighting. The body holds its ceremonial station and does not turn,
+			// but the heads track whoever is down there - which is most of what the arrival is for.
+			nearestArenaParticipant(level, snapshot, boss.position())
+					.ifPresentOrElse(player -> aimGaze(boss, player.getEyePosition()),
+							() -> relaxGaze(boss));
 			return;
 		}
 		// Third form used to be excluded from the chase and left orbiting the arena centre thirty-four
 		// blocks up, which put it out of reach of everything except a bow for the whole final phase.
-		double hover = WorldInterfaceAnatomy.combatHoverHeight(form);
+		//
+		// The climb is now a window rather than a permanent state: WorldInterfaceSkyholdPolicy owns
+		// when the second and third bodies leave every swing, and caps how much of the fight that is.
+		long activeTick = effectiveActiveTicks(snapshot, level.getGameTime());
+		double lift = WorldInterfaceSkyholdPolicy.lift(snapshot.stage(), activeTick);
+		if (WorldInterfaceSkyholdPolicy.isAscentTick(snapshot.stage(), activeTick)) {
+			// Announced, not discovered. A boss that silently rises out of reach reads as a bug; the
+			// same boss with a cue on the tick it leaves reads as an instruction to change weapon.
+			AudioService.playBounded(level, BlockPos.containing(WorldInterfaceAnatomy.coreOrigin(boss)),
+					ModSounds.WORLD_INTERFACE_FLIGHT, SoundSource.HOSTILE, 1.0F, 0.88F);
+			roar(level, boss, 0.85F);
+		}
+		double hover = WorldInterfaceAnatomy.combatHoverHeight(form) + lift;
 		ServerPlayer target = nearestArenaParticipant(level, snapshot, boss.position()).orElse(null);
 		if (target == null) {
 			hoverAt(boss, snapshot.arenaCenter(), hover, level.getGameTime());
+			relaxGaze(boss);
 			return;
 		}
-		double movement = 0.11D * WorldInterfacePolicy.movementMultiplier(snapshot.destroyedAnchorCount());
 		// Stand off rather than sit on top of them. The chase used to aim at the player's own
 		// column, so the interface parked directly overhead and a body twenty-five blocks across
 		// simply contained them: nothing to face, nothing to back away from, and the core -- which
 		// hangs off the front of the body -- pointing somewhere they were not. Held one body radius
 		// plus a swing away, the near face lands at melee reach and the thing is in front of them.
-		Vec3 flat = boss.position().subtract(target.position()).multiply(1.0D, 0.0D, 1.0D);
-		Vec3 approach = flat.lengthSqr() < 1.0E-4D ? new Vec3(0.0D, 0.0D, -1.0D) : flat.normalize();
-		double standoff = WorldInterfaceAnatomy.massRadius(form) + 3.0D;
-		Vec3 desired = target.position().add(approach.scale(standoff)).add(0.0D, hover, 0.0D);
+		//
+		// The standoff is a floor on how close it will <em>come</em>, never a distance it keeps.
+		// Written as a setpoint it was both, and the difference is the whole feel of the chase: a
+		// player who ran at the storm was running at a station that slid away from them at the same
+		// moment, so closing the gap took as long as the storm wanted it to and catching it never
+		// happened. It now stops when it is close enough and lets the player walk the rest of the
+		// way in - which is also what makes the head coming down to meet them mean anything.
+		// Horizontally the storm answers the whole table, weighted toward whoever is close, rather
+		// than locking onto the single nearest player - see WorldInterfacePolicy#attentionCentroid.
+		// Vertically it still follows the nearest, because the vertical rule is about the spikes and
+		// the anchors on them, and a weighted average of one climber and three players on the floor
+		// would answer none of them.
+		Vec3 focus = attentionPoint(level, snapshot, boss.position(), target);
+		Vec3 flat = boss.position().subtract(focus).multiply(1.0D, 0.0D, 1.0D);
+		double gap = flat.length();
+		double standoff = WorldInterfaceAnatomy.combatStandoff(form);
+		Vec3 station;
+		if (gap > standoff) {
+			Vec3 approach = gap < 1.0E-4D ? new Vec3(0.0D, 0.0D, -1.0D) : flat.scale(1.0D / gap);
+			station = focus.add(approach.scale(standoff));
+		} else {
+			station = boss.position();
+		}
+		// Height comes off the island, not off the player - see WorldInterfacePolicy#MAX_VERTICAL_FOLLOW.
+		// Following their Y outright turned the body into a ceiling pinned above their head, which is
+		// only ever felt on the spikes, and the spikes are where the anchors are.
+		steerTo(boss, new Vec3(station.x, WorldInterfacePolicy.combatStationY(
+				snapshot.arenaCenter().getY(), target.position().y, hover), station.z));
+		faceTarget(boss, focus);
+	}
+
+	/**
+	 * The horizontal point the body steers to and faces, with the nearest player's height kept.
+	 *
+	 * <p>Collapses to the nearest player's own position on a solo table, which is what every number
+	 * in the chase was tuned against.
+	 */
+	private static Vec3 attentionPoint(ServerLevel level, WorldInterfaceState.Snapshot snapshot,
+			Vec3 from, ServerPlayer nearest) {
+		List<ServerPlayer> participants = arenaParticipants(level, snapshot);
+		if (participants.size() <= 1) return nearest.position();
+		double[] xs = new double[participants.size()];
+		double[] zs = new double[participants.size()];
+		for (int index = 0; index < participants.size(); index++) {
+			ServerPlayer participant = participants.get(index);
+			xs[index] = participant.getX();
+			zs[index] = participant.getZ();
+		}
+		double[] centroid = WorldInterfacePolicy.attentionCentroid(xs, zs, from.x, from.z);
+		return new Vec3(centroid[0], nearest.getY(), centroid[1]);
+	}
+
+	/**
+	 * Blocks per tick the storm closes horizontally.
+	 *
+	 * <p>Was 0.11 - two and a fifth blocks a second - against a walking player's four and a third.
+	 * <b>It could not keep up with someone walking away from it, let alone sprinting.</b> Every number
+	 * in {@link WorldInterfaceAnatomy#combatStandoff} describes where the body sits <em>once it has
+	 * arrived</em>, and against anything but a stationary player it never arrived: the station kept
+	 * receding faster than the storm closed, so the head a player is meant to swing at spent the fight
+	 * further away than the geometry says it is. That is most of why "I cannot hit it" kept coming back
+	 * however the head was moved.
+	 *
+	 * <p>0.22 is a walk. It holds station against a player crossing the arena and is still comfortably
+	 * outrun by a sprint, which keeps the one thing the slow chase was protecting - that a player can
+	 * always break contact - while ending the case where the storm simply never catches anybody.
+	 */
+	private static final double CHASE_SPEED = 0.22D;
+	/**
+	 * Blocks per tick the storm climbs or descends.
+	 *
+	 * <p>Held apart from {@link #CHASE_SPEED} rather than sharing one figure with it, because the two
+	 * legs are asking for different things. The climb has to cover {@link
+	 * WorldInterfaceSkyholdPolicy#CEILING_LIFT} inside {@link WorldInterfaceSkyholdPolicy#TRANSIT_TICKS}
+	 * or the body is still rising when the window it was rising for has closed; the chase has to stay
+	 * slow enough to be circled. A single speed fast enough for the first turns the second into a
+	 * thirty-three-block body skating across the island at eleven blocks a second.
+	 */
+	private static final double CLIMB_SPEED = 0.70D;
+
+	/** Moves the body toward a station with the vertical and horizontal legs budgeted separately. */
+	private static void steerTo(WorldInterfaceEntity boss, Vec3 desired) {
 		Vec3 delta = desired.subtract(boss.position());
-		boss.setDeltaMovement(delta.lengthSqr() < 1.0D ? Vec3.ZERO : delta.normalize().scale(movement));
-		faceTarget(boss, target.position());
+		Vec3 flat = delta.multiply(1.0D, 0.0D, 1.0D);
+		double horizontal = flat.length();
+		Vec3 step = horizontal < 1.0D ? Vec3.ZERO
+				: flat.scale(Math.min(CHASE_SPEED, horizontal) / horizontal);
+		double vertical = Math.abs(delta.y) < 0.05D ? 0.0D
+				: Math.copySign(Math.min(CLIMB_SPEED, Math.abs(delta.y)), delta.y);
+		boss.setDeltaMovement(step.x, vertical, step.z);
 	}
 
 	/**
@@ -379,10 +567,22 @@ public final class EndBossEncounterService {
 	 */
 	private static void roar(ServerLevel level, WorldInterfaceEntity boss, float volume) {
 		int form = Math.clamp(boss.form(), 0, ROAR_PITCH_BY_FORM.length - 1);
-		AudioService.playBounded(level, BlockPos.containing(WorldInterfaceAnatomy.coreOrigin(boss)),
-				SoundEvents.ENDER_DRAGON_GROWL, SoundSource.HOSTILE, volume,
-				ROAR_PITCH_BY_FORM[form]);
+		BlockPos origin = BlockPos.containing(WorldInterfaceAnatomy.coreOrigin(boss));
+		// Through playWithReach, not playBounded. Both halves are borrowed vanilla cues, which carry
+		// no attenuation distance of their own and therefore fade out over sixteen blocks - and this
+		// is emitted from a core that hangs sixteen to thirty-seven blocks over the arena floor. The
+		// roar has been inaudible from the second form onward for as long as the body has been
+		// climbing; it was never a mixing problem, it was a radius.
+		AudioService.playWithReach(level, origin, SoundEvents.ENDER_DRAGON_GROWL,
+				SoundSource.HOSTILE, volume, ROAR_PITCH_BY_FORM[form], ROAR_REACH_BLOCKS);
+		// The second throat. Emitted from the same point on the same tick so the two arrive as one
+		// sound rather than as a growl with an echo behind it.
+		AudioService.playWithReach(level, origin, SoundEvents.WITHER_AMBIENT, SoundSource.HOSTILE,
+				volume * ROAR_WITHER_VOLUME, ROAR_WITHER_PITCH_BY_FORM[form], ROAR_REACH_BLOCKS);
 	}
+
+	/** The roar is an arena event: it reports which body is out there from across the island. */
+	private static final float ROAR_REACH_BLOCKS = 96.0F;
 
 	/** Whether the interface is currently away on its morph flight, and so owed no other orders. */
 	private static boolean isMorphing(ServerLevel level, WorldInterfaceEntity boss) {
@@ -394,43 +594,111 @@ public final class EndBossEncounterService {
 	}
 
 	/**
-	 * Climb out of sight, change up there, and come back down as the next form.
+	 * Brace, climb out of the sky, change up there, and come back down as the next form.
 	 *
-	 * <p>Returns whether the flight is currently steering the body. The form deliberately does not
-	 * change until the apex: swapping it on the tick the stage advanced meant the new silhouette
-	 * appeared at ground level and the climb was the new body leaving rather than the old one.
+	 * <p>Returns whether the morph is currently steering the body. Four beats: it braces where it
+	 * stands, it climbs to {@link #MORPH_ASCENT_HEIGHT}, at {@link #MORPH_REVEAL_TICKS} - which is the
+	 * top of the climb, and out of sight - the shell opens and the new form is set, and then the new
+	 * body comes back down onto its station.
+	 *
+	 * <p>The form is set at the apex rather than at the start so the growth is never seen happening.
+	 * A body twenty-five blocks across cannot credibly become a different body in front of you, and
+	 * the renderer's pinch - which shuts the shell and draws the next one out of it - is a cover for
+	 * the swap rather than a substitute for hiding it. Four seconds with nothing in the arena is the
+	 * price, and it is deliberate: the morph is the beat the fight is built around, and what it is
+	 * supposed to say is that the thing left.
+	 *
+	 * <p>Position is written with {@code snapTo} rather than as a velocity, the same way
+	 * {@link #driveSummonDescent} does, so the flight path is exact on both sides and a body that is
+	 * mid-climb when the server saves resumes at the height its own clock says.
 	 */
 	private static boolean driveMorphFlight(ServerLevel level, WorldInterfaceEntity boss,
 			WorldInterfaceState.Snapshot snapshot, int targetForm) {
 		if (!isMorphing(level, boss)) return false;
 		long elapsed = level.getGameTime() - boss.actionStartTick();
 		boss.setNoGravity(true);
-		if (elapsed < MORPH_APEX_TICKS) {
-			// Straight up, no steering. It is leaving, not manoeuvring.
-			boss.setDeltaMovement(0.0D, MORPH_CLIMB_SPEED, 0.0D);
+		boss.setDeltaMovement(Vec3.ZERO);
+		if (elapsed < MORPH_ANCHOR_TICKS) {
+			// Braced. It dips into its own intake before it goes, so the climb reads as a launch.
+			double crouch = -MORPH_INTAKE_DIP * (elapsed / (double) MORPH_ANCHOR_TICKS);
+			Vec3 held = boss.position().multiply(1.0D, 0.0D, 1.0D)
+					.add(0.0D, morphFloor(level, snapshot, boss.form()) + crouch, 0.0D);
+			boss.snapTo(held, boss.getYRot(), boss.getXRot());
 			return true;
 		}
-		boss.setForm(targetForm);
-		Vec3 desired = morphReturnPoint(level, boss, snapshot, targetForm);
-		Vec3 delta = desired.subtract(boss.position());
-		boss.setDeltaMovement(delta.lengthSqr() < 1.0D ? Vec3.ZERO
-				: delta.normalize().scale(MORPH_DIVE_SPEED));
-		// Arrives already looking at whoever it is coming down on.
+		if (elapsed >= MORPH_REVEAL_TICKS) boss.setForm(targetForm);
+		int station = elapsed >= MORPH_REVEAL_TICKS ? targetForm : boss.form();
+		double ceiling = snapshot.arenaCenter().getY() + MORPH_ASCENT_HEIGHT;
+		double height;
+		if (elapsed < MORPH_REVEAL_TICKS) {
+			// Squared: it detaches, then leaves. A linear climb reads as an elevator.
+			double progress = (elapsed - MORPH_ANCHOR_TICKS)
+					/ (double) Math.max(1, MORPH_REVEAL_TICKS - MORPH_ANCHOR_TICKS);
+			double base = morphFloor(level, snapshot, boss.form()) - MORPH_INTAKE_DIP;
+			height = Mth.lerp(progress * progress, base, ceiling);
+		} else {
+			// Eased on arrival, so the new body settles onto its station instead of hitting it.
+			double progress = (elapsed - MORPH_REVEAL_TICKS)
+					/ (double) Math.max(1, MORPH_FLIGHT_TICKS - MORPH_REVEAL_TICKS);
+			double eased = 1.0D - (1.0D - progress) * (1.0D - progress);
+			height = Mth.lerp(eased, ceiling, morphFloor(level, snapshot, station));
+		}
+		Vec3 desired = morphStation(level, boss, snapshot, station);
+		boss.snapTo(new Vec3(desired.x, height, desired.z), boss.getYRot(), boss.getXRot());
+		// The arrival. The departure already has a shockwave - it is emitted the tick the phase turns
+		// over, in phaseChanged - and without one at the other end the new body simply appeared back
+		// in the arena, which is the half of "it left and something else came back" that carries the
+		// beat. Guarded on the exact last tick, so it happens once however the flight is resumed.
+		if (elapsed == MORPH_FLIGHT_TICKS - 1) {
+			WorldInterfaceShockwaveService.emit(level, new Vec3(desired.x,
+							snapshot.arenaCenter().getY(), desired.z),
+					WorldInterfaceShockwaveService.MORPH_DURATION_TICKS,
+					WorldInterfaceShockwaveService.MORPH_MAX_RADIUS);
+			roar(level, boss, 1.0F);
+		}
+		// Keeps facing whoever it is doing this in front of - the table, not one of them.
 		nearestArenaParticipant(level, snapshot, boss.position())
-				.ifPresent(player -> faceTarget(boss, player.position()));
+				.ifPresent(player -> faceTarget(boss, attentionPoint(level, snapshot, boss.position(), player)));
 		return true;
 	}
 
-	/** Where the new body is headed on the way down: its ordinary combat station, or the centre. */
-	private static Vec3 morphReturnPoint(ServerLevel level, WorldInterfaceEntity boss,
+	/**
+	 * The altitude the morph leaves from and returns to, in world Y.
+	 *
+	 * <p>Includes whatever the skyhold window is asking for. A phase boundary can land anywhere in the
+	 * encounter clock, so a morph can perfectly well finish while the interface is supposed to be
+	 * aloft; without this the new body would descend all the way to its ground station and then
+	 * immediately climb back out of reach, which reads as the descent having been a mistake.
+	 */
+	private static double morphFloor(WorldInterfaceState.Snapshot snapshot, int form) {
+		return snapshot.arenaCenter().getY() + WorldInterfaceAnatomy.combatHoverHeight(form);
+	}
+
+	/** The same, offset by the climb the skyhold window wants at this point in the encounter. */
+	private static double morphFloor(ServerLevel level, WorldInterfaceState.Snapshot snapshot, int form) {
+		return morphFloor(snapshot, form) + WorldInterfaceSkyholdPolicy.lift(snapshot.stage(),
+				effectiveActiveTicks(snapshot, level.getGameTime()));
+	}
+
+	/**
+	 * Where the body sits horizontally during the morph: over its ordinary combat station.
+	 *
+	 * <p>Only the X and Z of this are used while the flight is running - {@link #driveMorphFlight}
+	 * owns the altitude - so the storm leaves from over the fight and comes back down onto it rather
+	 * than reappearing at the middle of the island.
+	 */
+	private static Vec3 morphStation(ServerLevel level, WorldInterfaceEntity boss,
 			WorldInterfaceState.Snapshot snapshot, int form) {
 		double hover = WorldInterfaceAnatomy.combatHoverHeight(form);
 		ServerPlayer target = nearestArenaParticipant(level, snapshot, boss.position()).orElse(null);
 		if (target == null) return snapshot.arenaCenter().getCenter().add(0.0D, hover, 0.0D);
-		Vec3 flat = boss.position().subtract(target.position()).multiply(1.0D, 0.0D, 1.0D);
+		// Same station rule the chase uses, so the new body comes down onto the fight rather than
+		// onto whichever single player happened to be closest when it left.
+		Vec3 focus = attentionPoint(level, snapshot, boss.position(), target);
+		Vec3 flat = boss.position().subtract(focus).multiply(1.0D, 0.0D, 1.0D);
 		Vec3 approach = flat.lengthSqr() < 1.0E-4D ? new Vec3(0.0D, 0.0D, -1.0D) : flat.normalize();
-		return target.position()
-				.add(approach.scale(WorldInterfaceAnatomy.massRadius(form) + 3.0D))
+		return focus
+				.add(approach.scale(WorldInterfaceAnatomy.combatStandoff(form)))
 				.add(0.0D, hover, 0.0D);
 	}
 
@@ -455,6 +723,40 @@ public final class EndBossEncounterService {
 		boss.yBodyRot = turned;
 		boss.yHeadRot = turned;
 		boss.setYHeadRot(turned);
+		// Aimed at the eyes rather than the feet. The heads hang over a player's head and look down at
+		// them; the difference is small in yaw and not small at all in pitch when the body is close.
+		aimGaze(boss, target.add(0.0D, 1.62D, 0.0D));
+	}
+
+	/**
+	 * Points the three heads at a world position, on top of whatever the body is doing.
+	 *
+	 * <p>The body turns at {@link #BODY_TURN_DEGREES_PER_TICK} and it is twenty-five to thirty-three
+	 * blocks across, so a player who circles it is looked at by a thing that takes several seconds to
+	 * come round. The heads are the fast part: they lead the turn, they carry on tracking after the
+	 * body has stopped, and they are what makes the storm read as watching somebody rather than as
+	 * facing a compass direction.
+	 *
+	 * <p>Measured from the heads' own mount rather than from the entity position, which at the third
+	 * form is twenty blocks below the body: aiming from there put the elevation a storey out.
+	 */
+	private static void aimGaze(WorldInterfaceEntity boss, Vec3 target) {
+		Vec3 from = WorldInterfaceAnatomy.coreOrigin(boss);
+		Vec3 delta = target.subtract(from);
+		double flat = Math.sqrt(delta.x * delta.x + delta.z * delta.z);
+		if (flat < 1.0E-4D) {
+			// Directly underneath: there is no bearing, only a look straight down.
+			boss.setGaze(boss.gazeYaw(), (float) Math.copySign(Mth.HALF_PI, -delta.y));
+			return;
+		}
+		float wantedYaw = (float) (Mth.atan2(delta.z, delta.x) * Mth.RAD_TO_DEG) - 90.0F;
+		float relative = Mth.wrapDegrees(wantedYaw - boss.yBodyRot) * Mth.DEG_TO_RAD;
+		boss.setGaze(relative, (float) Mth.atan2(-delta.y, flat));
+	}
+
+	/** Lets the heads unwind to centre when the storm has nobody to watch. */
+	private static void relaxGaze(WorldInterfaceEntity boss) {
+		boss.setGaze(0.0F, 0.0F);
 	}
 
 	/**
@@ -471,6 +773,31 @@ public final class EndBossEncounterService {
 	 * reading and the correct one. The removal at the end of the resolution window still happens on
 	 * exactly the same tick it always did, hundreds of blocks above anyone's head by then.</p>
 	 */
+	/**
+	 * The death climb, owned by the entity's own step so nothing else writes its velocity.
+	 *
+	 * <p>Sibling of {@link #driveFailureEscape}, and read off the same resolution clock, so a body
+	 * that is mid-ascent when the server saves resumes at the height the clock says rather than
+	 * restarting the climb. It goes up because a body that falls has been beaten, and that is not
+	 * what this ending is: the interface is not overpowered, it is ended, and what it does on the
+	 * way out is let go. The squared ramp makes the first seconds a body drifting loose from where
+	 * it was holding station, and only then a climb.</p>
+	 *
+	 * <p>Deliberately a fraction of the failure escape's speed. A loss leaves fast enough to be
+	 * lost; a win comes apart on the way up, and all of that has to stay readable from the altar.</p>
+	 */
+	private static void driveDeathAscent(ServerLevel level, WorldInterfaceEntity boss,
+			WorldInterfaceState.Snapshot snapshot) {
+		long started = snapshot.resolutionTick();
+		long age = started < 0L ? 0L : level.getGameTime() - started;
+		if (age < 0L || age >= BOSS_REMOVAL_TICKS) {
+			boss.setDeltaMovement(Vec3.ZERO);
+			return;
+		}
+		double ramp = Math.min(1.0D, age / (double) DEATH_ASCENT_RAMP_TICKS);
+		boss.setDeltaMovement(0.0D, DEATH_ASCENT_TOP_SPEED * ramp * ramp, 0.0D);
+	}
+
 	private static void driveFailureEscape(ServerLevel level, WorldInterfaceEntity boss,
 			WorldInterfaceState.Snapshot snapshot) {
 		long started = snapshot.resolutionTick();
@@ -506,6 +833,10 @@ public final class EndBossEncounterService {
 			return false;
 		}
 		boolean directMelee = direct == null || direct == attacker;
+		// Arrows and tridents specifically, not "anything that is not a sword": the multiplier pays
+		// for having to hit a body the arena deliberately keeps out of melee range, and a thrown
+		// potion or a firework is neither aimed at it nor short of damage.
+		boolean arrow = direct instanceof AbstractArrow;
 		boolean meleeClaimed = false;
 
 		for (int attempt = 0; attempt < MAX_MUTATION_RETRIES; attempt++) {
@@ -523,7 +854,7 @@ public final class EndBossEncounterService {
 				meleeClaimed = true;
 			}
 			double adjusted = WorldInterfacePolicy.adjustedIncomingDamage(rawAmount,
-					before.destroyedAnchorCount());
+					before.destroyedAnchorCount(), arrow);
 			double remaining = Math.max(0.0D, before.virtualHealth() - adjusted);
 			boolean lethal = remaining <= 0.0D;
 			WorldInterfaceState.MutationResult result = WorldInterfaceState.mutate(server,
@@ -556,55 +887,37 @@ public final class EndBossEncounterService {
 		return false;
 	}
 
-	/** Returns empty for ordinary crystals so vanilla remains untouched. */
-	public static Optional<Boolean> handleAnchorDamage(ServerLevel level, EndCrystal crystal,
+	/**
+	 * The one entry point for damage aimed at a stability anchor.
+	 *
+	 * <p>Returns empty when the entity is not a slot this encounter owns, which is how a stray
+	 * anchor left over from a cleared save stays inert rather than being silently adopted.
+	 *
+	 * <p>The first valid positive player strike destroys an intact anchor immediately. Destruction is
+	 * committed to the world state on the same tick the blow lands; the sixteen ticks of geometry
+	 * coming apart afterwards are presentation on an outcome that has already been decided.</p>
+	 */
+	public static Optional<Boolean> handleAnchorDamage(ServerLevel level, StabilityAnchorEntity anchorEntity,
 			DamageSource source, float amount) {
 		WorldInterfaceState.Snapshot before = WorldInterfaceState.snapshot(level.getServer());
 		if (!before.valid() || !before.present()) return Optional.empty();
-		WorldInterfaceState.Anchor anchor = before.anchorForCrystal(crystal.getUUID()).orElse(null);
+		WorldInterfaceState.Anchor anchor = before.anchorForEntity(anchorEntity.getUUID()).orElse(null);
 		if (anchor == null) return Optional.empty();
 		if (amount <= 0.0F || !Float.isFinite(amount) || !before.stage().isCombat()
 				|| !(source.getEntity() instanceof ServerPlayer player)
 				|| player.isSpectator()) return Optional.of(false);
 		if (anchor.destroyed()) {
-			crystal.discard();
-			return Optional.of(true);
-		}
-		// Vanilla trained everyone to "break the towers first"; the trade-off here is intentional
-		// and must be argued about, not discovered post mortem. The very first anchor strike of an
-		// encounter is therefore absorbed and answered with the cost, and only repeated strikes commit.
-		UUID encounterId = before.encounterId().orElse(null);
-		if (encounterId != null && ANCHOR_WARNINGS.computeIfAbsent(level.getServer(),
-				ignored -> Collections.synchronizedSet(new HashSet<>())).add(encounterId)) {
-			AudioService.playBounded(level, anchor.position(), ModSounds.WORLD_INTERFACE_ANCHOR,
-					SoundSource.HOSTILE, 0.55F, 1.25F);
-			// The absorbed strike has to look absorbed.
-			//
-			// Returning false here makes vanilla play the "no damage" attack sound and skip the
-			// hit particles, which for someone swinging a sword is indistinguishable from having
-			// missed - so the one deliberate free strike in the fight read as the anchor taking two
-			// hits for no reason. A shield of particles on the crystal carries that on its own.
-			BlockPos anchorPos = anchor.position();
-			level.sendParticles(ParticleTypes.END_ROD, anchorPos.getX() + 0.5D,
-					anchorPos.getY() + 1.2D, anchorPos.getZ() + 0.5D, 60, 1.1D, 1.1D, 1.1D, 0.22D);
-			level.sendParticles(ParticleTypes.CRIT, anchorPos.getX() + 0.5D,
-					anchorPos.getY() + 1.2D, anchorPos.getZ() + 0.5D, 24, 0.9D, 0.9D, 0.9D, 0.30D);
-			// One line, not two. The absorbed swing and the trade-off it exists to state were split
-			// across a private notice and a broadcast, so the player who swung read the same event
-			// twice in two registers while everyone else read half of it.
-			broadcast(level.getServer(), TerminalNoticePayload.TONE_ANCHOR,
-					"message.thefourthfrequency.world_interface.anchor_warning");
+			anchorEntity.beginCollapse();
 			return Optional.of(false);
 		}
-
 		for (int attempt = 0; attempt < MAX_MUTATION_RETRIES; attempt++) {
 			before = WorldInterfaceState.snapshot(level.getServer());
-			anchor = before.anchorForCrystal(crystal.getUUID()).orElse(null);
+			anchor = before.anchorForEntity(anchorEntity.getUUID()).orElse(null);
 			if (anchor == null) return Optional.empty();
 			if (!before.stage().isCombat()) return Optional.of(false);
 			if (anchor.destroyed()) {
-				crystal.discard();
-				return Optional.of(true);
+				anchorEntity.beginCollapse();
+				return Optional.of(false);
 			}
 			int index = anchor.index();
 			WorldInterfaceState.MutationResult result = WorldInterfaceState.mutate(level.getServer(),
@@ -618,12 +931,8 @@ public final class EndBossEncounterService {
 						anchor.index(), result.reason());
 				return Optional.of(false);
 			}
-			crystal.discard();
-			level.sendParticles(ParticleTypes.REVERSE_PORTAL, anchor.position().getX() + 0.5D,
-					anchor.position().getY() + 0.5D, anchor.position().getZ() + 0.5D,
-					72, 1.7D, 2.8D, 1.7D, 0.16D);
-			AudioService.playBounded(level, anchor.position(), ModSounds.WORLD_INTERFACE_ANCHOR,
-					SoundSource.HOSTILE, 0.9F, 0.72F);
+			anchorEntity.beginCollapse();
+			emitAnchorCollapse(level, before.encounterId().orElseThrow(), anchor.position());
 			broadcast(level.getServer(), TerminalNoticePayload.TONE_ANCHOR,
 					"message.thefourthfrequency.world_interface.anchor_destroyed",
 					result.snapshot().aliveAnchorCount());
@@ -634,6 +943,86 @@ public final class EndBossEncounterService {
 		}
 		return Optional.of(false);
 	}
+
+	/**
+	 * The server's share of the destruction: two small, bounded bursts pinned to the two cores.
+	 *
+	 * <p>Deliberately modest. The old single seventy-two particle cloud was the entire effect, and
+	 * it had to be, because the crystal vanished on the same tick. The structure now stays for
+	 * sixteen ticks and folds in on itself, so this only has to seed the implosion - the rest is
+	 * drawn from the entity's own synched collapse clock, which costs no bandwidth per mote.</p>
+	 *
+	 * <p><b>That reasoning was right about the cost and wrong about the beat.</b> Cutting an anchor is
+	 * the one thing the whole encounter is built around a player choosing to do - it is what opens the
+	 * interface up, and it is what the terminal spends the fight asking for - and what it looked like
+	 * was a structure quietly folding up, with nothing to feel and nothing to hear over the fight
+	 * already going on around it.
+	 *
+	 * <p>So it detonates first and folds afterwards. The tether it was holding goes off at the relay
+	 * core, rings of blast front step outward across the cap, the released light fires a column
+	 * straight up - the same shape the summon's anchor chain used, which closes the loop on what those
+	 * ten columns were for - and a shockwave leaves the spike. The entity's implosion still runs
+	 * underneath all of it, so the structure is still visibly taken back rather than merely blown
+	 * apart; what changed is that the taking now starts with something coming out.
+	 *
+	 * <p>Everything here is bounded and counted. The rings are a fixed sample count, the shockwave
+	 * answers to its own concurrency cap, and the client-side motes are budgeted per anchor and per
+	 * tick in {@link StabilityAnchorGeometry} - ten of these can happen inside a couple of seconds.
+	 */
+	private static void emitAnchorCollapse(ServerLevel level, UUID encounterId, BlockPos position) {
+		Vec3 relay = StabilityAnchorGeometry.relayCore(position);
+		Vec3 chest = StabilityAnchorGeometry.chestCore(position);
+		level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, relay.x, relay.y, relay.z,
+				1, 0.0D, 0.0D, 0.0D, 0.0D);
+		level.sendParticles(ParticleTypes.EXPLOSION, relay.x, relay.y, relay.z,
+				8, 0.9D, 0.9D, 0.9D, 0.04D);
+		// A front rather than a puff: rings stepping outward off the cap, each thrown outward so the
+		// wave keeps travelling after it is drawn. Ordered inside-out, the way a blast reads.
+		for (int ring = 1; ring <= ANCHOR_BLAST_RINGS; ring++) {
+			double radius = ANCHOR_BLAST_STEP * ring;
+			int samples = 8 + ring * 4;
+			for (int index = 0; index < samples; index++) {
+				double angle = Math.PI * 2.0D * index / samples + ring * 0.4D;
+				double x = relay.x + Math.cos(angle) * radius;
+				double z = relay.z + Math.sin(angle) * radius;
+				level.sendParticles(ParticleTypes.EXPLOSION, x, chest.y, z,
+						1, 0.35D, 0.35D, 0.35D, 0.02D);
+				level.sendParticles(ParticleTypes.LARGE_SMOKE, x, chest.y, z,
+						0, Math.cos(angle), 0.22D, Math.sin(angle), 0.34D + ring * 0.08D);
+			}
+		}
+		// The light it was holding, let go straight up.
+		level.sendParticles(ParticleTypes.END_ROD, relay.x, relay.y, relay.z,
+				90, 0.35D, 5.0D, 0.35D, 0.55D);
+		level.sendParticles(ParticleTypes.REVERSE_PORTAL, chest.x, chest.y, chest.z,
+				110, 0.75D, 1.4D, 0.75D, 0.24D);
+		WorldInterfaceShockwaveService.emit(level, relay,
+				WorldInterfaceShockwaveService.MORPH_DURATION_TICKS, ANCHOR_SHOCKWAVE_RADIUS);
+		// Two layers, because one of them is vanilla's own explosion - the sound every player already
+		// reads as "that just came apart" - and the other is the anchor's authored voice. The pair is
+		// what makes it a structure being destroyed rather than a generic bang or a distant chime.
+		AudioService.playWithReach(level, position, SoundEvents.GENERIC_EXPLODE.value(),
+				SoundSource.HOSTILE, 1.0F, 0.68F, AudioService.BLAST_REACH_BLOCKS);
+		AudioService.playBounded(level, position, ModSounds.WORLD_INTERFACE_ANCHOR,
+				SoundSource.HOSTILE, 1.0F, 0.62F);
+		WorldInterfaceBlastService.emit(level, encounterId, relay, ANCHOR_SHAKE_RADIUS,
+				WorldInterfaceProtocol.BlastGrade.HEAVY);
+	}
+
+	/** Rings of blast front stepping off the cap, and the blocks between them. */
+	private static final int ANCHOR_BLAST_RINGS = 3;
+	private static final double ANCHOR_BLAST_STEP = 2.2D;
+	/** Reach of the ring the destruction sends across the island. */
+	private static final double ANCHOR_SHOCKWAVE_RADIUS = 26.0D;
+	/**
+	 * How far the destruction is felt.
+	 *
+	 * <p>Heavier than it was, and measured from the right place. The client used to answer an anchor
+	 * falling with the lightest impulse there is, emitted at the <em>arena centre</em> with a
+	 * ninety-six block falloff - so the player standing at the anchor they had just cut felt less of
+	 * it than a bystander in the middle of the island.
+	 */
+	private static final double ANCHOR_SHAKE_RADIUS = 80.0D;
 
 	public static void handleAltarAction(ServerPlayer player, AltarActionC2S payload) {
 		WorldInterfaceRitualService.RitualResult result = switch (payload.action()) {
@@ -720,7 +1109,8 @@ public final class EndBossEncounterService {
 			}
 			rememberClientSequence(player, sequence);
 			ServerPlayNetworking.send(player, new PoemStartS2C(before.encounterId().orElseThrow(), sequence,
-					outcomeWire(before.outcome()), FrequencyWorldData.get(server).worldId()));
+					outcomeWire(before.outcome()), FrequencyWorldData.get(server).worldId(),
+					before.destroyedAnchorCount()));
 			return;
 		}
 	}
@@ -772,29 +1162,99 @@ public final class EndBossEncounterService {
 		}
 	}
 
+	/**
+	 * The thirteen-second arrival, as a step table.
+	 *
+	 * <p>Structurally identical to {@link #tickResolution}: each beat is guarded on
+	 * {@code age >= X && resolutionStep() < N} and claims its step on the way through. That is what
+	 * makes the ceremony restart-safe. {@code resolutionStep} is already persisted in
+	 * {@link WorldInterfaceState} and {@code validate} only range-checks it - it is not coupled to
+	 * the stage - so a player who saves and quits partway through the entrance resumes at the beat
+	 * they left rather than watching the whole thing again, and none of it needs a schema change.
+	 *
+	 * <p>What this replaces was five seconds of a boss standing still in silence.
+	 */
 	private static void tickSummoning(ServerLevel level, WorldInterfaceState.Snapshot before) {
 		WorldInterfaceEntity boss = ensureBoss(level, before);
 		WorldInterfaceState.Snapshot snapshot = WorldInterfaceState.snapshot(level.getServer());
+		MinecraftServer server = level.getServer();
+		Vec3 centre = snapshot.arenaCenter().getCenter();
+
+		// Beat 1 - the descent begins. The rise cue starts here and its downbeat is timed to land
+		// on GROUND_BREAK; see WorldInterfaceSummonTimeline.
 		if (snapshot.resolutionTick() < 0L) {
-			WorldInterfaceState.MutationResult started = WorldInterfaceState.mutate(level.getServer(),
+			WorldInterfaceState.MutationResult started = WorldInterfaceState.mutate(server,
 					snapshot.encounterId().orElseThrow(), snapshot.revision(), state ->
-						state.setResolution(0, level.getGameTime()));
+						state.setResolution(1, level.getGameTime()));
 			if (started.applied()) snapshot = started.snapshot();
-			showAction(level, snapshot, WorldInterfaceProtocol.BossAction.SUMMONING, SUMMON_DURATION_TICKS,
-					List.of(), snapshot.deterministicSeed());
+			showAction(level, snapshot, WorldInterfaceProtocol.BossAction.SUMMONING,
+					WorldInterfaceSummonTimeline.TOTAL_TICKS, List.of(), snapshot.deterministicSeed());
 			AudioService.playBounded(level, snapshot.arenaCenter(), ModSounds.WORLD_INTERFACE_SUMMON,
-					SoundSource.HOSTILE, 0.95F, 0.8F);
-			WorldInterfaceShockwaveService.emit(level, snapshot.arenaCenter().getCenter().add(0.0D, 18.0D, 0.0D),
+					SoundSource.HOSTILE, 1.0F, 1.0F);
+			if (boss != null) {
+				boss.setForm(WorldInterfaceEntity.FORM_LISTENING);
+				boss.setNoGravity(true);
+				boss.snapTo(centre.add(0.0D, SUMMON_DESCENT_START_HEIGHT, 0.0D),
+						boss.getYRot(), boss.getXRot());
+			}
+			return;
+		}
+		long age = level.getGameTime() - snapshot.resolutionTick();
+		if (boss != null) {
+			boss.setForm(WorldInterfaceEntity.FORM_LISTENING);
+			driveSummonDescent(level, boss, snapshot, age);
+		}
+
+		// Beat 2 - the anchor chain fires skyward, one every six ticks, rising in pitch.
+		if (age >= WorldInterfaceSummonTimeline.ANCHOR_CHAIN_START && snapshot.resolutionStep() < 2) {
+			snapshot = claimSummonStep(server, snapshot, 2);
+		}
+		if (snapshot.resolutionStep() >= 2 && age >= WorldInterfaceSummonTimeline.ANCHOR_CHAIN_START
+				&& age <= WorldInterfaceSummonTimeline.anchorChainEnd()
+				&& (age - WorldInterfaceSummonTimeline.ANCHOR_CHAIN_START)
+						% WorldInterfaceSummonTimeline.ANCHOR_CHAIN_STEP == 0L) {
+			int index = (int) ((age - WorldInterfaceSummonTimeline.ANCHOR_CHAIN_START)
+					/ WorldInterfaceSummonTimeline.ANCHOR_CHAIN_STEP);
+			emitAnchorIgnition(level, snapshot, index);
+		}
+
+		// Beat 3 - the ground breaks. First shockwave, and the tick the rise cue peaks on.
+		if (age >= WorldInterfaceSummonTimeline.GROUND_BREAK && snapshot.resolutionStep() < 3) {
+			snapshot = claimSummonStep(server, snapshot, 3);
+			WorldInterfaceShockwaveService.emit(level, centre,
 					WorldInterfaceShockwaveService.MORPH_DURATION_TICKS,
 					WorldInterfaceShockwaveService.MORPH_MAX_RADIUS);
 		}
-		if (boss != null) {
-			boss.setForm(WorldInterfaceEntity.FORM_LISTENING);
+
+		// Beat 4 - the mass resolves out of the sky and the shell settles.
+		if (age >= WorldInterfaceSummonTimeline.BODY_REVEAL && snapshot.resolutionStep() < 4) {
+			snapshot = claimSummonStep(server, snapshot, 4);
+			AudioService.playBounded(level, snapshot.arenaCenter(),
+					ModSounds.WORLD_INTERFACE_FORM_SHIFT, SoundSource.HOSTILE, 1.0F, 0.9F);
 		}
-		if (snapshot.resolutionTick() >= 0L
-				&& level.getGameTime() - snapshot.resolutionTick() >= SUMMON_DURATION_TICKS) {
-			boolean running = onlineFrozenCount(level.getServer(), snapshot) > 0;
-			WorldInterfaceState.MutationResult transitioned = WorldInterfaceState.mutate(level.getServer(),
+
+		// Beat 5 - the three apertures open. Second shockwave.
+		if (age >= WorldInterfaceSummonTimeline.EYE_OPEN && snapshot.resolutionStep() < 5) {
+			snapshot = claimSummonStep(server, snapshot, 5);
+			WorldInterfaceShockwaveService.emit(level, centre.add(0.0D, 12.0D, 0.0D),
+					WorldInterfaceShockwaveService.MORPH_DURATION_TICKS,
+					WorldInterfaceShockwaveService.MORPH_MAX_RADIUS * 0.8D);
+		}
+
+		// Beat 6 - the roar, and the largest shockwave. The client puts its own hit-stop, flash and
+		// cataclysm-grade shake on this tick off the action clock, so nothing has to be sent.
+		if (age >= WorldInterfaceSummonTimeline.ROAR && snapshot.resolutionStep() < 6) {
+			snapshot = claimSummonStep(server, snapshot, 6);
+			if (boss != null) roar(level, boss, 1.0F);
+			WorldInterfaceShockwaveService.emit(level, centre,
+					WorldInterfaceShockwaveService.MORPH_DURATION_TICKS,
+					WorldInterfaceShockwaveService.MORPH_MAX_RADIUS * 1.5D);
+		}
+
+		// Beat 7 - combat.
+		if (age >= WorldInterfaceSummonTimeline.COMBAT && snapshot.resolutionStep() < 7) {
+			boolean running = onlineFrozenCount(server, snapshot) > 0;
+			WorldInterfaceState.MutationResult transitioned = WorldInterfaceState.mutate(server,
 					snapshot.encounterId().orElseThrow(), snapshot.revision(), state -> {
 						state.transitionTo(WorldInterfaceStage.PHASE_1);
 						state.setClock(0L, running ? level.getGameTime() : -1L);
@@ -803,12 +1263,82 @@ public final class EndBossEncounterService {
 					});
 			if (transitioned.applied()) {
 				EndBossArenaService.setAnchorsInvulnerable(level, EndBossArenaService.prepare(level), false);
-				if (boss != null) boss.clearAction();
-				broadcast(level.getServer(), TerminalNoticePayload.TONE_ENCOUNTER,
+				if (boss != null) {
+					boss.clearAction();
+					boss.setNoGravity(true);
+				}
+				AudioService.playBounded(level, snapshot.arenaCenter(),
+						ModSounds.WORLD_INTERFACE_COMBAT_START, SoundSource.HOSTILE, 1.0F, 1.0F);
+				broadcast(server, TerminalNoticePayload.TONE_ENCOUNTER,
 						"message.thefourthfrequency.world_interface.combat_started");
-				sendEncounterSnapshots(level.getServer(), true);
+				sendEncounterSnapshots(server, true);
 			}
 		}
+	}
+
+	/** Where the body starts its fall, in blocks above the arena floor. */
+	private static final double SUMMON_DESCENT_START_HEIGHT = 120.0D;
+	/**
+	 * Blocks above the first form's combat station that the arrival actually stops at.
+	 *
+	 * <p>The descent used to land exactly on the station, which meant the ceremony ended with the
+	 * body already at the height it would spend the whole first phase at - the arrival and the fight
+	 * were the same picture, and the last thing the thirteen-second entrance did was nothing. It now
+	 * halts high and holds there; the chase in {@link #tickBossEntity} brings it down over the first
+	 * few seconds of combat, so the storm visibly comes to meet the players rather than being found
+	 * already in position.
+	 */
+	private static final double SUMMON_ARRIVAL_LIFT = 12.0D;
+
+	private static WorldInterfaceState.Snapshot claimSummonStep(MinecraftServer server,
+			WorldInterfaceState.Snapshot snapshot, int step) {
+		long started = snapshot.resolutionTick();
+		WorldInterfaceState.MutationResult result = WorldInterfaceState.mutate(server,
+				snapshot.encounterId().orElseThrow(), snapshot.revision(),
+				state -> state.setResolution(step, started));
+		return result.applied() ? result.snapshot() : snapshot;
+	}
+
+	/**
+	 * Drives the body down from its entry altitude to its combat station.
+	 *
+	 * <p>Sits next to {@link #driveMorphFlight} and behaves the same way: it owns the boss's
+	 * position for the ticks it covers. Eased rather than linear - the descent slows as it arrives,
+	 * so the last few blocks take as long as the first thirty and the body settles instead of
+	 * stopping dead.
+	 */
+	private static void driveSummonDescent(ServerLevel level, WorldInterfaceEntity boss,
+			WorldInterfaceState.Snapshot snapshot, long age) {
+		float progress = WorldInterfaceSummonTimeline.descentProgress(age);
+		double station = WorldInterfaceAnatomy.combatHoverHeight(WorldInterfaceEntity.FORM_LISTENING)
+				+ SUMMON_ARRIVAL_LIFT;
+		double height = Mth.lerp(progress, SUMMON_DESCENT_START_HEIGHT, station);
+		Vec3 centre = snapshot.arenaCenter().getCenter();
+		boss.snapTo(new Vec3(centre.x, snapshot.arenaCenter().getY() + height, centre.z),
+				boss.getYRot(), boss.getXRot());
+		boss.setDeltaMovement(Vec3.ZERO);
+	}
+
+	/**
+	 * One anchor firing a column skyward, pitched by its place in the chain.
+	 *
+	 * <p>Ten of these in sequence is what turns the arena itself into part of the arrival: the
+	 * structures the player spent the ritual building are visibly conscripted, in order.
+	 */
+	private static void emitAnchorIgnition(ServerLevel level, WorldInterfaceState.Snapshot snapshot,
+			int index) {
+		var anchors = snapshot.anchors();
+		if (anchors.isEmpty()) return;
+		WorldInterfaceState.Anchor anchor = anchors.get(Math.clamp(index, 0, anchors.size() - 1));
+		BlockPos pos = anchor.position();
+		// Rising semitone-ish per step, so the chain reads as a countdown rather than as ten copies.
+		float pitch = 0.72F + index * 0.06F;
+		AudioService.playBounded(level, pos, ModSounds.WORLD_INTERFACE_ANCHOR,
+				SoundSource.HOSTILE, 0.9F, pitch);
+		level.sendParticles(ParticleTypes.END_ROD, pos.getX() + 0.5D, pos.getY() + 1.0D,
+				pos.getZ() + 0.5D, 80, 0.3D, 6.0D, 0.3D, 0.42D);
+		level.sendParticles(ParticleTypes.REVERSE_PORTAL, pos.getX() + 0.5D, pos.getY() + 1.0D,
+				pos.getZ() + 0.5D, 60, 0.4D, 4.0D, 0.4D, 0.3D);
 	}
 
 	private static void tickCombat(ServerLevel level, WorldInterfaceState.Snapshot initial) {
@@ -839,10 +1369,28 @@ public final class EndBossEncounterService {
 		}
 		// The concrete nine-action executor is integrated below this invariant gate.
 		if (running && snapshot.recoveryGraceTicks() == 0) tickAttacks(level, boss, snapshot, elapsed);
+		reportCueRate(level, elapsed);
 	}
 
-	/** Half-width of the exit terrace; its rim is the stair ring. */
-	private static final int EXIT_STAIR_EDGE = 3;
+	/** How often the encounter says how many cues it has emitted. Thirty seconds. */
+	private static final int CUE_RATE_INTERVAL_TICKS = 600;
+
+	/**
+	 * Says how many authored cues the server actually handed to the broadcast, every thirty seconds.
+	 *
+	 * <p>The other half of the client-side channel watchdog, and the pair is the point: a fight that
+	 * has gone quiet is either one the server stopped scoring or one the client stopped playing, and
+	 * those two have nothing in common except how they sound. Neither side can tell them apart alone.
+	 * Read together - "the server emitted forty cues in the last thirty seconds" against "the client
+	 * is holding one channel" - they do.
+	 */
+	private static void reportCueRate(ServerLevel level, long elapsed) {
+		if (elapsed <= 0L || elapsed % CUE_RATE_INTERVAL_TICKS != 0L) return;
+		TheFourthFrequency.LOGGER.info("World-interface emitted {} audio cues in the last {} ticks: {}",
+				AudioService.takeBoundedCueCount(), CUE_RATE_INTERVAL_TICKS,
+				AudioService.takeBoundedCueBreakdown());
+	}
+
 	private static final int FAILURE_EROSION_RADIUS = WorldInterfacePolicy.EROSION_RADIUS_BLOCKS;
 	private static final int FAILURE_EROSION_DEPTH = WorldInterfacePolicy.EROSION_DEPTH;
 	/**
@@ -944,12 +1492,31 @@ public final class EndBossEncounterService {
 	}
 
 	/**
+	 * The elapsed count as the wire should carry it: unchanged during the fight, running backwards
+	 * once a won encounter starts repairing itself.
+	 *
+	 * <p>Only the projection moves. The authority is what the encounter was decided on.</p>
+	 */
+	private static long repairProjectedElapsedTicks(WorldInterfaceState.Snapshot snapshot, long gameTime) {
+		long elapsed = effectiveActiveTicks(snapshot, gameTime);
+		if (snapshot.stage() != WorldInterfaceStage.SUCCESS_RESOLUTION) return elapsed;
+		return WorldInterfacePolicy.repairedElapsedTicks(elapsed,
+				gameTime - snapshot.resolutionTick());
+	}
+
+	/**
 	 * Runs the erosion backwards after a win.
 	 *
 	 * <p>A losing table keeps the island the countdown left them. A winning one gets it back - but
 	 * not by having it blink: the heal sweeps outward from the altar as a front, so cutting the
-	 * interface visibly restores the world's materials, several times faster than the six minutes
-	 * it took to lose them.</p>
+	 * interface visibly restores the world's materials.</p>
+	 *
+	 * <p>Paced by {@link WorldInterfacePolicy#repairFraction} rather than by a fixed columns-per-tick
+	 * rate, because it is no longer the only thing describing the repair. The collapse rail unwinds
+	 * and the material erosion lifts off the same fraction, and a sweep running at its own speed
+	 * would finish while the readout still claimed there was work left - or the reverse. It is also
+	 * much slower than it was: at nine hundred columns a tick the whole disc healed in under six
+	 * seconds, which is less time than it takes to notice the ground changing.</p>
 	 *
 	 * <p>Every proxy inside the disc was end stone before the erosion touched it, so this needs no
 	 * record of what it is undoing.</p>
@@ -960,11 +1527,17 @@ public final class EndBossEncounterService {
 		int[] progress = EROSION_HEAL_PROGRESS.computeIfAbsent(encounterId, ignored -> new int[1]);
 		int span = FAILURE_EROSION_RADIUS * 2 + 1;
 		if (progress[0] >= span * span) return;
+		// How far down the column list the repair fraction says we should be by now. The ceiling is
+		// what paces the sweep; the per-tick cap below still bounds a single tick's work, so a long
+		// pause or a restart catches up over several ticks instead of in one enormous batch.
+		long target = Math.round(WorldInterfacePolicy.repairFraction(
+				level.getGameTime() - snapshot.resolutionTick()) * span * span);
+		if (progress[0] >= target) return;
 		BlockPos center = snapshot.arenaCenter();
 		BlockState endStone = Blocks.END_STONE.defaultBlockState();
 		int flags = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS;
 		int examined = 0;
-		while (examined < EROSION_HEAL_COLUMNS_PER_TICK && progress[0] < span * span) {
+		while (examined < EROSION_HEAL_COLUMNS_PER_TICK && progress[0] < target) {
 			int index = progress[0]++;
 			examined++;
 			int dx = index % span - FAILURE_EROSION_RADIUS;
@@ -989,12 +1562,10 @@ public final class EndBossEncounterService {
 		WorldInterfaceEntity boss = ensureBoss(level, snapshot);
 		if (boss != null) {
 			boss.setForm(WorldInterfaceEntity.FORM_INTERFACE);
-			// A loss is the one resolution the body still moves through - it climbs out of the world.
-			// driveFailureEscape owns its motion for the whole window; pinning it here would fight
-			// that from a second tick source and the result would depend on registration order.
-			if (snapshot.stage() != WorldInterfaceStage.FAILURE_RESOLUTION) {
-				boss.setDeltaMovement(Vec3.ZERO);
-			}
+			// Neither resolution stands still any more: a loss climbs out of the world under
+			// driveFailureEscape and a win climbs under driveDeathAscent. Both live on the entity's
+			// own step, and pinning the body here would fight them from a second tick source with
+			// the winner decided by registration order.
 		}
 		long started = snapshot.resolutionTick() < 0L ? level.getGameTime() : snapshot.resolutionTick();
 		if (snapshot.resolutionTick() < 0L) {
@@ -1012,10 +1583,18 @@ public final class EndBossEncounterService {
 					snapshot.encounterId().orElseThrow(), snapshot.revision(), state -> state.setResolution(1, started));
 			if (step.applied()) snapshot = step.snapshot();
 		}
+		// The death itself, for exactly as long as the collapse and fade clips are running.
+		if (success && boss != null && age < BOSS_REMOVAL_TICKS) {
+			emitBossDeath(level, boss, age);
+		}
 		// The body goes before anything replaces it. Discarding the projection here rather than at
 		// the end of the window is the whole reordering: the collapse and fade clips have finished
 		// by now, so what the players watch is the thing they killed stopping, and then an empty sky.
 		if (success && age >= BOSS_REMOVAL_TICKS && snapshot.resolutionStep() < 2) {
+			// Read before the mutation: the projection is discarded inside the branch below, and the
+			// departure has to be thrown from where the body actually was rather than from the altar.
+			Vec3 departure = boss == null ? null : WorldInterfaceAnatomy.coreOrigin(boss);
+			double shell = boss == null ? 0.0D : WorldInterfaceAnatomy.massRadius(boss.form());
 			WorldInterfaceState.MutationResult step = WorldInterfaceState.mutate(level.getServer(),
 					snapshot.encounterId().orElseThrow(), snapshot.revision(), state -> {
 						state.clearBossUuid();
@@ -1024,6 +1603,7 @@ public final class EndBossEncounterService {
 			if (step.applied()) {
 				snapshot = step.snapshot();
 				removeBossProjection(level, snapshot);
+				if (departure != null) emitBossDeparture(level, departure, shell);
 				sendEncounterSnapshots(level.getServer(), true);
 			}
 		}
@@ -1031,6 +1611,12 @@ public final class EndBossEncounterService {
 			WorldInterfaceState.MutationResult step = WorldInterfaceState.mutate(level.getServer(),
 					snapshot.encounterId().orElseThrow(), snapshot.revision(), state -> state.setResolution(2, started));
 			if (step.applied()) snapshot = step.snapshot();
+		}
+		// The sky is opened before anything comes through it. Deliberately not a resolution step of
+		// its own: it writes no state, so a restart part-way through simply resumes the call wherever
+		// the resolution clock has got to, and a client that joins late picks it up mid-flight.
+		if (success && age >= DRAGON_SUMMON_TICKS && age < DRAGON_SPAWN_TICKS) {
+			emitDragonSummon(level, snapshot, age);
 		}
 		if (success && age >= DRAGON_SPAWN_TICKS && snapshot.resolutionStep() < 3) {
 			UUID dragonId = snapshot.friendlyDragonUuid().orElse(deterministicEntityUuid(
@@ -1044,7 +1630,11 @@ public final class EndBossEncounterService {
 				snapshot = step.snapshot();
 				// Spawn only. Speaking on the same tick puts the words on screen before the dragon
 				// has been sent to a single client, so the line reads as coming from nothing.
-				FriendlyDragonService.spawn(level, snapshot.arenaCenter(), dragonId);
+				EnderDragon dragon = FriendlyDragonService.spawn(level, snapshot.arenaCenter(), dragonId);
+				// The arrival burst is placed on the body rather than on the arena centre: the orbit
+				// phase is seeded from the dragon's UUID, so where it enters the ring is not knowable
+				// until it exists, and a burst anywhere else would be the sky tearing open next to it.
+				emitDragonArrival(level, dragon.position());
 			}
 		}
 		if (success && age >= DRAGON_FIRST_LINE_TICKS && snapshot.resolutionStep() < 4) {
@@ -1054,7 +1644,7 @@ public final class EndBossEncounterService {
 			if (step.applied()) {
 				snapshot = step.snapshot();
 				broadcast(level.getServer(), TerminalNoticePayload.TONE_DRAGON,
-						"message.thefourthfrequency.world_interface.dragon.thanks");
+						"message.thefourthfrequency.world_interface.dragon.unsealed");
 			}
 		}
 		// The exit is opened, not switched on - and it is opened by the dragon, not by the altar.
@@ -1068,7 +1658,7 @@ public final class EndBossEncounterService {
 			removeBossProjection(level, snapshot);
 			BlockPos exitPosition = snapshot.altarCenter();
 			placeExit(level, exitPosition);
-			if (success) emitPortalBurst(level, exitPosition);
+			if (success) emitPortalBurst(level, AltarShape.exitPortalCenter(exitPosition));
 			WorldInterfaceState.MutationResult opened = WorldInterfaceState.mutate(level.getServer(),
 					snapshot.encounterId().orElseThrow(), snapshot.revision(), state -> {
 						state.clearBossUuid();
@@ -1088,12 +1678,21 @@ public final class EndBossEncounterService {
 		}
 	}
 
-	/** How far the dragon has come down onto the altar, in [0, 1]. */
+	/**
+	 * How far the dragon has come down onto the altar, in [0, 1].
+	 *
+	 * <p>Gated on the outcome and on nothing else. It used to be gated on the stage as well - the
+	 * descent only counted while the encounter was still in its success resolution - and the exit
+	 * opening is the tick that leaves that stage. So on the tick the way out appeared, the approach
+	 * fell from one to zero and the dragon was moved from the low working circle to the resting orbit
+	 * between two ticks, some sixty blocks in one step. {@link FriendlyDragonService#approach} carries
+	 * the whole descent-and-return schedule instead, in the dragon's own age, which no stage
+	 * transition can step.</p>
+	 */
 	private static double dragonApproach(WorldInterfaceState.Snapshot snapshot, long age) {
 		if (snapshot.outcome() != WorldInterfaceState.Outcome.SUCCESS) return 0.0D;
-		if (snapshot.stage() != WorldInterfaceStage.SUCCESS_RESOLUTION) return 0.0D;
-		if (age < DRAGON_SPAWN_TICKS) return 0.0D;
-		return Math.clamp((age - DRAGON_SPAWN_TICKS) / (double) DRAGON_PORTAL_WORK_TICKS, 0.0D, 1.0D);
+		return FriendlyDragonService.approach(age - DRAGON_SPAWN_TICKS, DRAGON_PORTAL_WORK_TICKS,
+				FriendlyDragonService.RETURN_TICKS);
 	}
 
 	/**
@@ -1105,25 +1704,263 @@ public final class EndBossEncounterService {
 	 * dragon's actual position each tick is what makes it the dragon's doing - and because the
 	 * dragon is descending across the same window, the thread shortens as the ring closes.</p>
 	 */
+	/**
+	 * The interface coming apart, across the six seconds its collapse and fade clips are playing.
+	 *
+	 * <p>The model always had a death animation - the body rotates over onto its side while the eye
+	 * and the ring shrink out of existence - but nothing outside the model ever acknowledged it. Two
+	 * sounds fired on the tick the virtual pool hit zero, and then a thirty-three block body lay in
+	 * the sky in silence until it stopped being there between one frame and the next. For the thing
+	 * the entire mod is built toward, the arena said nothing about it dying.</p>
+	 *
+	 * <p>This is that missing half: light bleeding out of the shell for the whole fall, structural
+	 * failures that arrive faster and lower-pitched the further the collapse gets, and - in
+	 * {@link #emitBossDeparture} - an actual departure on the tick the body goes, instead of a
+	 * disappearance.</p>
+	 *
+	 * <p>Derived entirely from the resolution clock, with no randomness and no state of its own.
+	 * Every client is shown the same death, a restart part-way through resumes it rather than
+	 * replaying it, and losing it entirely can never desynchronise the encounter.</p>
+	 */
+	private static void emitBossDeath(ServerLevel level, WorldInterfaceEntity boss, long age) {
+		double progress = Math.clamp(age / (double) BOSS_REMOVAL_TICKS, 0.0D, 1.0D);
+		// Presentation only. The ascent itself belongs to driveDeathAscent, on the entity's own step:
+		// velocity written from here would land on the wrong side of the entity's move on some ticks
+		// and be overwritten on others, and the body climbed in jumps instead of a climb.
+		Vec3 core = WorldInterfaceAnatomy.coreOrigin(boss);
+		double shell = WorldInterfaceAnatomy.massRadius(boss.form());
+		if (age == 0L) {
+			// One hard release, sized off the body rather than off a constant, so it reads as this
+			// thing failing rather than as a generic effect played somewhere near it.
+			WorldInterfaceShockwaveService.emit(level, core,
+					WorldInterfaceShockwaveService.MORPH_DURATION_TICKS, shell * 2.5D);
+			level.sendParticles(ParticleTypes.END_ROD, core.x, core.y, core.z,
+					220, shell * 0.5D, shell * 0.4D, shell * 0.5D, 0.55D);
+		}
+		emitDeathAsh(level, core, shell, progress);
+		emitLimbFailure(level, boss, core, shell, age, progress);
+		// The scream, breaking up as it goes: quieter, lower and further apart each time, so the last
+		// one is barely the same voice as the first. Started on the tick of death and then answering
+		// itself roughly every two seconds for as long as there is a body to scream with.
+		if (age % 38L != 0L) return;
+		AudioService.playBounded(level, BlockPos.containing(core), SoundEvents.ENDER_DRAGON_GROWL,
+				SoundSource.HOSTILE, (float) (1.0D - 0.45D * progress),
+				(float) (ROAR_PITCH_BY_FORM[ROAR_PITCH_BY_FORM.length - 1] - 0.2D * progress));
+	}
+
+	/**
+	 * What the body turns into on the way up: ash, and more of it the less body there is left.
+	 *
+	 * <p>The ash falls while the interface rises, which is the whole image - the thing climbs and
+	 * what it is made of does not go with it.</p>
+	 */
+	private static void emitDeathAsh(ServerLevel level, Vec3 core, double shell, double progress) {
+		int ash = 6 + (int) Math.round(30.0D * progress);
+		level.sendParticles(ParticleTypes.ASH, core.x, core.y, core.z,
+				ash, shell * 0.8D, shell * 0.55D, shell * 0.8D, 0.015D);
+		level.sendParticles(ParticleTypes.WHITE_ASH, core.x, core.y - shell * 0.35D, core.z,
+				ash / 2, shell * 0.7D, shell * 0.45D, shell * 0.7D, 0.012D);
+		level.sendParticles(ParticleTypes.LARGE_SMOKE, core.x, core.y - shell * 0.7D, core.z,
+				3 + (int) Math.round(9.0D * progress), shell * 0.6D, shell * 0.3D, shell * 0.6D, 0.01D);
+		// Light still running out of the shell underneath the ash, wound around the body so the loss
+		// has a direction. A symmetric cloud cannot show which way anything is going.
+		for (int index = 0; index < 5; index++) {
+			double angle = progress * 42.0D + index * (Math.PI * 2.0D / 5.0D);
+			double lift = Math.cos(progress * 14.0D + index) * shell * 0.45D;
+			level.sendParticles(ParticleTypes.END_ROD,
+					core.x + Math.cos(angle) * shell * 0.85D, core.y + lift,
+					core.z + Math.sin(angle) * shell * 0.85D, 2, 0.5D, 0.5D, 0.5D, 0.02D);
+		}
+	}
+
+	/**
+	 * The limbs letting go, one at a time.
+	 *
+	 * <p>Spread across the first two thirds of the window and staggered evenly, which is the same
+	 * shape the client's collapse clip releases its tendrils on. They have to agree: the burst is
+	 * what makes the drawn limb's departure land, and a burst on a limb that is still attached - or
+	 * a limb that comes off in silence - reads as two unrelated things happening nearby.</p>
+	 */
+	private static void emitLimbFailure(ServerLevel level, WorldInterfaceEntity boss, Vec3 core,
+			double shell, long age, double progress) {
+		int limbs = WorldInterfaceAnatomy.tentacleCount(boss.form());
+		if (limbs <= 0) return;
+		long span = Math.round(BOSS_REMOVAL_TICKS * 0.62D);
+		int index = (int) Math.round(age * (limbs + 1.0D) / span) - 1;
+		if (index < 0 || index >= limbs
+				|| age != Math.round((index + 1) * span / (double) (limbs + 1))) return;
+		double radius = WorldInterfaceAnatomy.tentacleRadius(boss.form());
+		double angle = index * (Math.PI * 2.0D / limbs) + Math.toRadians(boss.yBodyRot);
+		Vec3 root = boss.position().add(Math.cos(angle) * radius,
+				WorldInterfaceAnatomy.tentacleRootLift(boss.form()), Math.sin(angle) * radius);
+		level.sendParticles(ParticleTypes.EXPLOSION, root.x, root.y, root.z,
+				2, shell * 0.1D, shell * 0.1D, shell * 0.1D, 0.0D);
+		level.sendParticles(ParticleTypes.END_ROD, root.x, root.y, root.z,
+				34, 1.3D, 1.3D, 1.3D, 0.3D);
+		level.sendParticles(ParticleTypes.ASH, root.x, root.y, root.z,
+				48, 1.6D, 1.6D, 1.6D, 0.06D);
+		AudioService.playBounded(level, BlockPos.containing(root), ModSounds.WORLD_INTERFACE_HURT,
+				SoundSource.HOSTILE, 0.72F, (float) (1.15D - 0.55D * progress));
+	}
+
+	/** The tick the body stops existing. What is left of it finishes going to ash. */
+	private static void emitBossDeparture(ServerLevel level, Vec3 core, double shell) {
+		level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, core.x, core.y, core.z,
+				3, shell * 0.35D, shell * 0.25D, shell * 0.35D, 0.0D);
+		level.sendParticles(ParticleTypes.ASH, core.x, core.y, core.z,
+				400, shell * 0.8D, shell * 0.6D, shell * 0.8D, 0.08D);
+		level.sendParticles(ParticleTypes.WHITE_ASH, core.x, core.y, core.z,
+				260, shell * 0.7D, shell * 0.55D, shell * 0.7D, 0.06D);
+		level.sendParticles(ParticleTypes.END_ROD, core.x, core.y, core.z,
+				240, shell * 0.6D, shell * 0.5D, shell * 0.6D, 0.55D);
+		WorldInterfaceShockwaveService.emit(level, core,
+				WorldInterfaceShockwaveService.MORPH_DURATION_TICKS, shell * 3.0D);
+		// The last of the scream, at the bottom of the range and cut off rather than finished.
+		AudioService.playBounded(level, BlockPos.containing(core), SoundEvents.ENDER_DRAGON_GROWL,
+				SoundSource.HOSTILE, 0.5F, 0.5F);
+		// The sound the body used for leaving the field between forms, dropped as low as it goes:
+		// the same departure, except this time it does not come back.
+		AudioService.playBounded(level, BlockPos.containing(core), ModSounds.WORLD_INTERFACE_MORPH,
+				SoundSource.HOSTILE, 1.0F, 0.5F);
+	}
+
+	/**
+	 * The call that brings the dragon in, drawn as its own orbit being traced in light.
+	 *
+	 * <p>The shape is chosen to be readable from the altar without anyone being told where to look:
+	 * a single bright point runs the full seventy-two block circle the dragon is about to fly, at
+	 * the height it is about to fly it, leaving a trail that fills in behind it. By the time the
+	 * point closes the loop the whole flight path is lit, and the dragon enters along it.</p>
+	 *
+	 * <p>Pure presentation - no authoritative state, no persistence. Every value is derived from the
+	 * resolution clock, so this is safe to re-enter on any tick and safe to lose entirely.</p>
+	 */
+	private static void emitDragonSummon(ServerLevel level, WorldInterfaceState.Snapshot snapshot,
+			long age) {
+		BlockPos arena = snapshot.arenaCenter();
+		long elapsed = age - DRAGON_SUMMON_TICKS;
+		double progress = Math.clamp(elapsed / (double) DRAGON_SUMMON_DURATION_TICKS, 0.0D, 1.0D);
+		double centreX = arena.getX() + 0.5D;
+		double centreZ = arena.getZ() + 0.5D;
+		double ringY = arena.getY() + FriendlyDragonService.ORBIT_HEIGHT;
+		if (elapsed == 0L) {
+			// A whole octave under the boss's own summon. The same instrument answering in a lower
+			// register is what makes this read as a reply to the fight rather than a repeat of it.
+			AudioService.playBounded(level, arena, ModSounds.WORLD_INTERFACE_SUMMON,
+					SoundSource.AMBIENT, 0.95F, 0.4F);
+			WorldInterfaceShockwaveService.emit(level, new Vec3(centreX, ringY, centreZ),
+					WorldInterfaceShockwaveService.MORPH_DURATION_TICKS,
+					FriendlyDragonService.ORBIT_RADIUS);
+		}
+		// The leading point, and the arc it has already drawn. Sampling the trail across the whole
+		// swept arc rather than emitting one particle per tick and letting it expire means the ring
+		// is equally bright along its length however far round the point has got.
+		double head = progress * Math.PI * 2.0D;
+		for (int index = 0; index < 5; index++) {
+			double angle = head - index * 0.035D;
+			level.sendParticles(ParticleTypes.END_ROD,
+					centreX + Math.cos(angle) * FriendlyDragonService.ORBIT_RADIUS, ringY,
+					centreZ + Math.sin(angle) * FriendlyDragonService.ORBIT_RADIUS,
+					2, 0.35D, 0.35D, 0.35D, 0.0D);
+		}
+		for (int index = 0; index < 10; index++) {
+			double angle = head * ((index + (elapsed % 5L) * 0.2D) / 10.0D);
+			level.sendParticles(ParticleTypes.END_ROD,
+					centreX + Math.cos(angle) * FriendlyDragonService.ORBIT_RADIUS, ringY,
+					centreZ + Math.sin(angle) * FriendlyDragonService.ORBIT_RADIUS,
+					1, 0.0D, 0.0D, 0.0D, 0.0D);
+		}
+		// The column feeding it, rising out of the altar the players are standing on so the call has
+		// a visible source and is not simply weather.
+		for (int index = 0; index < 4; index++) {
+			double height = (index + (elapsed % 8L) * 0.125D) / 4.0D * FriendlyDragonService.ORBIT_HEIGHT;
+			level.sendParticles(ParticleTypes.REVERSE_PORTAL, centreX,
+					arena.getY() + 1.0D + height * progress, centreZ, 2, 0.6D, 0.4D, 0.6D, 0.02D);
+		}
+		// Pulses that close up as the point comes round: twenty ticks apart at the start, five at the
+		// end, so the last few seconds audibly run out of room before the arrival lands on them.
+		long interval = Math.max(5L, Math.round(20.0D - 15.0D * progress));
+		if (elapsed % interval == 0L) {
+			AudioService.playBounded(level, arena, ModSounds.WORLD_INTERFACE_GATEWAY_PURPLE,
+					SoundSource.AMBIENT, 0.55F, (float) (0.6D + 0.8D * progress));
+		}
+	}
+
+	/**
+	 * The dragon arriving: a seal coming apart, not a door opening.
+	 *
+	 * <p>The fiction is that the interface had it held under this sky, and the fight is what took the
+	 * lock apart - so the burst is built to read as something breaking outward from the body rather
+	 * than something arriving at it. The flash and the ruptured shell land on the same tick, the
+	 * spokes are thrown along sixteen fixed bearings so the shell has visible seams, and the vanilla
+	 * growl is what a player already reads as "the dragon is here".
+	 *
+	 * <p>Every count here is a one-off on a single tick, not a per-tick emitter. That is what keeps a
+	 * burst this size inside the tick budget the rest of the encounter is written to.
+	 */
+	private static void emitDragonArrival(ServerLevel level, Vec3 position) {
+		// The break itself. FLASH is a single bright frame with no lifetime, so it reads as the
+		// instant rather than as an effect that is still running afterwards. It is tinted rather than
+		// plain white: FLASH carries a colour in this version, and the End's own violet keeps the
+		// break inside the palette the rest of the arena is lit in.
+		level.sendParticles(ColorParticleOption.create(ParticleTypes.FLASH, 0.72F, 0.44F, 0.95F),
+				position.x, position.y, position.z, 4, 0.6D, 0.6D, 0.6D, 0.0D);
+		level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, position.x, position.y, position.z,
+				1, 0.0D, 0.0D, 0.0D, 0.0D);
+
+		// The shell it was held in, thrown outward. Sixteen bearings rather than a spherical spray:
+		// a sphere of particles is a cloud, and spokes are pieces of something that used to be solid.
+		for (int spoke = 0; spoke < 16; spoke++) {
+			double angle = spoke / 16.0D * Math.PI * 2.0D;
+			double lift = spoke % 2 == 0 ? 0.45D : -0.30D;
+			level.sendParticles(ParticleTypes.END_ROD,
+					position.x + Math.cos(angle) * 2.0D, position.y + lift,
+					position.z + Math.sin(angle) * 2.0D,
+					14, 0.25D, 0.25D, 0.25D, 0.62D);
+		}
+
+		level.sendParticles(ParticleTypes.END_ROD, position.x, position.y, position.z,
+				190, 3.4D, 2.4D, 3.4D, 0.42D);
+		level.sendParticles(ParticleTypes.REVERSE_PORTAL, position.x, position.y, position.z,
+				220, 4.5D, 3.0D, 4.5D, 0.26D);
+		// The dragon's own breath, so the thing that got out is unmistakably this one.
+		level.sendParticles(PowerParticleOption.create(ParticleTypes.DRAGON_BREATH, 0.5F),
+				position.x, position.y, position.z, 90, 3.0D, 1.6D, 3.0D, 0.08D);
+
+		// Two rings rather than one: the second is wider and lands on the same tick, which reads as
+		// the break having a front rather than a single edge.
+		WorldInterfaceShockwaveService.emit(level, position,
+				WorldInterfaceShockwaveService.MORPH_DURATION_TICKS,
+				WorldInterfaceShockwaveService.MORPH_MAX_RADIUS);
+		WorldInterfaceShockwaveService.emit(level, position.add(0.0D, -2.0D, 0.0D),
+				WorldInterfaceShockwaveService.MORPH_DURATION_TICKS,
+				WorldInterfaceShockwaveService.MORPH_MAX_RADIUS * 1.6D);
+
+		BlockPos at = BlockPos.containing(position);
+		AudioService.playBounded(level, at,
+				ModSounds.WORLD_INTERFACE_GATEWAY_GOLD, SoundSource.AMBIENT, 1.0F, 0.85F);
+		level.playSound(null, at, SoundEvents.ENDER_DRAGON_GROWL, SoundSource.AMBIENT, 4.0F, 0.72F);
+	}
+
 	private static void emitPortalOpening(ServerLevel level, WorldInterfaceState.Snapshot snapshot,
 			long age) {
-		BlockPos altar = snapshot.altarCenter();
+		BlockPos portal = AltarShape.exitPortalCenter(snapshot.altarCenter());
 		float progress = Math.clamp((age - DRAGON_SPAWN_TICKS)
 				/ (float) DRAGON_PORTAL_WORK_TICKS, 0.0F, 1.0F);
 		double radius = 0.7D + 6.5D * (1.0D - progress);
-		double height = altar.getY() + 1.2D + 3.4D * (1.0D - progress);
+		double height = portal.getY() + 0.2D + 3.4D * (1.0D - progress);
 		for (int point = 0; point < 14; point++) {
 			double angle = point / 14.0D * Math.PI * 2.0D + age * 0.13D;
 			level.sendParticles(ParticleTypes.PORTAL,
-					altar.getX() + 0.5D + Math.cos(angle) * radius, height,
-					altar.getZ() + 0.5D + Math.sin(angle) * radius, 1, 0.0D, 0.0D, 0.0D, 0.0D);
+					portal.getX() + 0.5D + Math.cos(angle) * radius, height,
+					portal.getZ() + 0.5D + Math.sin(angle) * radius, 1, 0.0D, 0.0D, 0.0D, 0.0D);
 		}
 		Vec3 source = snapshot.friendlyDragonUuid()
 				.flatMap(id -> FriendlyDragonService.recover(level, id))
 				.map(dragon -> dragon.position().add(0.0D, -1.0D, 0.0D))
 				.orElse(null);
 		if (source != null) {
-			Vec3 target = new Vec3(altar.getX() + 0.5D, altar.getY() + 1.2D, altar.getZ() + 0.5D);
+			Vec3 target = new Vec3(portal.getX() + 0.5D, portal.getY() + 0.2D, portal.getZ() + 0.5D);
 			Vec3 span = target.subtract(source);
 			for (int step = 0; step < 10; step++) {
 				double along = (step + (age % 4L) * 0.25D) / 10.0D;
@@ -1133,7 +1970,7 @@ public final class EndBossEncounterService {
 			}
 		}
 		if (age % 12L == 0L) {
-			AudioService.playBounded(level, altar, ModSounds.WORLD_INTERFACE_GATEWAY_PURPLE,
+			AudioService.playBounded(level, portal, ModSounds.WORLD_INTERFACE_GATEWAY_PURPLE,
 					SoundSource.AMBIENT, 0.5F, 0.7F + 0.5F * progress);
 		}
 	}
@@ -1157,7 +1994,9 @@ public final class EndBossEncounterService {
 		if (isMorphing(level, boss)) return;
 		// Idle roar. Off the encounter clock rather than a timer of its own so it stays in step with
 		// everything else the fight schedules, and skipped above while it is away changing.
-		if (elapsed > 0L && elapsed % ROAR_INTERVAL_TICKS == 0L) roar(level, boss, 0.85F);
+		int roarInterval = ROAR_INTERVAL_BY_FORM[Math.clamp(boss.form(), 0,
+				ROAR_INTERVAL_BY_FORM.length - 1)];
+		if (elapsed > 0L && elapsed % roarInterval == 0L) roar(level, boss, 0.85F);
 		// The third form's second lane, driven whether or not a scheduled attack is running: it is
 		// what makes the last phase continuous instead of a turn order. Ticked before the scheduled
 		// lane so a volley opened this tick gets its first frame on this tick.
@@ -1202,6 +2041,14 @@ public final class EndBossEncounterService {
 			}
 			return;
 		}
+		// Nothing is stored, so nothing may still be running. A transient runtime that outlives the
+		// envelope it was mirrored from is a permanent, silent stall: the scheduler below calls
+		// begin(), begin() refuses because the runtime is still in the map, the refusal is an
+		// exception, and the exception is caught and dropped - on this tick and on every tick after
+		// it. The fight simply stops attacking, with no line in any log to say why. The transient
+		// side is presentation and the persisted side is the truth, so the truth wins.
+		WorldInterfaceAttackService.discardOrphanedRuntime(server, snapshot.encounterId().orElseThrow());
+		reportSchedulerStall(snapshot, elapsed);
 		if (elapsed < snapshot.nextActionActiveTick()) return;
 		if (participants.isEmpty()) return;
 
@@ -1209,32 +2056,63 @@ public final class EndBossEncounterService {
 				.fromWireIdOrEmpty(snapshot.lastActionWireId()).orElse(null);
 		long choiceSequence = snapshot.actionSequence();
 		WorldInterfaceAction selected = null;
+		List<ServerPlayer> targets = List.of();
+		// The climb does not stop it attacking; it only changes what it can attack with. See
+		// WorldInterfaceActionScheduler#canStartWhileAloft.
+		boolean aloft = WorldInterfaceSkyholdPolicy.aloft(snapshot.stage(), elapsed);
 		for (int scan = 0; scan < WorldInterfaceAction.values().length * 2; scan++, choiceSequence++) {
 			WorldInterfaceAction candidate = WorldInterfaceActionScheduler.nextAction(snapshot.stage(),
 					snapshot.deterministicSeed(), choiceSequence, previous);
-			if (candidate != WorldInterfaceAction.FORCED_EVICTION
-					|| WorldInterfaceActionScheduler.isForcedEvictionReady(elapsed,
-							snapshot.lastForcedEvictionTick(), participants.size())) {
-				selected = candidate;
-				break;
-			}
+			if (aloft && !WorldInterfaceActionScheduler.canStartWhileAloft(candidate)) continue;
+			if (candidate == WorldInterfaceAction.FORCED_EVICTION
+					&& !WorldInterfaceActionScheduler.isForcedEvictionReady(elapsed,
+							snapshot.lastForcedEvictionTick(), participants.size())) continue;
+			// An action with nobody it may be aimed at has to be skipped like any other ineligible
+			// candidate, not chosen and then abandoned.
+			//
+			// This is the stall players have been reporting as "the boss stops making any noise after
+			// a while". The scan used to commit to a candidate and only afterwards ask who it could be
+			// aimed at; if the answer was nobody it returned, and because the pick is a pure function
+			// of (stage, seed, sequence, previous) - none of which change while no attack starts - the
+			// next tick made the identical pick and returned again. The encounter simply stopped
+			// attacking until whatever made the target ineligible expired on its own.
+			//
+			// Three of the six actions unlocked at the second phase take exclusive control, and every
+			// one of those puts its target under six hundred ticks of strong-control immunity. On a
+			// solo table that is the entire roster, so any pick landing on one of the three inside that
+			// window froze the fight for up to thirty seconds - repeatedly, and only from the second
+			// phase onwards, because the first phase unlocks no exclusive control at all. That is
+			// exactly where it was reported from.
+			List<ServerPlayer> candidateTargets = attackTargets(server, snapshot, participants,
+					candidate, choiceSequence, elapsed);
+			if (candidate != WorldInterfaceAction.TENDRIL_LASH && candidateTargets.isEmpty()) continue;
+			selected = candidate;
+			targets = candidateTargets;
+			break;
 		}
 		if (selected == null) return;
 
-		List<ServerPlayer> targets = attackTargets(server, snapshot, participants, selected,
-				choiceSequence, elapsed);
-		if (selected != WorldInterfaceAction.TENDRIL_LASH && targets.isEmpty()) return;
 		WorldInterfaceAttackService.AttackStart started;
 		try {
 			started = WorldInterfaceAttackService.begin(level, boss, snapshot, selected, targets,
 					elapsed, choiceSequence);
 		} catch (IllegalArgumentException | IllegalStateException exception) {
+			// Logged rather than swallowed. Every reason begin() refuses is a reason the encounter
+			// throws nothing this tick, and most of them do not clear themselves - so a bare catch
+			// here turns any one of them into a boss that has silently stopped fighting. Whatever
+			// this is, it costs one line and it is the only evidence that will exist.
+			TheFourthFrequency.LOGGER.warn("World-interface refused to start {} at tick {}: {}",
+					selected, elapsed, exception.toString());
 			return;
 		}
 
 		WorldInterfaceState.Snapshot latest = WorldInterfaceState.snapshot(server);
+		// The roster is part of the cadence now: one attack names one player, so a schedule written
+		// only in terms of the fight divides itself among however many people are standing in it.
+		// See WorldInterfaceActionScheduler#DENSITY_GAIN_PER_PLAYER.
 		long nextTick = elapsed + WorldInterfaceActionScheduler.scaledIntervalTicks(latest.stage(),
-				latest.deterministicSeed(), choiceSequence, latest.destroyedAnchorCount());
+				latest.deterministicSeed(), choiceSequence, latest.destroyedAnchorCount(),
+				Math.clamp(participants.size(), 1, WorldInterfacePolicy.MAX_ROSTER_SIZE));
 		WorldInterfaceAction selectedAction = selected;
 		long persistedSequence = choiceSequence;
 		WorldInterfaceState.Snapshot captured = latest;
@@ -1262,6 +2140,13 @@ public final class EndBossEncounterService {
 			WorldInterfaceAttackService.cancelAndRestore(server, latest.encounterId().orElseThrow());
 			return;
 		}
+		// Committed, so it counts. An action aimed at the whole arena is not attention on anybody in
+		// particular and is deliberately not recorded - otherwise a lash would raise every weight at
+		// once, which changes nothing about who is picked next and only dilutes the memory of who was.
+		if (started.targets().size() < participants.size()) {
+			WorldInterfaceAttackService.recordTargeting(latest.encounterId().orElseThrow(),
+					started.targets(), elapsed);
+		}
 		showAction(level, stored.snapshot(), bossActionWire(selectedAction), started.durationTicks(),
 				started.targets().stream().sorted(Comparator.comparing(UUID::toString)).toList(), started.seed());
 	}
@@ -1277,15 +2162,70 @@ public final class EndBossEncounterService {
 				.limit(WorldInterfacePolicy.MAX_ROSTER_SIZE).toList();
 	}
 
+	/**
+	 * Ticks past due an attack may be before the schedule is treated as stuck rather than slow.
+	 *
+	 * <p>Comfortably past the longest legal interval at the slowest phase and the softest anchor
+	 * multiplier, so a healthy fight can never reach it.
+	 */
+	private static final long SCHEDULER_STALL_TICKS = 300L;
+	/** Last stall already reported, per encounter, so one stall is one line rather than one a tick. */
+	private static final Map<UUID, Long> REPORTED_STALLS = new ConcurrentHashMap<>();
+
+	/**
+	 * Says so, once, when the encounter has stopped throwing anything.
+	 *
+	 * <p>Players have reported the fight going quiet after a while in one phase - no attack cues, the
+	 * music and the ambient bed carrying on - and the first two attempts to explain it were wrong,
+	 * because both were reasoned from the code rather than measured. The client-side channel counter
+	 * killed the first (the sound pool peaks around fifteen of two hundred and forty-seven, so nothing
+	 * is being dropped for want of a channel); what is left is that the sounds are never made, which
+	 * means the attacks are never started. This is the instrument for that half.
+	 *
+	 * <p>It reports the whole scheduling state at the moment it notices, because the interesting
+	 * question is <em>which</em> gate is shut: the clock not advancing, an envelope that never
+	 * cleared, a recovery grace that never expired, or a due tick sitting in the future.
+	 */
+	private static void reportSchedulerStall(WorldInterfaceState.Snapshot snapshot, long elapsed) {
+		UUID encounterId = snapshot.encounterId().orElse(null);
+		if (encounterId == null) return;
+		long overdue = elapsed - snapshot.nextActionActiveTick();
+		if (overdue < SCHEDULER_STALL_TICKS) {
+			REPORTED_STALLS.remove(encounterId);
+			return;
+		}
+		Long reported = REPORTED_STALLS.get(encounterId);
+		// One line per stall episode, then one more for every further ten seconds it persists.
+		if (reported != null && elapsed - reported < SCHEDULER_STALL_TICKS) return;
+		REPORTED_STALLS.put(encounterId, elapsed);
+		TheFourthFrequency.LOGGER.warn(
+				"World-interface scheduler is {} ticks overdue: stage={} elapsed={} due={} running={}"
+						+ " grace={} storedAttack={} lastAction={} sequence={} anchors={}",
+				overdue, snapshot.stage(), elapsed, snapshot.nextActionActiveTick(),
+				snapshot.runningSinceGameTime() >= 0L, snapshot.recoveryGraceTicks(),
+				snapshot.currentAttack().map(envelope -> envelope.actionWireId() + "#" + envelope.sequence())
+						.orElse("none"),
+				snapshot.lastActionWireId(), snapshot.actionSequence(), snapshot.aliveAnchorCount());
+	}
+
+	/**
+	 * Who one candidate action would be aimed at, without committing to it.
+	 *
+	 * <p>Pure with respect to the attention ledger: the scan calls this for several candidates before
+	 * it settles on one, so recording a pick here would count actions that were never thrown. The
+	 * committed pick is recorded in {@link #tickAttacks} once its envelope is stored.
+	 */
 	private static List<ServerPlayer> attackTargets(MinecraftServer server,
 			WorldInterfaceState.Snapshot snapshot, List<ServerPlayer> participants,
 			WorldInterfaceAction action, long sequence, long elapsed) {
 		if (action == WorldInterfaceAction.TENDRIL_LASH) return participants;
+		UUID encounterId = snapshot.encounterId().orElse(null);
 		if (action == WorldInterfaceAction.FORCED_EVICTION) {
 			UUID host = participants.stream().filter(player -> server.isSingleplayerOwner(player.nameAndId()))
 					.map(ServerPlayer::getUUID).findFirst().orElse(null);
 			List<UUID> selected = WorldInterfaceActionScheduler.selectForcedEvictionTargets(
-					participants.stream().map(ServerPlayer::getUUID).toList(), host,
+					participants.stream().map(ServerPlayer::getUUID).toList(),
+					WorldInterfaceAttackService.evictedThisEncounter(encounterId), host,
 					snapshot.deterministicSeed(), sequence);
 			return selected.stream().map(server.getPlayerList()::getPlayer).filter(java.util.Objects::nonNull).toList();
 		}
@@ -1295,11 +2235,20 @@ public final class EndBossEncounterService {
 					elapsed >= snapshot.controlCooldowns().getOrDefault(player.getUUID(), 0L)).toList();
 		}
 		if (eligible.isEmpty()) return List.of();
-		int first = Math.floorMod((int) (snapshot.deterministicSeed() ^ sequence), eligible.size());
-		if (action == WorldInterfaceAction.GRAB_THROW && eligible.size() > 1) {
-			return List.of(eligible.get(first), eligible.get((first + 1) % eligible.size()));
-		}
-		return List.of(eligible.get(first));
+		// One name, weighted away from whoever the fight has been looking at lately.
+		//
+		// The grab used to be the exception here and returned a pair, which was the last trace of the
+		// retired grab-slam. Nothing has consumed the second name since: tickGrabThrow seizes the
+		// first target and no other, and begin() re-sorts the pair by UUID before it gets there - so
+		// the player with the higher UUID of any pair could never be the one taken, while the second
+		// name still collected six hundred ticks of strong-control immunity and, because the client
+		// draws its lock treatment from the same target list, a full lock warning for an attack that
+		// was never going to arrive.
+		List<UUID> candidates = eligible.stream().map(ServerPlayer::getUUID).toList();
+		return List.of(eligible.get(WorldInterfaceTargetPolicy.selectIndex(
+				WorldInterfaceAttackService.recentPicks(encounterId, candidates, elapsed),
+				WorldInterfaceAttackService.lastPickTicks(encounterId, candidates, elapsed),
+				snapshot.deterministicSeed(), sequence)));
 	}
 
 	private static WorldInterfaceProtocol.BossAction bossActionWire(WorldInterfaceAction action) {
@@ -1361,6 +2310,9 @@ public final class EndBossEncounterService {
 		// committed edit is permanent either way.
 		if (success) EndBossArenaService.cancelQueuedScars(level);
 		WorldInterfaceAttackService.cancelAndRestore(level.getServer(), snapshot.encounterId().orElseThrow());
+		// The fight is over either way, so the transient attention and eviction ledgers go with it
+		// rather than sitting on a finished encounter id until the server stops.
+		WorldInterfaceAttackService.clearLedgers(snapshot.encounterId().orElseThrow());
 		WorldInterfaceEntity boss = findBoss(level, snapshot).orElse(null);
 		if (boss != null) {
 			boss.setForm(WorldInterfaceEntity.FORM_INTERFACE);
@@ -1453,9 +2405,20 @@ public final class EndBossEncounterService {
 		// third form is twenty-five blocks below the mass.
 		//
 		// Pitch falls as the hit gets heavier, so a charged blow is audibly worth more than a poke.
-		AudioService.playBounded(level, BlockPos.containing(contact), ModSounds.WORLD_INTERFACE_HURT,
-				SoundSource.HOSTILE, 0.85F, 1.12F - (float) Math.min(0.30D, adjusted * 0.02D));
+		//
+		// Throttled because a table of eight swinging and shooting continuously can otherwise produce
+		// fifteen to twenty fresh instances a second. The long-phase silence was measured at a peak of
+		// only fifteen channels and came from a scheduler stall, not from these cues exhausting the
+		// mixer; five a second is still the clearer hit texture and leaves room for the attacks.
+		if (WorldInterfaceBlastService.allows(level, HURT_CUE_SOURCE, HURT_CUE_MIN_GAP_TICKS)) {
+			AudioService.playBounded(level, BlockPos.containing(contact), ModSounds.WORLD_INTERFACE_HURT,
+					SoundSource.HOSTILE, 0.85F, 1.12F - (float) Math.min(0.30D, adjusted * 0.02D));
+		}
 	}
+
+	/** The interface's hit cue, and the floor between two of them. Particles are not throttled. */
+	private static final String HURT_CUE_SOURCE = "boss_hurt";
+	private static final int HURT_CUE_MIN_GAP_TICKS = 4;
 
 	private static void phaseChanged(ServerLevel level, WorldInterfaceState.Snapshot before,
 			WorldInterfaceState.Snapshot after) {
@@ -1516,6 +2479,13 @@ public final class EndBossEncounterService {
 		}
 		if (snapshot.stage().wireId() < WorldInterfaceStage.SUMMONING.wireId()
 				|| snapshot.stage().wireId() > WorldInterfaceStage.FAILURE_RESOLUTION.wireId()) return null;
+		// Never rebuild a body during a resolution. A resolution is the interface leaving, and the
+		// success path deliberately discards the projection part-way through it - so from that tick
+		// on, "there is no boss entity" is the correct state and not a fault to repair. Rebuilding
+		// anyway spawned a fresh body at the arena centre, eighteen blocks up: it read as the corpse
+		// teleporting back down out of the ascent it had just finished, it re-registered itself as
+		// the encounter's boss, and it then sat in the sky through the dragon's whole arrival.
+		if (snapshot.stage().isResolution()) return null;
 		level.getChunkAt(snapshot.arenaCenter());
 		WorldInterfaceEntity boss = ModEntities.WORLD_INTERFACE.create(level, EntitySpawnReason.EVENT);
 		if (boss == null) return null;
@@ -1596,7 +2566,9 @@ public final class EndBossEncounterService {
 		int form = boss == null ? formForStage(snapshot.stage()) + 1 : boss.form() + 1;
 		if (snapshot.stage().wireId() < WorldInterfaceStage.SUMMONING.wireId()
 				|| snapshot.stage() == WorldInterfaceStage.COMPLETE) form = WorldInterfaceProtocol.Form.NONE.wireId();
-		long elapsed = effectiveActiveTicks(snapshot, level.getGameTime());
+		// Wound back while a won encounter is repairing itself, so the rail and the material erosion
+		// both run backwards off one number. The stored timer is untouched: this is the projection.
+		long elapsed = repairProjectedElapsedTicks(snapshot, level.getGameTime());
 		int anchors = 0;
 		for (WorldInterfaceState.Anchor anchor : snapshot.anchors()) if (!anchor.destroyed()) anchors |= 1 << anchor.index();
 		int gatewayState = snapshot.gates().isEmpty() ? WorldInterfaceGatewayState.DORMANT.wireId()
@@ -1611,6 +2583,7 @@ public final class EndBossEncounterService {
 					elapsed, snapshot.runningSinceGameTime() < 0L,
 					Math.max(0L, level.getGameTime()), gatewayState,
 					snapshot.gates().stream().map(WorldInterfaceState.Gate::position).toList(),
+					snapshot.anchors().stream().map(WorldInterfaceState.Anchor::position).toList(),
 					outcomeWire(snapshot.outcome()), progress));
 		}
 	}
@@ -1772,7 +2745,8 @@ public final class EndBossEncounterService {
 		if (snapshot.stage() == WorldInterfaceStage.PORTAL_OPEN && poem != null && poem.started() && !poem.acked()) {
 			rememberClientSequence(player, poem.sequence());
 			ServerPlayNetworking.send(player, new PoemStartS2C(snapshot.encounterId().orElseThrow(),
-					poem.sequence(), outcomeWire(snapshot.outcome()), FrequencyWorldData.get(server).worldId()));
+					poem.sequence(), outcomeWire(snapshot.outcome()), FrequencyWorldData.get(server).worldId(),
+					snapshot.destroyedAnchorCount()));
 			prepareVanillaEndReturn(player, snapshot);
 			if (player.level().dimension() == Level.END && !player.wonGame) {
 				// Reopen the real credits after a disconnect that interrupted an unacknowledged poem.
@@ -1905,78 +2879,71 @@ public final class EndBossEncounterService {
 
 	private static void ensureExitOpen(ServerLevel level, WorldInterfaceState.Snapshot snapshot) {
 		if (snapshot.exitOpen() && snapshot.stage().wireId() >= WorldInterfaceStage.PORTAL_OPEN.wireId()) {
-			// Recomputed rather than read back from the ledger: a save written before the exit moved
-			// onto the terrace still names the old sunken position, and re-placing it there would
-			// keep rebuilding the wrong portal every tick for the rest of that world's life.
+			// Derived from the altar core rather than the old exit ledger position, so saves made by the
+			// short-lived raised-terrace layout are repaired back into the original altar on recovery.
 			placeExit(level, snapshot.altarCenter());
 		}
 	}
 
 	/**
-	 * Opens the way out by taking the altar down.
+	 * Opens the way out by turning the altar's existing top platform into the portal.
 	 *
-	 * <p>The exit used to be written into the terrace and left the terrace standing around it, which
-	 * put a three-by-three portal on a raised platform with the resonance core in the middle of it -
-	 * a doorway you had to climb onto, with a block in the doorway. The altar has done its job by
-	 * this point: it exists to start the encounter, and the encounter is over.</p>
-	 *
-	 * <p>So the terrace, its pillars and the core are cleared away entirely, and the portal is laid
-	 * into the base course where it sits flush with the island. Nothing about the way out hangs in
-	 * the air, and nothing stands in it.</p>
+	 * <p>The altar remains the object the player has used throughout the encounter. Its central
+	 * three-by-three top course becomes the exit, the resonance core above it is removed, and one
+	 * same-height block ring hides the portal's single-sided edge. That ring rests on the existing
+	 * middle step; the surrounding steps and pillars remain the altar rather than becoming a second
+	 * platform. Rebuilding the authored shape here also migrates worlds that briefly received a
+	 * raised exit terrace above the altar.</p>
 	 */
-	private static void placeExit(ServerLevel level, BlockPos center) {
+	private static void placeExit(ServerLevel level, BlockPos corePosition) {
 		int flags = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS;
-		BlockPos floor = AltarShape.centerFromCore(AltarShape.corePosition(center));
-		// Everything the altar ever wrote, including the pillar shafts and the core above the middle.
+		BlockPos floor = AltarShape.centerFromCore(corePosition);
+		BlockPos portal = AltarShape.exitPortalCenter(corePosition);
+		if (exitPortalComplete(level, portal, floor)) return;
+
 		for (int x = -AltarShape.RADIUS; x <= AltarShape.RADIUS; x++) {
 			for (int z = -AltarShape.RADIUS; z <= AltarShape.RADIUS; z++) {
-				for (int y = 1; y <= AltarShape.MAX_OFFSET; y++) {
+				int top = AltarShape.topOffset(x, z);
+				for (int y = 0; y <= AltarShape.HEADROOM; y++) {
 					BlockPos position = floor.offset(x, y, z);
-					if (!level.getBlockState(position).isAir()) {
-						level.setBlock(position, Blocks.AIR.defaultBlockState(), flags);
+					BlockState desired;
+					if (Math.abs(x) <= 1 && Math.abs(z) <= 1 && position.getY() == portal.getY()) {
+						desired = ModBlocks.WORLD_INTERFACE_EXIT_PORTAL.defaultBlockState();
+					} else if (AltarShape.isExitFrame(x, z) && position.getY() == portal.getY()) {
+						desired = AltarShape.exitFrameState();
+					} else if (y <= top) {
+						desired = AltarShape.state(x, y, z, top);
+					} else {
+						desired = Blocks.AIR.defaultBlockState();
 					}
-				}
-			}
-		}
-		BlockState brick = Blocks.END_STONE_BRICKS.defaultBlockState();
-		// Ground course: the footing the terrace stands on, and the ring the stairs step down to.
-		for (int x = -AltarShape.RADIUS; x <= AltarShape.RADIUS; x++) {
-			for (int z = -AltarShape.RADIUS; z <= AltarShape.RADIUS; z++) {
-				level.setBlock(floor.offset(x, 0, z), brick, flags);
-			}
-		}
-		// One course up: a seven-wide terrace with the portal set into the middle of it, ringed by
-		// stairs so the way out is something you walk up to rather than a hole in the floor.
-		for (int x = -EXIT_STAIR_EDGE; x <= EXIT_STAIR_EDGE; x++) {
-			for (int z = -EXIT_STAIR_EDGE; z <= EXIT_STAIR_EDGE; z++) {
-				int edge = Math.max(Math.abs(x), Math.abs(z));
-				BlockPos position = floor.offset(x, 1, z);
-				if (edge <= 1) {
-					level.setBlock(position, ModBlocks.WORLD_INTERFACE_EXIT_PORTAL.defaultBlockState(), flags);
-				} else if (edge < EXIT_STAIR_EDGE) {
-					level.setBlock(position, brick, flags);
-				} else {
-					level.setBlock(position, exitStair(x, z), flags);
+					if (!level.getBlockState(position).equals(desired)) {
+						level.setBlock(position, desired, flags);
+					}
 				}
 			}
 		}
 	}
 
-	/**
-	 * A stair on the terrace rim, facing outward.
-	 *
-	 * <p>The corners take a full block rather than a stair: a stair there would have to pick one of
-	 * two equally wrong facings, and the seam reads worse than a plain step does.</p>
-	 */
-	private static BlockState exitStair(int dx, int dz) {
-		if (Math.abs(dx) == EXIT_STAIR_EDGE && Math.abs(dz) == EXIT_STAIR_EDGE) {
-			return Blocks.END_STONE_BRICK_SLAB.defaultBlockState();
+	/** The portal is durable, so a complete centre lets the per-tick recovery path become read-only. */
+	private static boolean exitPortalComplete(ServerLevel level, BlockPos portal, BlockPos floor) {
+		for (int x = -2; x <= 2; x++) {
+			for (int z = -2; z <= 2; z++) {
+				BlockPos position = portal.offset(x, 0, z);
+				if (Math.abs(x) <= 1 && Math.abs(z) <= 1) {
+					if (!level.getBlockState(position).is(ModBlocks.WORLD_INTERFACE_EXIT_PORTAL)) return false;
+				} else if (AltarShape.isExitFrame(x, z)) {
+					if (!level.getBlockState(position).equals(AltarShape.exitFrameState())
+							|| level.getBlockState(position.below()).isAir()) return false;
+				}
+			}
 		}
-		Direction facing = Math.abs(dx) > Math.abs(dz)
-				? (dx > 0 ? Direction.EAST : Direction.WEST)
-				: (dz > 0 ? Direction.SOUTH : Direction.NORTH);
-		return Blocks.END_STONE_BRICK_STAIRS.defaultBlockState()
-				.setValue(StairBlock.FACING, facing);
+		// The former core and the obsolete raised terrace must both be gone.
+		return level.getBlockState(corePositionAbovePortal(portal)).isAir()
+				&& level.getBlockState(floor.offset(2, 3, 0)).isAir();
+	}
+
+	private static BlockPos corePositionAbovePortal(BlockPos portal) {
+		return portal.above();
 	}
 
 	private static void removeBossProjection(ServerLevel level, WorldInterfaceState.Snapshot snapshot) {
@@ -2004,14 +2971,22 @@ public final class EndBossEncounterService {
 		return snapshot;
 	}
 
+	/**
+	 * Every anchor that survived releases its hold upward once the interface is gone.
+	 *
+	 * <p>This used to set a vanilla crystal's beam target, which the bespoke anchor has no
+	 * equivalent of - and should not, because its tether is drawn from the encounter snapshot
+	 * rather than from a per-entity target. The beat is kept as a bounded column of light off each
+	 * standing relay core, which is the same statement without a second, competing beam system.</p>
+	 */
 	private static void pointLivingAnchorsSkyward(ServerLevel level, WorldInterfaceState.Snapshot snapshot) {
 		for (WorldInterfaceState.Anchor anchor : snapshot.anchors()) {
-			if (anchor.destroyed() || anchor.crystalUuid().isEmpty()) continue;
-			Entity entity = level.getEntity(anchor.crystalUuid().orElseThrow());
-			if (entity instanceof EndCrystal crystal) {
-				crystal.setInvulnerable(true);
-				crystal.setBeamTarget(anchor.position().above(192));
-			}
+			if (anchor.destroyed() || anchor.anchorEntityUuid().isEmpty()) continue;
+			Entity entity = level.getEntity(anchor.anchorEntityUuid().orElseThrow());
+			if (entity instanceof StabilityAnchorEntity standing) standing.setInvulnerable(true);
+			Vec3 relay = StabilityAnchorGeometry.relayCore(anchor.position());
+			level.sendParticles(ParticleTypes.END_ROD, relay.x, relay.y, relay.z,
+					40, 0.22D, 5.0D, 0.22D, 0.34D);
 		}
 	}
 
@@ -2127,7 +3102,7 @@ public final class EndBossEncounterService {
 	private static List<WorldInterfaceState.Anchor> indexedAnchors(EndBossArenaService.PreparedArena arena) {
 		return arena.anchors().stream().sorted(Comparator.comparingInt(EndBossArenaService.AnchorSlot::index))
 				.map(anchor -> new WorldInterfaceState.Anchor(anchor.index(), anchor.position(),
-						Optional.of(anchor.crystalUuid()), false)).toList();
+						Optional.of(anchor.anchorEntityUuid()), false)).toList();
 	}
 
 	private static void bindCore(ServerLevel level, WorldInterfaceState.Snapshot snapshot) {

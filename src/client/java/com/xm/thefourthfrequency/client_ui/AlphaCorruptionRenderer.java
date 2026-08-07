@@ -1,9 +1,11 @@
 package com.xm.thefourthfrequency.client_ui;
 
+import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 
 /**
  * The analog-horror layer drawn over the first-entry loading screen.
@@ -20,15 +22,36 @@ import net.minecraft.network.chat.Component;
 public final class AlphaCorruptionRenderer {
 	private static final String TIMECODE_KEY = "screen.thefourthfrequency.alpha_loading.timecode";
 	private static final String TIMECODE_LOST = "--:--:--";
-	private static final int SCANLINE_COLOR = 0x000306;
+	/**
+	 * The four analog-signal chains, weakest first, indexed by {@link AlphaLoadTimeline#signalStep}.
+	 *
+	 * <p>The <em>still</em> family: the same medium as the anomaly burst's - grain, scanlines, radial
+	 * chroma, halation, the tube - minus the two terms that move the picture sideways, the row wobble
+	 * and the mistracked bar.
+	 *
+	 * <p>That is not a preference, it is what the two surfaces are for. The burst wants the picture
+	 * bent, because for eighteen ticks nothing on it has to be read. This screen is a wall of text
+	 * the player is meant to read for half a minute, and text that will not hold still stops being a
+	 * fault and becomes a headache. What is left is still one fault seen twice, which is the point of
+	 * sharing the shader at all.
+	 */
+	private static final Identifier[] SIGNAL_CHAINS = {
+			Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "signal_still_1"),
+			Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "signal_still_2"),
+			Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "signal_still_3"),
+			Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "signal_still_4")
+	};
 	private static final int CHROMA_RED = 0xFF2A2A;
 	private static final int CHROMA_CYAN = 0x22E0FF;
 	private static final int MAX_CHROMA_ALPHA = 150;
 	private static final int TIMECODE_COLOR = 0xFFD8D2C6;
 	private static final int TIMECODE_DOT_COLOR = 0xFFB4322C;
 	private static final int TIMECODE_MARGIN = 6;
-	private static final int DEAD_AIR_SPECKS = 96;
 	private static final int COLLAPSE_CORE_COLOR = 0xE6E2D8;
+	/** What {@link AlphaLoadTimeline#deadAirNoiseAlpha} peaks at, turned back into a chain step. */
+	private static final int MAX_DEAD_AIR_ALPHA = 21;
+	/** Chroma lags to one side on real tape; a mirrored pair is the giveaway that it is drawn. */
+	private static final float CHROMA_TRAIL_RATIO = 1.6F;
 
 	private AlphaCorruptionRenderer() {
 	}
@@ -39,30 +62,48 @@ public final class AlphaCorruptionRenderer {
 	 * <p>Called after the failure contents so the damage sits over them, never under.</p>
 	 */
 	public static void drawMediumLayers(GuiGraphics graphics, int screenTicks) {
-		drawTrackingBand(graphics, screenTicks);
-		drawScanlines(graphics, screenTicks);
+		// Ordered by where each layer physically lives, outward from the picture: damage on the
+		// tape, then the deck's own overlay, then the display drawing all of it.
+		//
+		// The last of those three is no longer drawn at all. Scanlines, grain, halation, chroma
+		// separation and the tube's own falloff are not marks on a picture - they are what the
+		// picture is arriving through - and every one of them was being approximated with
+		// rectangles because a screen cannot reach GameRenderer's post-effect slot. It can reach
+		// ScreenFilterDriver's, which runs over the finished frame, so the display layer is a real
+		// filter now and the timecode below is inside it rather than under it.
+		// The tracking band went with them: signal_still_* carries a slow roll bar of its own, so the
+		// mistracking is in the picture rather than painted across it. drawTrackingBand is kept below
+		// and no longer called.
+		requestSignalFilter(screenTicks);
 		drawTimecode(graphics, screenTicks);
 	}
 
-	public static void drawScanlines(GuiGraphics graphics, int screenTicks) {
-		int alpha = AlphaLoadTimeline.scanlineAlpha(screenTicks);
-		if (alpha <= 0) return;
-		int width = graphics.guiWidth();
-		int color = alpha << 24 | SCANLINE_COLOR;
-		// Anchored to the viewport, not to the tick: scanlines that crawl look like an animation,
-		// and the whole point is that they look like the screen itself.
-		for (int y = 0; y < graphics.guiHeight(); y += AlphaLoadTimeline.SCANLINE_SPACING) {
-			graphics.fill(0, y, width, y + 1, color);
-		}
+	/**
+	 * Asks for this tick's medium over the whole finished frame.
+	 *
+	 * <p>Asked from the render path on purpose: {@link ScreenFilterDriver}'s requests last exactly
+	 * one frame, so the treatment cannot survive the screen that wanted it - not through a close, a
+	 * disconnect, a resource reload, or an exception on the way out.
+	 */
+	public static void requestSignalFilter(int screenTicks) {
+		int step = AlphaLoadTimeline.signalStep(screenTicks);
+		if (step <= 0) return;
+		ScreenFilterDriver.request(ScreenFilterDriver.Owner.LOADING,
+				SIGNAL_CHAINS[Math.min(step, SIGNAL_CHAINS.length) - 1]);
 	}
 
 	/**
 	 * A horizontal band of lost tracking, scrolling slowly upward.
 	 *
-	 * <p>Drawn as displaced streaks plus a blown-out top edge rather than as a re-render of the
-	 * shifted picture: the streaks carry the read at a fraction of the cost, and at this band
-	 * height the difference is not visible.</p>
+	 * <p>Drawn as displaced streaks rather than as a re-render of the shifted picture: the streaks
+	 * carry the read at a fraction of the cost, and at this band height the difference is not
+	 * visible.</p>
+	 *
+	 * <p><b>Retired.</b> The shader's own roll bar carries the mistracking now, so this is not called
+	 * from anywhere. Kept rather than deleted: it is the reference for what that term is meant to
+	 * look like, and the fallback if a driver ever turns out not to compile the chain.</p>
 	 */
+	@SuppressWarnings("unused")
 	public static void drawTrackingBand(GuiGraphics graphics, int screenTicks) {
 		int top = AlphaLoadTimeline.trackingBandTop(screenTicks, graphics.guiHeight());
 		if (top == Integer.MIN_VALUE) return;
@@ -70,22 +111,23 @@ public final class AlphaCorruptionRenderer {
 		int height = AlphaLoadTimeline.trackingBandHeight(screenTicks);
 		int shift = AlphaLoadTimeline.trackingBandShift(screenTicks);
 		int bottom = Math.min(graphics.guiHeight(), top + height);
-		if (bottom <= 0 || top >= graphics.guiHeight()) return;
+		if (bottom <= 0 || top >= graphics.guiHeight() || height <= 0) return;
 
-		graphics.fill(0, Math.max(0, top), width, bottom, 0x2CFFFFFF);
+		AnalogFilter.rollBar(graphics, top, height, 1.0F);
 		for (int y = Math.max(0, top); y < bottom; y++) {
-			int seed = AlphaLoadTimeline.noise(y * 0x9E3779B9
-					+ AlphaLoadTimeline.failureMotionTick(screenTicks));
+			// Seeded by the row's offset *within* the band, so the streak pattern is fixed to the
+			// band and travels with it. Seeding by screen row instead made every streak
+			// re-randomise each tick, which reads as flicker laid over the picture rather than as
+			// one piece of damage passing through it.
+			int seed = AlphaLoadTimeline.noise((y - top) * 0x9E3779B9);
 			int streakLeft = Math.floorMod(seed, Math.max(1, width)) + shift;
 			int streakWidth = 8 + Math.floorMod(seed >>> 11, 46);
-			int streakAlpha = 22 + Math.floorMod(seed >>> 19, 44);
+			float centred = 1.0F - Math.abs((y - top) * 2.0F / height - 1.0F);
+			int streakAlpha = Math.round((22 + Math.floorMod(seed >>> 19, 44)) * centred * centred);
+			if (streakAlpha <= 0) continue;
 			graphics.fill(Math.max(0, streakLeft), y,
 					Math.min(width, streakLeft + streakWidth), y + 1,
 					streakAlpha << 24 | 0xC8C4BC);
-		}
-		if (top >= 0) graphics.fill(0, top, width, top + 1, 0x66FFFFFF);
-		if (bottom <= graphics.guiHeight() - 1) {
-			graphics.fill(0, bottom - 1, width, bottom, 0x59000000);
 		}
 	}
 
@@ -122,15 +164,20 @@ public final class AlphaCorruptionRenderer {
 			graphics.fill(inset, centerY - lineHeight, width - inset, centerY + lineHeight,
 					alpha << 24 | COLLAPSE_CORE_COLOR);
 		}
+		// The snow is the filter's grain over a frame that has almost nothing left in it, and it is
+		// asked for on its own ramp rather than through requestSignalFilter: the scanline envelope
+		// that drives every other beat deliberately collapses to nothing across dead air, so
+		// deriving from it here would leave the one stretch that is *made of* noise with none.
+		//
+		// What this replaces was three hundred and twenty one-pixel rectangles, and the comment above
+		// them conceded the problem it had already lost to: a full screen of dead air is on the order
+		// of a hundred thousand pixels, so three hundred of them is a handful of dots however dense
+		// you call it.
 		int noiseAlpha = AlphaLoadTimeline.deadAirNoiseAlpha(screenTicks);
 		if (noiseAlpha <= 0) return;
-		for (int speck = 0; speck < DEAD_AIR_SPECKS; speck++) {
-			int seed = AlphaLoadTimeline.noise(speck * 0x85EBCA6B + screenTicks * 0xC2B2AE35);
-			int x = Math.floorMod(seed, Math.max(1, width));
-			int y = Math.floorMod(seed >>> 9, Math.max(1, height));
-			int size = 1 + Math.floorMod(seed >>> 21, 2);
-			graphics.fill(x, y, x + size, y + size, noiseAlpha << 24 | 0xBFBAB0);
-		}
+		int step = Math.clamp(Math.round(noiseAlpha * (float) SIGNAL_CHAINS.length
+				/ MAX_DEAD_AIR_ALPHA), 1, SIGNAL_CHAINS.length);
+		ScreenFilterDriver.request(ScreenFilterDriver.Owner.LOADING, SIGNAL_CHAINS[step - 1]);
 	}
 
 	/**
@@ -149,20 +196,36 @@ public final class AlphaCorruptionRenderer {
 			int rollHeight = Math.max(2, Math.round(26 * strength));
 			int rollTop = height - Math.floorMod(screenTicks * 7, height + rollHeight);
 			int alpha = Math.round(120 * strength);
-			graphics.fill(0, Math.max(0, rollTop), width,
-					Math.min(height, rollTop + rollHeight), alpha << 24 | 0xD6D2C8);
+			AnalogFilter.rollBar(graphics, Math.max(0, rollTop), rollHeight, strength);
 		}
-		drawScanlines(graphics, screenTicks);
+		requestSignalFilter(screenTicks);
 	}
 
 	/** Text with the red and cyan ghosts a worn tape leaves either side of every edge. */
 	public static void drawChromaString(GuiGraphics graphics, Font font, String text, int x, int y,
 			int color, int screenTicks) {
-		int offset = Math.round(AlphaLoadTimeline.chromaOffset(screenTicks));
+		drawChromaStringAt(graphics, font, text, x, y, color,
+				AlphaLoadTimeline.chromaOffset(screenTicks));
+	}
+
+	/**
+	 * The same ghosts, driven by a caller that owns its own envelope.
+	 *
+	 * <p>Split out for the terminal's sky monitor, whose separation follows an anomaly's stage
+	 * rather than the loading screen's timeline. Sharing the drawing rather than the schedule
+	 * keeps the asymmetry below identical everywhere chroma bleed appears in this mod - two
+	 * hand-written copies would drift, and mismatched bleed reads as two different faults.</p>
+	 */
+	public static void drawChromaStringAt(GuiGraphics graphics, Font font, String text, int x, int y,
+			int color, float rawOffset) {
+		int offset = Math.round(rawOffset);
 		if (offset > 0) {
-			int ghostAlpha = chromaGhostAlpha(screenTicks);
+			int ghostAlpha = chromaGhostAlpha(rawOffset);
+			// Asymmetric: the red edge sits close, the cyan trails further out and fainter.
+			int trail = Math.max(offset + 1, Math.round(rawOffset * CHROMA_TRAIL_RATIO));
 			graphics.drawString(font, text, x - offset, y, ghostAlpha << 24 | CHROMA_RED, false);
-			graphics.drawString(font, text, x + offset, y, ghostAlpha << 24 | CHROMA_CYAN, false);
+			graphics.drawString(font, text, x + trail, y,
+					ghostAlpha * 3 / 4 << 24 | CHROMA_CYAN, false);
 		}
 		graphics.drawString(font, text, x, y, color, false);
 	}
@@ -172,8 +235,8 @@ public final class AlphaCorruptionRenderer {
 		drawChromaString(graphics, font, text, centerX - font.width(text) / 2, y, color, screenTicks);
 	}
 
-	private static int chromaGhostAlpha(int screenTicks) {
-		float strength = Math.clamp(AlphaLoadTimeline.chromaOffset(screenTicks) / 3.0F, 0.0F, 1.0F);
+	private static int chromaGhostAlpha(float rawOffset) {
+		float strength = Math.clamp(rawOffset / 3.0F, 0.0F, 1.0F);
 		return Math.round(strength * MAX_CHROMA_ALPHA);
 	}
 }

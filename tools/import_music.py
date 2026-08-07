@@ -21,6 +21,15 @@ RATE = 44_100
 # vanilla music they replace and drown the mod's own signal beds. This is a fraction of the master,
 # not of the previous import: re-running always starts from the lossless source.
 GAIN = 0.4
+# Per-slug overrides of that default, same meaning: a fraction of the lossless master.
+#
+# wake_up scores the interface's third body, which is the only stretch of the encounter that is a
+# race rather than a fight. At the shared level it was sitting under its own boss - the shockwaves,
+# the blast cues and eight attack voices all land in the same minutes - and the track that is
+# supposed to say "this is different now" was the quietest thing in the mix.
+GAIN_BY_SLUG = {
+    "wake_up": 0.55,
+}
 QUALITY = "4"
 
 MENU_DIRECTORY = "主菜单BGM"
@@ -44,6 +53,7 @@ TRACKS = (
      "NEEDY GIRL OVERDOSE; Aiobahn +81 - 天使は感動する (feat. Aiobahn +81).flac"),
     ("game", "school_rooftop", GAME_DIRECTORY, "hisohkah; WMD - School Rooftop.flac"),
     ("game", "comfort_chain", GAME_DIRECTORY, "instupendo - Comfort Chain.flac"),
+    ("game", "snowfall", GAME_DIRECTORY, "Øneheart; reidenshi - snowfall.flac"),
     ("pursuit", "level", PURSUIT_DIRECTORY, "niqizhuo,Dapper Husky - level ！.flac"),
     ("encounter", "ncpd_prowl", ENCOUNTER_DIRECTORY, "Marcin Przybyłowicz - NCPD Prowl.flac"),
     ("encounter", "wake_up", ENCOUNTER_DIRECTORY, "MoonDeity - WAKE UP! (Sped Up).flac"),
@@ -60,20 +70,29 @@ def main() -> None:
                         help="Directory holding the per-context master folders.")
     parser.add_argument("--output", required=True, type=Path,
                         help="assets/thefourthfrequency/sounds/music")
+    parser.add_argument("--only", action="append", metavar="SLUG",
+                        help="Re-encode just these slugs. Repeatable. Omit for the whole set.")
     args = parser.parse_args()
+    wanted = set(args.only or ())
+    unknown = wanted - {slug for _, slug, _, _ in TRACKS}
+    if unknown:
+        raise SystemExit(f"unknown slug(s): {', '.join(sorted(unknown))}")
     for category, slug, directory, filename in TRACKS:
+        if wanted and slug not in wanted:
+            continue
         source = args.source / directory / filename
         if not source.is_file():
             raise SystemExit(f"missing master: {source}")
         destination = args.output / category / f"{slug}.ogg"
         destination.parent.mkdir(parents=True, exist_ok=True)
+        gain = GAIN_BY_SLUG.get(slug, GAIN)
         subprocess.run([
             str(args.ffmpeg), "-y", "-hide_banner", "-loglevel", "error",
             "-i", str(source), "-vn", "-map_metadata", "-1",
-            "-filter:a", f"volume={GAIN}", "-ac", "2", "-ar", str(RATE),
+            "-filter:a", f"volume={gain}", "-ac", "2", "-ar", str(RATE),
             "-c:a", "libvorbis", "-q:a", QUALITY, str(destination),
         ], check=True)
-        print(destination)
+        print(f"{destination}  (gain {gain})")
 
 
 if __name__ == "__main__":

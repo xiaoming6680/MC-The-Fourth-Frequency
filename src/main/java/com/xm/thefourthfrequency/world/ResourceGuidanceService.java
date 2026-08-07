@@ -193,8 +193,15 @@ public final class ResourceGuidanceService {
 	 * the real one, so a test still exercises the rules it is checking.</p>
 	 */
 	public static boolean probeForTesting(ServerPlayer player) {
-		if (!TerminalToolService.requestRescan(player)) return false;
 		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
+		// An automatic survey may already be in flight. They are paused while the terminal is open, so
+		// closing it after a long session releases one on the very next tick - and a rescan request is
+		// refused while one is running. This entry point exists to place a deterministic reading, so
+		// it clears whatever the world happened to start on its own instead of losing a race to it.
+		data.updateTerminalRecord(player.getUUID(), record ->
+				record.putLong(TerminalData.MINERAL_SCAN_READY_GAME_TIME, 0L));
+		abandonProbe(player);
+		if (!TerminalToolService.requestRescan(player)) return false;
 		data.updateTerminalRecord(player.getUUID(), record -> record.putLong(
 				TerminalData.MINERAL_SCAN_READY_GAME_TIME, Math.max(1L, player.level().getGameTime())));
 		for (int guard = 0; guard < 256; guard++) {

@@ -22,12 +22,22 @@ public final class TerminalNoticeService {
 	/**
 	 * Completion and its reward are one moment, so they are one line. A separate "task complete"
 	 * notice only ever preceded this one and carried nothing the reward text does not already imply.
+	 *
+	 * <p>The completion half names the task that was finished, because the reward is delivered
+	 * without the player pressing anything: "claimed bread ×6" on its own is an effect with no
+	 * stated cause, and the player who has just been walked through four tabs has no reason to
+	 * connect the two. The name only - {@code TerminalTaskService#taskName}, not the objective line -
+	 * so the whole thing stays one line above the hotbar. A catch-up payout on an old save keeps the
+	 * short form: there is no single moment it belongs to, so naming one task would be picking one
+	 * arbitrarily.</p>
 	 */
-	public static void rewardClaimed(ServerPlayer player, Component rewardName, int rewardCount,
-			boolean completedNow) {
-		send(player, Component.translatable(completedNow
-				? "message.thefourthfrequency.task.completed_reward_claimed"
-				: "message.thefourthfrequency.task.reward_claimed", rewardName, rewardCount),
+	public static void rewardClaimed(ServerPlayer player, Component taskName, Component rewardName,
+			int rewardCount, boolean completedNow) {
+		send(player, completedNow
+				? Component.translatable("message.thefourthfrequency.task.completed_reward_claimed",
+						taskName, rewardName, rewardCount)
+				: Component.translatable("message.thefourthfrequency.task.reward_claimed",
+						rewardName, rewardCount),
 				TerminalNoticePayload.TONE_TASK_COMPLETE);
 	}
 

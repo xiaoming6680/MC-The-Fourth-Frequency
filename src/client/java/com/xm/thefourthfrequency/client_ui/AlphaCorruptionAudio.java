@@ -94,7 +94,7 @@ public final class AlphaCorruptionAudio {
 					AlphaLoadTimeline.BLACKOUT_COLLAPSE_TICKS));
 		}
 		return STATIC_VOLUME * AlphaLoadTimeline.ramp(screenTicks,
-				AlphaLoadTimeline.FLOOD_START_TICK, AlphaLoadTimeline.FLOOD_WIPE_TICKS);
+				AlphaLoadTimeline.FLOOD_START_TICK, AlphaLoadTimeline.FLOOD_STATIC_RISE_TICKS);
 	}
 
 	private static float deadAirTarget(int screenTicks) {

@@ -6,13 +6,7 @@
 				"discipline": "制作",
 				"titles": [
 					{
-						"title": "主创 / 总监",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "制作人",
+						"title": "主创 / 制作人",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -23,13 +17,7 @@
 				"discipline": "设计",
 				"titles": [
 					{
-						"title": "游戏设计",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "系统与数值设计",
+						"title": "游戏与系统设计",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -58,25 +46,13 @@
 				"discipline": "叙事",
 				"titles": [
 					{
-						"title": "世界观设定",
+						"title": "世界观与剧本",
 						"names": [
 							"XIAOMING6680"
 						]
 					},
 					{
-						"title": "剧本与终端文本",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "破损文件与完整日记",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "终末之诗",
+						"title": "文件与终末之诗",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -93,25 +69,13 @@
 				"discipline": "程序",
 				"titles": [
 					{
-						"title": "客户端",
+						"title": "客户端与服务端",
 						"names": [
 							"XIAOMING6680"
 						]
 					},
 					{
-						"title": "服务端",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "网络协议",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "存档与持久化",
+						"title": "网络协议与存档",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -134,19 +98,13 @@
 				"discipline": "美术",
 				"titles": [
 					{
-						"title": "实体模型与贴图",
+						"title": "模型与贴图",
 						"names": [
 							"XIAOMING6680"
 						]
 					},
 					{
-						"title": "界面与 HUD",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "演出与特效",
+						"title": "界面与演出",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -157,13 +115,7 @@
 				"discipline": "音频",
 				"titles": [
 					{
-						"title": "选曲与场景编排",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "音频实现与播放调度",
+						"title": "选曲与音频实现",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -174,19 +126,7 @@
 				"discipline": "质量保证",
 				"titles": [
 					{
-						"title": "功能测试",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "自动化测试",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "版本验收",
+						"title": "测试与版本验收",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -197,13 +137,7 @@
 				"discipline": "文档",
 				"titles": [
 					{
-						"title": "架构与测试文档",
-						"names": [
-							"XIAOMING6680"
-						]
-					},
-					{
-						"title": "世界圣经",
+						"title": "架构文档与世界圣经",
 						"names": [
 							"XIAOMING6680"
 						]
@@ -287,10 +221,8 @@
 				"discipline": "",
 				"titles": [
 					{
-						"title": "谨以此献给每一位听完这段频率的人",
-						"names": [
-							"XIAOMING6680"
-						]
+						"title": "献给每一位听完这段频率的人",
+						"names": []
 					}
 				]
 			}

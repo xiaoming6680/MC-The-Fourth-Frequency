@@ -1,6 +1,6 @@
 package com.xm.thefourthfrequency.mixin;
 
-import com.xm.thefourthfrequency.client_ui.PursuitPresentationClient;
+import com.xm.thefourthfrequency.client_ui.FrameHoldArbiter;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.renderer.GameRenderer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -15,6 +15,10 @@ public abstract class GameRendererPursuitMixin {
 			boolean renderLevel, CallbackInfo callback) {
 		// The hold decision is made at the clear site in MinecraftPursuitFrameHoldMixin, which runs
 		// earlier in the same frame; this only carries it out.
-		if (PursuitPresentationClient.skipRenderFrame()) callback.cancel();
+		//
+		// Both halves must consult the same arbiter. Cancelling the render for one source while
+		// the clear was skipped for another - or vice versa - draws a frame against a depth buffer
+		// that was never cleared, and every piece of world geometry fails the depth test.
+		if (FrameHoldArbiter.skipRenderFrame()) callback.cancel();
 	}
 }

@@ -17,7 +17,10 @@ public final class AnomalyTiming {
 			case "organ_misread" -> 240;
 			case "experience_gap" -> 100;
 			case "local_rule_collapse" -> 160;
-			case "red_horizon" -> 800;
+			// One minute. It was forty seconds, which is not long enough for a sky anomaly to be
+			// looked at twice - the point of this one is that the player checks the terminal, finds
+			// the horizon channel already climbing, and then has to keep standing under it.
+			case "red_horizon" -> 20 * 60;
 			case "window_pulse" -> 80;
 			case "desktop_presence" -> 160;
 			case "channel_override" -> 300;

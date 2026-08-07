@@ -21,8 +21,10 @@ public final class WorldInterfaceAtmosphereController {
 	private static final float FOG_START_FLOOR = 12.0F;
 	private static final float FOG_END_FLOOR = 54.0F;
 	/** Cap so the arena never becomes literally unplayable at full pressure. */
-	private static final float MAX_FOG_PULL = 0.82F;
-	private static final float MAX_SKY_DRAIN = 0.74F;
+	// Raised for the terminal phase. The old ceilings were set when the third form was
+	// something the arena merely contained; it is supposed to be taking the sky by then.
+	private static final float MAX_FOG_PULL = 0.90F;
+	private static final float MAX_SKY_DRAIN = 0.84F;
 
 	private static float pressure;
 
@@ -92,16 +94,32 @@ public final class WorldInterfaceAtmosphereController {
 		WorldInterfaceSnapshotS2C encounter = projection.encounter();
 		if (encounter == null) return 0.0F;
 		if (encounter.outcome() == WorldInterfaceProtocol.Outcome.FAILURE) return 1.0F;
-		return switch (encounter.stage()) {
+		float base = switch (encounter.stage()) {
 			case SUMMONING -> 0.20F;
 			case PHASE_1 -> 0.30F;
 			case PHASE_2 -> 0.56F;
-			case PHASE_3 -> 0.82F;
+			case PHASE_3 -> 0.92F;
 			case SUCCESS_RESOLUTION -> 0.34F;
 			case FAILURE_RESOLUTION -> 1.0F;
 			default -> 0.0F;
 		};
+		// The third phase breathes on its volley clock.
+		//
+		// That phase fires on a fixed interval and nothing in the world said so, which is why the
+		// last salvos read as arbitrary rather than as fast. Pulsing the fog and the sky drain on
+		// the same sawtooth the boss charges to means the arena itself tightens before each volley -
+		// so the rhythm becomes something a player can anticipate instead of only survive.
+		if (encounter.stage() == WorldInterfaceProtocol.Stage.PHASE_3 && client.level != null) {
+			// volleyBreath, never volleyRamp: the ramp is a sawtooth and this drives fog distance
+			// and sky tint, which cover the whole view. See WorldInterfacePalette.volleyBreath.
+			float breath = WorldInterfacePalette.volleyBreath(client.level.getGameTime());
+			base = Math.min(1.0F, base + breath * VOLLEY_PRESSURE_SWING);
+		}
+		return base;
 	}
+
+	/** How much extra pressure the third phase gathers between volleys. */
+	private static final float VOLLEY_PRESSURE_SWING = 0.08F;
 
 	private static int channel(int original, float targetUnit, float amount) {
 		return Math.clamp(Math.round(mix(original, targetUnit * 255.0F, amount)), 0, 255);

@@ -63,7 +63,9 @@ public final class WorldInterfaceDamageService {
 		if (amount <= 0.0F || !player.isAlive()
 				|| gameMode == GameType.CREATIVE || gameMode == GameType.SPECTATOR) return false;
 
+		float adjusted = WorldInterfacePolicy.adjustedPlayerDamage(amount,
+				WorldInterfaceAnchorService.protects(level, player.getX(), player.getZ()));
 		player.invulnerableTime = 0;
-		return player.hurtServer(level, source, amount);
+		return player.hurtServer(level, source, adjusted);
 	}
 }

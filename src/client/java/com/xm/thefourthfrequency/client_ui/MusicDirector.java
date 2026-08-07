@@ -1,7 +1,10 @@
 package com.xm.thefourthfrequency.client_ui;
 
 import com.xm.thefourthfrequency.audio.ModSounds;
+import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.mixin.MusicManagerGainAccessor;
+import com.xm.thefourthfrequency.ending.WorldInterfaceSummonTimeline;
+import com.xm.thefourthfrequency.networking.BossActionS2C;
 import com.xm.thefourthfrequency.networking.WorldInterfaceProtocol;
 import com.xm.thefourthfrequency.networking.WorldInterfaceSnapshotS2C;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -12,6 +15,7 @@ import net.minecraft.client.gui.screens.LevelLoadingScreen;
 import net.minecraft.client.gui.screens.ProgressScreen;
 import net.minecraft.client.gui.screens.WinScreen;
 import net.minecraft.client.resources.sounds.SoundInstance;
+import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.core.Holder;
 import net.minecraft.sounds.Music;
 import net.minecraft.sounds.SoundEvent;
@@ -51,14 +55,14 @@ public final class MusicDirector {
 	 * the drawn value is pinned to the bottom of the range by the time it is used; the upper bound
 	 * states the intent and little else.</p>
 	 *
-	 * <p>Vanilla's pacing was written for one playlist covering a whole game. Six tracks averaging
-	 * just over two minutes, played on that schedule, leave the score audible less than a fifth of
-	 * the time and take well over an hour to come round once - long enough that a player can finish a
+	 * <p>Vanilla's pacing was written for one playlist covering a whole game. Seven tracks averaging
+	 * two minutes eleven, played on that schedule, leave the score audible less than a fifth of the
+	 * time and take some eighty minutes to come round once - long enough that a player can finish a
 	 * stretch of the main line without hearing half of them. At four minutes the score is present
-	 * about a third of the time and the playlist turns over inside a normal sitting, which is as far
-	 * as this can go before it starts working against the mod: silence is the default state here, and
-	 * a track playing is what tells the player the moment is authored, therefore safe. The signal
-	 * beds are what keep those gaps from reading as an empty channel.</p>
+	 * about a third of the time and the playlist turns over in roughly forty, which is inside a
+	 * normal sitting and as far as this can go before it starts working against the mod: silence is
+	 * the default state here, and a track playing is what tells the player the moment is authored,
+	 * therefore safe. The signal beds are what keep those gaps from reading as an empty channel.</p>
 	 *
 	 * <p>The player's music-frequency option still applies. "Frequent" caps the gap at 12000 ticks,
 	 * which is above this and therefore changes nothing; "constant" is hard-coded to 100 ticks in the
@@ -110,10 +114,30 @@ public final class MusicDirector {
 	 */
 	private static final int LOAD_FADE_TICKS = 10;
 
+	/**
+	 * Opt-in trace of every decision this class makes, off unless
+	 * {@code -Dthefourthfrequency.musicDebug=true} is passed to the client.
+	 *
+	 * <p>It exists because nothing else can see this code. The client GameTest runner starts with
+	 * {@code soundCategory_music: 0.0}, so the one automated layer that could exercise the score is
+	 * muted by construction and every branch below has always been verified by ear. A score that
+	 * fails to arrive leaves no trace at all otherwise: no exception, no missing resource, just
+	 * silence that is indistinguishable from silence the fiction asked for.</p>
+	 *
+	 * <p>Logs only on a change of situation, so a whole session is a few dozen lines.</p>
+	 */
+	private static final boolean DEBUG = Boolean.getBoolean("thefourthfrequency.musicDebug");
+	private static Music debugWanted;
+	private static Handover debugHandover;
+	private static String debugPlaying = "";
+
 	private static boolean cut;
 	private static boolean loadingScreen;
 	private static boolean scored;
 	private static boolean initialized;
+	/** An acknowledged ending waiting to arm the exit hold. See {@link EndingScoreHandoff}. */
+	private static boolean runEnded;
+	private static EndingScoreHandoff.State exitHold = EndingScoreHandoff.State.OFF;
 	private static Handover handover = Handover.NONE;
 	private static int handoverTicks;
 	private static float fadeTarget = 1.0F;
@@ -128,6 +152,44 @@ public final class MusicDirector {
 		if (initialized) return;
 		initialized = true;
 		ClientTickEvents.END_CLIENT_TICK.register(MusicDirector::tick);
+	}
+
+	/**
+	 * Reports that the run has finished, so the score follows the player out to the title screen
+	 * instead of being replaced by the menu playlist. See {@link EndingScoreHandoff}.
+	 *
+	 * <p>Called for the success ending only. The failure ending keeps its own track scored all the
+	 * way to the locked menu through {@code scoredOutcome}, so there is nothing there for the menu
+	 * theme to take over from - and its presentation owns that stretch of audio outright.</p>
+	 */
+	public static void noteRunEnded() {
+		runEnded = true;
+	}
+
+	/**
+	 * Whether a disconnect happening right now must leave the music channel playing.
+	 *
+	 * <p>Read by {@code MinecraftEndingScoreCarryMixin}, which is the only thing that can act on it:
+	 * leaving a world stops every sound in the engine, and that is not a fade this class can
+	 * lengthen or a stop it can see coming.</p>
+	 */
+	public static boolean keepsScoreAcrossDisconnect() {
+		return EndingScoreHandoff.keepsSoundsAcrossDisconnect(exitHold);
+	}
+
+	/**
+	 * Stops everything the way leaving a world normally would, except the score.
+	 *
+	 * <p>Category by category rather than all at once, because the engine's own "stop everything" is
+	 * the single call that would take the music with it. Every instance the engine is tracking is
+	 * filed under one of these sources, so the only thing left running afterwards is the track the
+	 * hold is carrying.</p>
+	 */
+	public static void stopEverythingButTheScore(SoundManager sounds) {
+		for (SoundSource source : SoundSource.values()) {
+			if (source == SoundSource.MUSIC) continue;
+			sounds.stop(null, source);
+		}
 	}
 
 	/**
@@ -152,10 +214,23 @@ public final class MusicDirector {
 		WorldInterfaceProtocol.Stage stage = encounterStage();
 		if (stage != null) {
 			switch (stage) {
-				// The fight is scored from the summon, and re-scored when the interface takes its
-				// third body: that morph is the point the encounter stops being survivable and
-				// starts being a race, and it should not be reached to the same music.
-				case SUMMONING, PHASE_1, PHASE_2 -> {
+				// The arrival is scored from its first tick, and the fade-in is the point.
+				//
+				// It used to stay silent until MUSIC_HANDOVER, on the reasoning that the ceremony is
+				// already carried by the rise cue and the anchor chain and that a track underneath
+				// all of that would flatten both. What that actually produced was thirteen seconds
+				// of the biggest entrance in the mod with no score, and then a track arriving after
+				// the thing had already landed. Starting here instead means the score comes up
+				// under the descent - a fade-in has somewhere to go precisely because it starts
+				// from nothing, and the handover machinery is what stops it colliding with whatever
+				// was playing before.
+				case SUMMONING -> {
+					return ENCOUNTER;
+				}
+				// Re-scored when the interface takes its third body: that morph is the point the
+				// encounter stops being survivable and starts being a race, and it should not be
+				// reached to the same music.
+				case PHASE_1, PHASE_2 -> {
 					return ENCOUNTER;
 				}
 				case PHASE_3 -> {
@@ -171,10 +246,15 @@ public final class MusicDirector {
 				}
 			}
 		}
-		if (loading(client)) return null;
+		// Both of the next two answers change while the exit hold is in force: the load out of a
+		// finished run is not a gap to be covered with silence, it is the middle of a track, and the
+		// title screen on the far side of it is where that track is going.
+		boolean holding = EndingScoreHandoff.holdsScore(exitHold);
+		if (loading(client)) return holding ? GAME : null;
 		// The menu theme waits for the safety notice to be dismissed. Until then the title screen is
 		// still carrying a page the player has to read, and scoring it would work against that.
 		if (client.player == null || client.level == null) {
+			if (holding) return GAME;
 			return FirstRunNoticeController.released() ? MENU : null;
 		}
 		// Any other boss bar that asked for its own music - the vanilla dragon, a wither - is still
@@ -209,20 +289,25 @@ public final class MusicDirector {
 			silenceGain(client);
 		}
 		cut = wanted;
+		boolean nowLoading = loading(client);
+		tickExitHold(client, nowLoading);
 		// Backstop for a load short enough that even the half-second ramp below could not finish
 		// inside it: whatever is left has to go, or the menu playlist swells back up in the world it
 		// faded out for. Normally the ramp has already handed the track back before this fires.
 		//
-		// A pursuit is the one load this must keep its hands off: the blackout covers a dimension
-		// transfer, and the pursuit theme is already fading in underneath it by the time the
-		// loading screen goes away.
-		boolean nowLoading = loading(client);
-		if (!nowLoading && loadingScreen && !PursuitPresentationClient.scoresMusic()) {
+		// Two loads this must keep its hands off. A pursuit: the blackout covers a dimension
+		// transfer, and the pursuit theme is already fading in underneath it by the time the loading
+		// screen goes away. And the exit out of a finished run: the track the hold is carrying is
+		// meant to be on the other side of that load, so stopping it here would undo the handoff
+		// this backstop was never asked to police.
+		if (!nowLoading && loadingScreen && !PursuitPresentationClient.scoresMusic()
+				&& !EndingScoreHandoff.holdsScore(exitHold)) {
 			client.getMusicManager().stopPlaying();
 			silenceGain(client);
 		}
 		loadingScreen = nowLoading;
 		tickHandover(client);
+		traceScore(client);
 		// The manager starts life at full gain and only ever eases it while a track is already
 		// playing, so the first song of a session would otherwise begin at full volume. Zeroing on
 		// the edge into "there is a score again" buys that first entrance a fade-in too. A handover
@@ -244,7 +329,29 @@ public final class MusicDirector {
 		} else if (nowLoading) {
 			fadeOutForWorldEntry(client);
 		}
+		// Last, so it sees the gain every other path has finished writing for this tick.
+		tickStuckScore(client, scoring);
 		scored = scoring != null;
+	}
+
+	/**
+	 * Advances the exit hold, and spends the pending ending on the tick it arms.
+	 *
+	 * <p>Runs before anything in {@link #tick} that reads the loading edge, so the tick the player
+	 * lands on the title screen is already holding by the time the backstop is considered.</p>
+	 */
+	private static void tickExitHold(Minecraft client, boolean nowLoading) {
+		boolean inWorld = client.level != null && client.player != null;
+		// The channel itself, not a timer: the carried track's length is whatever the resource pack
+		// ships, and the manager is already tracking when it ends.
+		boolean scorePlaying = ((MusicManagerGainAccessor) client.getMusicManager())
+				.thefourthfrequency$currentMusic() != null;
+		EndingScoreHandoff.State next = EndingScoreHandoff.next(exitHold, runEnded, inWorld, nowLoading,
+				scorePlaying);
+		if (exitHold == EndingScoreHandoff.State.OFF && next == EndingScoreHandoff.State.ARMED) {
+			runEnded = false;
+		}
+		exitHold = next;
 	}
 
 	/**
@@ -268,7 +375,7 @@ public final class MusicDirector {
 		}
 		float remaining = 1.0F - ++loadFadeTicks / (float) LOAD_FADE_TICKS;
 		if (remaining > 0.0F) {
-			manager.thefourthfrequency$setCurrentGain(loadFadeFrom * remaining);
+			writeGain(client, loadFadeFrom * remaining);
 			return;
 		}
 		// Inaudible by now, so this stop cannot be heard - but it does hand the track back. Left
@@ -340,7 +447,10 @@ public final class MusicDirector {
 					gain = fadeTarget;
 					handover = Handover.NONE;
 				}
-				manager.thefourthfrequency$setCurrentGain(gain);
+				// Through writeGain, so the tick that ends the handover is also the tick the engine
+				// is told about - see writeGain. Landing on the target is precisely the state in
+				// which vanilla will never run another fade to do it for us.
+				writeGain(client, gain);
 			}
 		}
 	}
@@ -398,20 +508,165 @@ public final class MusicDirector {
 	private static void deepenFadeOut(Minecraft client) {
 		MusicManagerGainAccessor manager = (MusicManagerGainAccessor) client.getMusicManager();
 		if (manager.thefourthfrequency$currentMusic() == null) return;
-		manager.thefourthfrequency$setCurrentGain(
-				manager.thefourthfrequency$currentGain() * STEEP_FADE_OUT);
+		writeGain(client, manager.thefourthfrequency$currentGain() * STEEP_FADE_OUT);
 	}
 
 	private static void silenceGain(Minecraft client) {
 		MusicManagerGainAccessor manager = (MusicManagerGainAccessor) client.getMusicManager();
 		if (manager.thefourthfrequency$currentMusic() != null) return;
-		manager.thefourthfrequency$setCurrentGain(0.0F);
-		client.getSoundManager().updateCategoryVolume(SoundSource.MUSIC, 0.0F);
+		writeGain(client, 0.0F);
+	}
+
+	/**
+	 * Writes the fade's gain, and pushes it into the sound engine in the same breath.
+	 *
+	 * <p>These are two values, not one. {@code currentGain} is the music manager's bookkeeping; the
+	 * engine multiplies every sound in the category by its own {@code gainBySource} entry, and the
+	 * only thing in the game that ever writes that entry is {@code MusicManager.fadePlaying} - which
+	 * the manager calls <em>only</em> while {@code currentGain != getMusicVolume()}.
+	 *
+	 * <p>So a gain this class writes by hand is invisible until vanilla happens to run a fade, and a
+	 * gain this class writes that lands exactly on the target guarantees vanilla never runs one
+	 * again: from that tick the engine keeps whatever it last received, for the rest of the session.
+	 * {@link #silenceGain} deliberately puts a zero there, so every path that leaves the gain parked
+	 * on the target without a fade in between is a way to mute the entire music category
+	 * permanently - silently, and with every other category still audible.
+	 *
+	 * <p>Keeping the two in step here removes the whole class of failure rather than the one path
+	 * that was noticed. It costs one call: {@code updateCategoryVolume} only writes a float into a
+	 * map and multiplies the channels already open in that category.
+	 */
+	private static void writeGain(Minecraft client, float gain) {
+		float clamped = Math.clamp(gain, 0.0F, 1.0F);
+		((MusicManagerGainAccessor) client.getMusicManager()).thefourthfrequency$setCurrentGain(clamped);
+		client.getSoundManager().updateCategoryVolume(SoundSource.MUSIC, clamped);
+	}
+
+	/**
+	 * Ticks a wanted score may stay inaudible before the director puts the gain back itself.
+	 *
+	 * <p>Five seconds. Long enough that no legitimate fade, handover or one-tick edge can reach it,
+	 * short enough that a player who has just lost the music gets it back inside a breath.
+	 */
+	private static final int STUCK_SCORE_TICKS = 100;
+	private static int stuckTicks;
+
+	/**
+	 * Puts the music back when the fade gain has been left parked at zero.
+	 *
+	 * <p>{@link #writeGain} already documents the hazard this closes, and it is worth restating because
+	 * the consequence is so much larger than the mechanism: the engine multiplies every sound in a
+	 * category by one float, the only thing in the game that writes that float is the music manager's
+	 * fade, and the fade only runs while {@code currentGain != target}. So any path that leaves the
+	 * gain sitting exactly on a target of <em>zero</em> mutes the whole music category for the rest of
+	 * the session. Not one track - the category. Every other sound in the game carries on, which is
+	 * precisely why it reads as "the BGM disappeared" rather than as anything being broken.
+	 *
+	 * <p>Keeping the two values in step, which is what {@code writeGain} does, removes the paths this
+	 * class knows about. It cannot remove the ones it does not: vanilla stops a faded-out track on its
+	 * own schedule, the Alpha resource swap reloads the sound engine underneath all of this, and a
+	 * world change tears down every channel. Rather than chase each of those, this asserts the
+	 * invariant directly - <em>while a score is wanted and no handover is running, the music gain must
+	 * not be pinned at zero</em> - and repairs it when it is violated for long enough to be real.
+	 *
+	 * <p>Two shapes count as violations, and the distinction matters because only one of them is
+	 * unambiguous from the player's chair:
+	 * <ul>
+	 *   <li>a track <em>is</em> in the channel and the gain is zero - it is playing, holding a
+	 *       streaming channel, and inaudible. There is no reading of that which is correct.</li>
+	 *   <li>nothing is in the channel, the gain is zero, and what is wanted is one of the tracks that
+	 *       is supposed to start promptly. The ordinary playlist is excluded here: it sits between
+	 *       songs for minutes at a time by design, and repairing during that gap would cost the next
+	 *       track its fade-in for no reason.</li>
+	 * </ul>
+	 *
+	 * <p>A player who has turned music off in the options is left alone - the target is genuinely zero
+	 * for them, and there is nothing to repair.
+	 */
+	private static void tickStuckScore(Minecraft client, Music scoring) {
+		MusicManagerGainAccessor manager = (MusicManagerGainAccessor) client.getMusicManager();
+		SoundInstance playing = manager.thefourthfrequency$currentMusic();
+		float gain = manager.thefourthfrequency$currentGain();
+		boolean suspect = scoring != null && handover == Handover.NONE && fadeTarget > 0.0F
+				&& gain <= 0.0F && (playing != null || startsPromptly(scoring));
+		if (!suspect) {
+			stuckTicks = 0;
+			return;
+		}
+		if (++stuckTicks < STUCK_SCORE_TICKS) return;
+		stuckTicks = 0;
+		TheFourthFrequency.LOGGER.warn(
+				"World-interface music was left inaudible (wanted={} playing={} gain={} target={});"
+						+ " restoring the music category gain",
+				trackName(scoring), playing == null ? "none" : playing.getIdentifier(), gain, fadeTarget);
+		writeGain(client, fadeTarget);
+		// Hands the channel back as well, so a track that was stopped while silent is re-picked at
+		// once rather than after the manager's five-second post-stop delay.
+		if (playing == null) manager.thefourthfrequency$setNextSongDelay(0);
+	}
+
+	/**
+	 * Tracks that answer a moment and must therefore start at that moment.
+	 *
+	 * <p>Everything here is either handed over or flagged to replace whatever is playing. The ordinary
+	 * playlist and the menu theme are deliberately absent: both are allowed to sit silent between
+	 * songs, and that silence is not a fault to be repaired.
+	 */
+	private static boolean startsPromptly(Music wanted) {
+		return wanted == PURSUIT || wanted == ENCOUNTER || wanted == ENCOUNTER_FINAL
+				|| wanted == ENDING || wanted == ENDING_FAILURE;
+	}
+
+	/**
+	 * One line per change of situation: what was asked for, what is actually in the channel, and the
+	 * two numbers that decide whether it can be heard.
+	 *
+	 * <p>{@code gain} is the music manager's own fade value and {@code target} is where it is headed.
+	 * A track named in {@code playing} with a gain pinned at zero is a different fault from no track
+	 * at all, and the two are indistinguishable from the player's chair - which is the whole reason
+	 * this is here.</p>
+	 */
+	private static void traceScore(Minecraft client) {
+		if (!DEBUG) return;
+		MusicManagerGainAccessor manager = (MusicManagerGainAccessor) client.getMusicManager();
+		SoundInstance instance = manager.thefourthfrequency$currentMusic();
+		String playing = instance == null ? "none" : instance.getIdentifier().toString();
+		Music wanted = wantedMusic(client);
+		if (wanted == debugWanted && handover == debugHandover && playing.equals(debugPlaying)) return;
+		debugWanted = wanted;
+		debugHandover = handover;
+		debugPlaying = playing;
+		TheFourthFrequency.LOGGER.info(
+				"[music] stage={} wanted={} handover={} playing={} gain={} target={}",
+				encounterStage(), trackName(wanted), handover, playing,
+				manager.thefourthfrequency$currentGain(), fadeTarget);
+	}
+
+	private static String trackName(Music music) {
+		return music == null ? "silence" : music.sound().value().location().toString();
 	}
 
 	private static WorldInterfaceProtocol.Stage encounterStage() {
 		WorldInterfaceSnapshotS2C encounter = WorldInterfaceClientState.snapshot().encounter();
 		return encounter == null ? null : encounter.stage();
+	}
+
+	/**
+	 * Ticks into the summon ceremony, or -1 when one is not running.
+	 *
+	 * <p>Read off the action wire rather than tracked here: {@code BossActionS2C} already carries
+	 * the start tick and the duration, so the client knows exactly how far into the arrival it is
+	 * without a second clock that could drift from the server's.
+	 */
+	private static long summonAge() {
+		Minecraft client = Minecraft.getInstance();
+		if (client.level == null) return -1L;
+		WorldInterfaceClientState.Projection projection = WorldInterfaceClientState.snapshot();
+		long now = client.level.getGameTime();
+		if (!projection.actionActive(now)) return -1L;
+		BossActionS2C action = projection.action();
+		if (action.action() != WorldInterfaceProtocol.BossAction.SUMMONING) return -1L;
+		return now - action.startTick();
 	}
 
 	private static boolean endingScored() {

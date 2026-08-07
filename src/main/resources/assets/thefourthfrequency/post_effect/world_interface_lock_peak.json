@@ -1,112 +1,109 @@
 {
   "targets": {
-    "veil": {},
-    "temp": {}
+    "treated": {}
   },
   "passes": [
     {
       "vertex_shader": "minecraft:core/screenquad",
-      "fragment_shader": "minecraft:post/box_blur",
+      "fragment_shader": "thefourthfrequency:post/digital_corrupt",
       "inputs": [
         {
           "sampler_name": "In",
-          "target": "minecraft:main",
-          "bilinear": true
+          "target": "minecraft:main"
         }
       ],
-      "output": "temp",
+      "output": "treated",
       "uniforms": {
-        "BlurConfig": [
+        "CorruptConfig": [
           {
-            "name": "BlurDir",
-            "type": "vec2",
-            "value": [1.0, 0.0]
-          },
-          {
-            "name": "Radius",
+            "name": "Strength",
             "type": "float",
-            "value": 9.0
-          }
-        ]
-      }
-    },
-    {
-      "vertex_shader": "minecraft:core/screenquad",
-      "fragment_shader": "minecraft:post/box_blur",
-      "inputs": [
-        {
-          "sampler_name": "In",
-          "target": "temp",
-          "bilinear": true
-        }
-      ],
-      "output": "veil",
-      "uniforms": {
-        "BlurConfig": [
-          {
-            "name": "BlurDir",
-            "type": "vec2",
-            "value": [0.0, 1.0]
+            "value": 1.0
           },
           {
-            "name": "Radius",
+            "name": "HoldTicks",
             "type": "float",
-            "value": 9.0
-          }
-        ]
-      }
-    },
-    {
-      "vertex_shader": "minecraft:core/screenquad",
-      "fragment_shader": "minecraft:post/color_convolve",
-      "inputs": [
-        {
-          "sampler_name": "In",
-          "target": "veil"
-        }
-      ],
-      "output": "temp",
-      "uniforms": {
-        "ColorConfig": [
-          {
-            "name": "RedMatrix",
-            "type": "vec3",
-            "value": [0.58, 0.20, 0.36]
+            "value": 7.0
           },
           {
-            "name": "GreenMatrix",
-            "type": "vec3",
-            "value": [0.06, 0.18, 0.06]
-          },
-          {
-            "name": "BlueMatrix",
-            "type": "vec3",
-            "value": [0.42, 0.26, 0.86]
-          }
-        ]
-      }
-    },
-    {
-      "vertex_shader": "minecraft:core/screenquad",
-      "fragment_shader": "minecraft:post/bits",
-      "inputs": [
-        {
-          "sampler_name": "In",
-          "target": "temp"
-        }
-      ],
-      "output": "veil",
-      "uniforms": {
-        "BitsConfig": [
-          {
-            "name": "Resolution",
+            "name": "BandHeight",
             "type": "float",
-            "value": 9.0
+            "value": 6.0
           },
           {
-            "name": "MosaicSize",
+            "name": "BandShift",
             "type": "float",
-            "value": 2.0
+            "value": 0.022
+          },
+          {
+            "name": "BandLoss",
+            "type": "float",
+            "value": 0.1
+          },
+          {
+            "name": "ChannelSplit",
+            "type": "float",
+            "value": 5.0
+          },
+          {
+            "name": "BlockSize",
+            "type": "float",
+            "value": 7.0
+          },
+          {
+            "name": "BlockShare",
+            "type": "float",
+            "value": 0.26
+          },
+          {
+            "name": "Levels",
+            "type": "float",
+            "value": 0.0
+          },
+          {
+            "name": "Desaturate",
+            "type": "float",
+            "value": 0.24
+          },
+          {
+            "name": "CenterClear",
+            "type": "float",
+            "value": 0.42
+          },
+          {
+            "name": "EdgeRadius",
+            "type": "float",
+            "value": 1.1
+          },
+          {
+            "name": "ScanDepth",
+            "type": "float",
+            "value": 0.0
+          },
+          {
+            "name": "ScanPitch",
+            "type": "float",
+            "value": 3.0
+          },
+          {
+            "name": "Vignette",
+            "type": "float",
+            "value": 0.0
+          },
+          {
+            "name": "FinalDesaturate",
+            "type": "float",
+            "value": 0.0
+          },
+          {
+            "name": "Tint",
+            "type": "vec4",
+            "value": [
+              0.92,
+              0.16,
+              0.24,
+              0.52
+            ]
           }
         ]
       }
@@ -117,7 +114,7 @@
       "inputs": [
         {
           "sampler_name": "In",
-          "target": "veil"
+          "target": "treated"
         }
       ],
       "output": "minecraft:main",
@@ -126,7 +123,12 @@
           {
             "name": "ColorModulate",
             "type": "vec4",
-            "value": [0.88, 0.70, 1.0, 1.0]
+            "value": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
           }
         ]
       }

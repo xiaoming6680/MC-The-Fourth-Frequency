@@ -113,7 +113,8 @@ public final class WorldInterfaceState {
 		if (!current.valid()) return MutationResult.rejected("stored_state_invalid", current);
 
 		if (arena.gates().stream().anyMatch(value -> value.state() != WorldInterfaceGatewayState.DORMANT)
-				|| arena.anchors().stream().anyMatch(value -> value.destroyed() || value.crystalUuid().isEmpty())) {
+				|| arena.anchors().stream().anyMatch(value -> value.destroyed()
+						|| value.anchorEntityUuid().isEmpty())) {
 			return MutationResult.rejected("initial_layout_not_pristine", current);
 		}
 		MutableState mutable = MutableState.initial(encounterId, arena, seed);
@@ -332,8 +333,13 @@ public final class WorldInterfaceState {
 				|| state.terminalTransactions().values().stream()
 				.anyMatch(value -> value.state() != TerminalTransactionState.COMMITTED))) throw invalid("partial_commit");
 		if (!state.sacrificeCommitted() && hasCommittedTransaction) throw invalid("unlocked_committed_transaction");
+		// The partial_commit check above guarantees a non-empty roster whenever the sacrifice is
+		// committed, and ritual_membership caps it at MAX_ROSTER_SIZE, so the policy's 1..8
+		// precondition holds. Deferring to the policy keeps this invariant from having to be
+		// re-derived by hand every time the pool's shape changes.
 		if (state.sacrificeCommitted()
-				&& Math.abs(state.maxVirtualHealth() - 600.0D * state.frozenRoster().size()) > 0.000_001D) {
+				&& Math.abs(state.maxVirtualHealth()
+						- WorldInterfacePolicy.maxHealth(state.frozenRoster().size())) > 0.000_001D) {
 			throw invalid("maximum_health_roster_mismatch");
 		}
 		if (state.stage().wireId() >= WorldInterfaceStage.SUMMONING.wireId()
@@ -392,6 +398,7 @@ public final class WorldInterfaceState {
 		List<Anchor> result = new ArrayList<>(ANCHOR_COUNT);
 		for (int i = 0; i < list.size(); i++) {
 			CompoundTag entry = list.getCompoundOrEmpty(i);
+			// Disk key deliberately unchanged; see Anchor for why the Java name no longer says crystal.
 			result.add(new Anchor(entry.getIntOr("index", -1), BlockPos.of(entry.getLongOr("position", 0L)),
 					optionalUuid(entry.getStringOr("crystal_uuid", "")), entry.getBooleanOr("destroyed", false)));
 		}
@@ -405,7 +412,7 @@ public final class WorldInterfaceState {
 			CompoundTag entry = new CompoundTag();
 			entry.putInt("index", value.index());
 			entry.putLong("position", value.position().asLong());
-			value.crystalUuid().ifPresent(uuid -> entry.putString("crystal_uuid", uuid.toString()));
+			value.anchorEntityUuid().ifPresent(uuid -> entry.putString("crystal_uuid", uuid.toString()));
 			entry.putBoolean("destroyed", value.destroyed());
 			list.add(entry);
 		}
@@ -709,10 +716,19 @@ public final class WorldInterfaceState {
 		}
 	}
 
-	public record Anchor(int index, BlockPos position, Optional<UUID> crystalUuid, boolean destroyed) {
+	/**
+	 * One arena anchor slot.
+	 *
+	 * <p>{@code anchorEntityUuid} is the identity of whatever entity currently stands in the slot.
+	 * It used to be called {@code crystalUuid}, back when that entity was always a tagged
+	 * {@link net.minecraft.world.entity.boss.enderdragon.EndCrystal}; the disk key is still
+	 * {@code crystal_uuid} on purpose, so a world saved before the bespoke anchor entity existed
+	 * decodes without a migration step. Only the Java name moved.</p>
+	 */
+	public record Anchor(int index, BlockPos position, Optional<UUID> anchorEntityUuid, boolean destroyed) {
 		public Anchor {
 			Objects.requireNonNull(position, "position");
-			crystalUuid = crystalUuid == null ? Optional.empty() : crystalUuid;
+			anchorEntityUuid = anchorEntityUuid == null ? Optional.empty() : anchorEntityUuid;
 		}
 	}
 
@@ -857,8 +873,9 @@ public final class WorldInterfaceState {
 							|| value.state() == TerminalTransactionState.COMMITTED).count();
 		}
 
-		public Optional<Anchor> anchorForCrystal(UUID crystalId) {
-			return anchors.stream().filter(value -> value.crystalUuid().filter(crystalId::equals).isPresent())
+		public Optional<Anchor> anchorForEntity(UUID anchorEntityId) {
+			return anchors.stream()
+					.filter(value -> value.anchorEntityUuid().filter(anchorEntityId::equals).isPresent())
 					.findFirst();
 		}
 
@@ -1036,15 +1053,16 @@ public final class WorldInterfaceState {
 			}
 		}
 
-		public void bindAnchorCrystal(int index, UUID crystalUuid) {
+		public void bindAnchorEntity(int index, UUID anchorEntityUuid) {
 			Anchor anchor = anchorAt(index);
-			anchors.set(index, new Anchor(index, anchor.position(), Optional.of(crystalUuid), anchor.destroyed()));
+			anchors.set(index, new Anchor(index, anchor.position(), Optional.of(anchorEntityUuid),
+					anchor.destroyed()));
 		}
 
 		public boolean markAnchorDestroyed(int index) {
 			Anchor anchor = anchorAt(index);
 			if (anchor.destroyed()) return false;
-			anchors.set(index, new Anchor(index, anchor.position(), anchor.crystalUuid(), true));
+			anchors.set(index, new Anchor(index, anchor.position(), anchor.anchorEntityUuid(), true));
 			return true;
 		}
 

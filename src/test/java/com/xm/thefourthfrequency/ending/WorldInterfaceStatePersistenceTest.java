@@ -108,7 +108,9 @@ final class WorldInterfaceStatePersistenceTest {
 				stage, WorldInterfaceState.Outcome.SUCCESS, 1, "minecraft:the_end",
 				BlockPos.ZERO, new BlockPos(0, 65, 0), new BlockPos(0, 65, 8), 20,
 				gates(), anchors(), roster, transactions, true, bossUuid,
-				1_200.0D, 0.0D, 4_800L, -1L, 0x574F524C44494E54L,
+				// Validation refuses any committed state whose pool disagrees with its roster, so this
+				// is asked for rather than written out: the fixture is about persistence, not balance.
+				WorldInterfacePolicy.maxHealth(roster.size()), 0.0D, 4_800L, -1L, 0x574F524C44494E54L,
 				Optional.empty(), 4_700L, 9L, 9, 5_000L, 4_000L,
 				Map.of(FIRST_PLAYER, 5_200L), 0, 321, respawns, poems, List.of(recovery),
 				Optional.of(FRIENDLY_DRAGON_ID), new BlockPos(0, 65, 0), true, 3, 9_000L);

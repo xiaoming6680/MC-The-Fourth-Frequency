@@ -1,59 +1,134 @@
 {
   "targets": {
-    "monochrome": {}
+    "treated": {}
   },
   "passes": [
     {
       "vertex_shader": "minecraft:core/screenquad",
-      "fragment_shader": "minecraft:post/color_convolve",
+      "fragment_shader": "thefourthfrequency:post/digital_corrupt",
       "inputs": [
         {
           "sampler_name": "In",
           "target": "minecraft:main"
         }
       ],
-      "output": "monochrome",
+      "output": "treated",
       "uniforms": {
-        "ColorConfig": [
+        "CorruptConfig": [
           {
-            "name": "RedMatrix",
-            "type": "vec3",
-            "value": [0.3, 0.59, 0.11]
+            "name": "Strength",
+            "type": "float",
+            "value": 0.8
           },
           {
-            "name": "GreenMatrix",
-            "type": "vec3",
-            "value": [0.3, 0.59, 0.11]
+            "name": "HoldTicks",
+            "type": "float",
+            "value": 9.0
           },
           {
-            "name": "BlueMatrix",
-            "type": "vec3",
-            "value": [0.3, 0.59, 0.11]
+            "name": "BandHeight",
+            "type": "float",
+            "value": 6.0
+          },
+          {
+            "name": "BandShift",
+            "type": "float",
+            "value": 0.01
+          },
+          {
+            "name": "BandLoss",
+            "type": "float",
+            "value": 0.05
+          },
+          {
+            "name": "ChannelSplit",
+            "type": "float",
+            "value": 1.5
+          },
+          {
+            "name": "BlockSize",
+            "type": "float",
+            "value": 4.0
+          },
+          {
+            "name": "BlockShare",
+            "type": "float",
+            "value": 0.1
+          },
+          {
+            "name": "Levels",
+            "type": "float",
+            "value": 10.0
+          },
+          {
+            "name": "Desaturate",
+            "type": "float",
+            "value": 1.0
+          },
+          {
+            "name": "CenterClear",
+            "type": "float",
+            "value": 0.0
+          },
+          {
+            "name": "EdgeRadius",
+            "type": "float",
+            "value": 0.0
+          },
+          {
+            "name": "ScanDepth",
+            "type": "float",
+            "value": 0.1
+          },
+          {
+            "name": "ScanPitch",
+            "type": "float",
+            "value": 3.0
+          },
+          {
+            "name": "Vignette",
+            "type": "float",
+            "value": 0.3
+          },
+          {
+            "name": "FinalDesaturate",
+            "type": "float",
+            "value": 1.0
+          },
+          {
+            "name": "Tint",
+            "type": "vec4",
+            "value": [
+              0.7,
+              0.73,
+              0.8,
+              0.12
+            ]
           }
         ]
       }
     },
     {
       "vertex_shader": "minecraft:core/screenquad",
-      "fragment_shader": "minecraft:post/bits",
+      "fragment_shader": "minecraft:post/blit",
       "inputs": [
         {
           "sampler_name": "In",
-          "target": "monochrome"
+          "target": "treated"
         }
       ],
       "output": "minecraft:main",
       "uniforms": {
-        "BitsConfig": [
+        "BlitConfig": [
           {
-            "name": "Resolution",
-            "type": "float",
-            "value": 8.0
-          },
-          {
-            "name": "MosaicSize",
-            "type": "float",
-            "value": 2.0
+            "name": "ColorModulate",
+            "type": "vec4",
+            "value": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
           }
         ]
       }

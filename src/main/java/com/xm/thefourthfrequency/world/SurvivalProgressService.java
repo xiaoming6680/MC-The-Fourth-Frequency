@@ -3,6 +3,8 @@ package com.xm.thefourthfrequency.world;
 import com.xm.thefourthfrequency.content.TerminalData;
 import com.xm.thefourthfrequency.terminal.AmbientAnomalyService;
 import com.xm.thefourthfrequency.terminal.TerminalRuntimeService;
+import com.xm.thefourthfrequency.terminal.TerminalStructureTarget;
+import com.xm.thefourthfrequency.terminal.TerminalTaskService;
 import com.xm.thefourthfrequency.pursuit.PursuitDimensions;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.BlockPos;
@@ -12,6 +14,8 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.stats.Stats;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.tags.TagKey;
+import net.minecraft.world.level.levelgen.structure.Structure;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -59,11 +63,19 @@ public final class SurvivalProgressService {
 		if (wood >= REQUIRED_WOOD) add |= SurvivalMilestone.MINED_LOGS.mask();
 		if (iron >= REQUIRED_IRON) add |= SurvivalMilestone.IRON.mask();
 		if (preparedForNether(player)) add |= SurvivalMilestone.PREPARED_NETHER.mask();
-		if (blazeRods >= REQUIRED_BLAZE_RODS) add |= SurvivalMilestone.COLLECTED_BLAZE_RODS.mask();
+		if (blazeRods >= REQUIRED_BLAZE_RODS) {
+			// Blazes spawn nowhere else, so rods in hand are proof of a fortress visited whether or not
+			// the player was carrying the terminal when they walked through it. Without this the task
+			// list deadlocks: it advances strictly in order, so a player who stumbled into a fortress
+			// and left with eight rods before the terminal ever named the objective would be held at
+			// "find a fortress" with the thing already behind them.
+			add |= SurvivalMilestone.COLLECTED_BLAZE_RODS.mask() | SurvivalMilestone.FOUND_FORTRESS.mask();
+		}
 		if (craftedEyes >= REQUIRED_CRAFTED_EYES) add |= SurvivalMilestone.CRAFTED_EYE.mask();
 		if (before.getIntOr(TerminalData.EYE_SAMPLE_COUNT, 0) > 0) {
 			add |= SurvivalMilestone.THREW_EYE.mask();
 		}
+		if (insideNetherFortress(player)) add |= SurvivalMilestone.FOUND_FORTRESS.mask();
 		if (nearRecordedStronghold(player, before)) add |= SurvivalMilestone.FOUND_STRONGHOLD.mask();
 		if (player.level().dimension() == Level.END) {
 			add |= SurvivalMilestone.ENTERED_END.mask();
@@ -82,6 +94,12 @@ public final class SurvivalProgressService {
 						Math.clamp(craftedEyes, 0, REQUIRED_CRAFTED_EYES));
 			});
 		}
+		// Progress changing is the moment a task can complete, so it is the moment its reward is owed.
+		// While this only synchronized the attention projection, a finished task lit the terminal up
+		// and then waited for the player to open a page or trip a signal before paying out - which is
+		// the gap the old manual claim button existed to cover. Delivery is added to what this call
+		// already did rather than replacing it: the attention projection has other inputs than tasks.
+		TerminalTaskService.notifyIfCompleted(player);
 		TerminalRuntimeService.synchronizeAttentionProjection(player, data);
 	}
 
@@ -92,7 +110,11 @@ public final class SurvivalProgressService {
 		if (record == null || milestone.present(record.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0))) return false;
 		data.updateTerminalRecord(player.getUUID(), tag -> tag.putInt(TerminalData.SURVIVAL_MILESTONE_MASK,
 				tag.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0) | milestone.mask()));
+		// Milestones that are marked rather than counted (entering the Nether, finding the stronghold)
+		// complete their task here and nowhere else, so they pay out here too - in addition to the
+		// refresh this always owed, not instead of it.
 		TerminalRuntimeService.refresh(player);
+		TerminalTaskService.notifyIfCompleted(player);
 		if (milestone == SurvivalMilestone.ENTERED_NETHER || milestone == SurvivalMilestone.THREW_EYE) {
 			AmbientAnomalyService.scheduleSignature(player);
 		}
@@ -182,6 +204,30 @@ public final class SurvivalProgressService {
 			if (stack.is(item)) count += stack.getCount();
 		}
 		return count;
+	}
+
+	/**
+	 * Whether the player is standing in a Nether fortress right now.
+	 *
+	 * <p>The same test the structure navigator calls arrival - one of the structure's own generated
+	 * pieces is under the player's feet - rather than a radius around a located position. A fortress
+	 * sprawls, so any single point plus a radius is either wide enough to fire from outside it or
+	 * tight enough to miss most of the inside; the pieces are the building.
+	 *
+	 * <p>Reads only what generation has already placed. {@code getStructureWithPieceAt} does not force
+	 * chunks, and the player standing there means the chunk is loaded anyway - so this stays a lookup
+	 * rather than a search, which is why it can sit in the once-a-second poll with the rest.
+	 *
+	 * <p>Nether-only as a cheap guard: {@link TerminalStructureTarget#FORTRESS}'s tag holds the Nether
+	 * fortress, and asking any other dimension for it is work that can only ever answer no.
+	 */
+	private static boolean insideNetherFortress(ServerPlayer player) {
+		if (player.level().dimension() != Level.NETHER) return false;
+		TagKey<Structure> fortress = TerminalStructureTarget.FORTRESS.structureTag();
+		if (fortress == null) return false;
+		// Never null: a miss comes back as StructureStart.INVALID_START, so isValid is the real test.
+		return player.level().structureManager()
+				.getStructureWithPieceAt(player.blockPosition(), fortress).isValid();
 	}
 
 	private static boolean nearRecordedStronghold(ServerPlayer player, CompoundTag tag) {

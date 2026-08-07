@@ -13,12 +13,23 @@ final class AnomalyTimingTest {
 	private static final int MAX_EVENT_TICKS = 800;
 	private static final int MIN_SUSTAINED_TICKS = 2_400;
 	private static final int MAX_SUSTAINED_TICKS = 6_000;
+	/**
+	 * The sky anomaly sits between the two bands, on purpose.
+	 *
+	 * <p>It is not an event - forty seconds was not long enough to check the terminal, read the
+	 * horizon channel and then still be standing under it - and it is not one of the sustained tier
+	 * either, which exist to fill the gaps between events and run for minutes. One minute is its own
+	 * thing, so it is asserted as its own thing rather than by widening a band it does not belong to.
+	 */
+	private static final int RED_HORIZON_TICKS = 20 * 60;
 
 	@Test
 	void everyCatalogEntryHasBoundedActiveTiming() {
 		for (AnomalyDefinition definition : AnomalyCatalog.definitions()) {
 			int duration = AnomalyTiming.durationTicks(definition.id(), 123456789L);
-			if (SUSTAINED.contains(definition.id())) {
+			if (definition.id().equals("red_horizon")) {
+				assertEquals(RED_HORIZON_TICKS, duration, "red_horizon has its own length");
+			} else if (SUSTAINED.contains(definition.id())) {
 				// These exist specifically to outlast the short events. Holding them to the same
 				// ceiling would reinstate the gap the sustained tier was added to close.
 				assertTrue(duration >= MIN_SUSTAINED_TICKS && duration <= MAX_SUSTAINED_TICKS,
@@ -27,7 +38,7 @@ final class AnomalyTimingTest {
 				assertTrue(duration >= 1 && duration <= MAX_EVENT_TICKS, definition.id());
 			}
 		}
-		assertEquals(800, AnomalyTiming.durationTicks("red_horizon", 0L));
+		assertEquals(RED_HORIZON_TICKS, AnomalyTiming.durationTicks("red_horizon", 0L));
 		assertEquals(300, AnomalyTiming.durationTicks("channel_override", 0L));
 		assertEquals(240, AnomalyTiming.durationTicks("peripheral_residue", 0L));
 		assertEquals(80, AnomalyTiming.durationTicks("window_pulse", 0L));

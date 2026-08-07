@@ -1,5 +1,6 @@
 package com.xm.thefourthfrequency.entity;
 
+import com.xm.thefourthfrequency.terminal.AnomalyRuntimeService;
 import com.xm.thefourthfrequency.world.StoryProgressService;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -23,8 +24,14 @@ public final class WatcherEntity extends Monster {
 	private static final int MAX_HEAD_YAW = 145;
 	/** Reaching it counts the same as seeing it. Either way, it is not there. Five blocks. */
 	private static final double VANISH_RANGE_SQR = 25.0;
-	/** Two seconds. Long enough that holding the stare is a decision, not an accident. */
-	private static final int GAZE_TICKS_TO_VANISH = 40;
+	/**
+	 * One second of being looked at. Was two.
+	 *
+	 * <p>Two seconds is long enough to walk closer, line the shot up and be certain - and certainty
+	 * is the one thing this is built not to give. A second is long enough to register a shape and
+	 * short enough that what the player is left with is the question.
+	 */
+	private static final int GAZE_TICKS_TO_VANISH = 20;
 
 	private UUID observedPlayer;
 	private int gazeTicks;
@@ -128,6 +135,10 @@ public final class WatcherEntity extends Monster {
 				SoundSource.AMBIENT, 1.0F, 0.72F);
 		StoryProgressService.recordWatcher(player);
 		discard();
+		// Being found is the end of the anomaly, not just the end of the entity. Without this the
+		// figure went and the instance ran on to its own timeout - twenty seconds of an anomaly with
+		// nothing left in it, which reads as one that failed to finish.
+		AnomalyRuntimeService.completeWatcherSighting(player);
 	}
 
 	private boolean playerCanSee(ServerPlayer player) {

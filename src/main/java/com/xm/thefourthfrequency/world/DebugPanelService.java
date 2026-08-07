@@ -108,6 +108,14 @@ public final class DebugPanelService {
 				if (!WatcherService.debugSpawn(player)) throw new IllegalArgumentException("附近没有合适的生成位置");
 				yield "暗处人影已在玩家视野外生成";
 			}
+			case "him_spawn" -> {
+				// The service answers with one boolean for two different refusals, and guessing which
+				// one it was would send the tester looking in the wrong place. Name both.
+				if (!HimService.debugSpawn(player))
+					throw new IllegalArgumentException("附近没有合适的生成位置，或这名玩家已经有一个 HIM 还没消失");
+				yield "HIM 已在玩家视野外生成：偏离视线 95°–180°、22–44 格；被看到后 4 Tick 消失，"
+						+ "走到 4 格内或 30 秒无人看见也会消失";
+			}
 			case "pursuit_test" -> {
 				PursuitDirector.DebugStartResult result = PursuitDirector.debugStart(player, value);
 				if (result != PursuitDirector.DebugStartResult.STARTED) {

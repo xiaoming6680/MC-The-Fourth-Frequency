@@ -2,7 +2,6 @@ package com.xm.thefourthfrequency.client_ui;
 
 import com.xm.thefourthfrequency.audio.ModSounds;
 import com.xm.thefourthfrequency.entity.ReworkEntity;
-import com.xm.thefourthfrequency.mixin.GameRendererPostEffectInvoker;
 import com.xm.thefourthfrequency.networking.PursuitPresentationPayload;
 import com.xm.thefourthfrequency.pursuit.PursuitDimensions;
 import com.xm.thefourthfrequency.pursuit.PursuitPresentationTimeline;
@@ -31,8 +30,34 @@ public final class PursuitPresentationClient {
 			"thefourthfrequency", "pursuit_low_res_close");
 	private static final Identifier PURSUIT_POST_EFFECT_CONTACT = Identifier.fromNamespaceAndPath(
 			"thefourthfrequency", "pursuit_low_res_contact");
-	private static final int DESTINATION_STABLE_TICKS_AFTER_LOAD = 2;
+	/**
+	 * Settling ticks demanded once the destination's own chunks are in hand.
+	 *
+	 * <p>Two was chosen back when the loading screen going away was the only thing this waited on,
+	 * and it is far too short for what it is now cushioning: the chunk data being present is not the
+	 * same as the section renderer having compiled it, and the gap between the two is exactly the
+	 * frame where terrain visibly assembles itself.</p>
+	 */
+	private static final int DESTINATION_STABLE_TICKS_AFTER_LOAD = 8;
 	private static final int DESTINATION_FALLBACK_STABLE_TICKS = 12;
+	/**
+	 * Chunks that must exist client-side around the arrival point before the cover comes off.
+	 *
+	 * <p>Three, not the render distance. The point is that nothing assembles itself in front of the
+	 * player, and what is close enough to be caught doing that is the immediate neighbourhood; a
+	 * whole render distance would be a wait that scales with the player's video settings and, on a
+	 * slow stream, would never end.</p>
+	 */
+	private static final int DESTINATION_CHUNK_RADIUS = 3;
+	/**
+	 * Ceiling on the whole wait, counted from the phase change.
+	 *
+	 * <p>The gate is a presentation nicety and the pursuit is not: a stalled or throttled chunk
+	 * stream must never be able to leave someone sitting in front of a black screen. Ten seconds
+	 * out, the cover comes off regardless and they see whatever is there. A brief pop-in is a
+	 * blemish; a black screen with no way out is a broken game.</p>
+	 */
+	private static final int DESTINATION_READY_TIMEOUT_TICKS = 200;
 	/** Four scans a second is well under the hysteresis band, so it cannot cause chain churn. */
 	private static final int PROXIMITY_SCAN_INTERVAL_TICKS = 5;
 	/**
@@ -61,6 +86,7 @@ public final class PursuitPresentationClient {
 	private static boolean clearRequested;
 	private static boolean noticeQueueLocked;
 	private static int destinationStableTicks;
+	private static int destinationWaitTicks;
 	private static boolean transitionLoadingObserved;
 	private static boolean initialized;
 
@@ -93,6 +119,17 @@ public final class PursuitPresentationClient {
 	 */
 	public static boolean beginFrame(long nowNanos) {
 		frameHeld = evaluateFrameHold(nowNanos);
+		return frameHeld;
+	}
+
+	/**
+	 * Whether the pursuit is currently freezing the picture.
+	 *
+	 * <p>Read-only, and does not consume the flag the way {@link #skipRenderFrame()} does. The boss
+	 * fight's own effects ask this so they can stand down: shaking the camera or starting a second
+	 * freeze underneath a held frame does nothing except desynchronise the two.
+	 */
+	public static boolean isHoldingFrame() {
 		return frameHeld;
 	}
 
@@ -309,20 +346,51 @@ public final class PursuitPresentationClient {
 		return destinationReady(client, false);
 	}
 
+	/**
+	 * Whether the cover can come off yet.
+	 *
+	 * <p>This used to ask only whether the loading screen had gone and the dimension was the right
+	 * one, then wait two ticks. But the loading screen leaves as soon as vanilla considers the world
+	 * entered, which is well before the terrain around the player has arrived - so a hundred
+	 * milliseconds later the black came off and the player watched the world build itself. The
+	 * transition existed precisely so that they would not.</p>
+	 *
+	 * <p>So the chunks themselves are now the gate, with the settling ticks demoted to covering the
+	 * render compilation that follows the data. Everything is behind a hard timeout.</p>
+	 */
 	private static boolean destinationReady(Minecraft client, boolean mirrorDestination) {
+		destinationWaitTicks++;
 		if (worldLoadingVisible(client)) {
 			transitionLoadingObserved = true;
 			destinationStableTicks = 0;
 			return false;
 		}
-		if (client.level == null || PursuitDimensions.isMirror(client.level) != mirrorDestination) {
+		if (client.level == null || client.player == null
+				|| PursuitDimensions.isMirror(client.level) != mirrorDestination) {
 			destinationStableTicks = 0;
-			return false;
+			return destinationWaitTicks >= DESTINATION_READY_TIMEOUT_TICKS;
+		}
+		if (!destinationChunksLoaded(client)) {
+			destinationStableTicks = 0;
+			return destinationWaitTicks >= DESTINATION_READY_TIMEOUT_TICKS;
 		}
 		destinationStableTicks++;
 		int requiredStableTicks = transitionLoadingObserved
 				? DESTINATION_STABLE_TICKS_AFTER_LOAD : DESTINATION_FALLBACK_STABLE_TICKS;
-		return destinationStableTicks >= requiredStableTicks;
+		return destinationStableTicks >= requiredStableTicks
+				|| destinationWaitTicks >= DESTINATION_READY_TIMEOUT_TICKS;
+	}
+
+	/** Whether the client actually holds the chunks immediately around wherever the player landed. */
+	private static boolean destinationChunksLoaded(Minecraft client) {
+		int centerX = client.player.chunkPosition().x;
+		int centerZ = client.player.chunkPosition().z;
+		for (int dx = -DESTINATION_CHUNK_RADIUS; dx <= DESTINATION_CHUNK_RADIUS; dx++) {
+			for (int dz = -DESTINATION_CHUNK_RADIUS; dz <= DESTINATION_CHUNK_RADIUS; dz++) {
+				if (!client.level.getChunkSource().hasChunk(centerX + dx, centerZ + dz)) return false;
+			}
+		}
+		return true;
 	}
 
 	private static boolean worldLoadingVisible(Minecraft client) {
@@ -331,6 +399,7 @@ public final class PursuitPresentationClient {
 
 	private static void resetTransitionGate() {
 		destinationStableTicks = 0;
+		destinationWaitTicks = 0;
 		transitionLoadingObserved = false;
 	}
 
@@ -398,20 +467,14 @@ public final class PursuitPresentationClient {
 	}
 
 	private static void installPostEffect(Minecraft client) {
-		Identifier wanted = postEffectForGrade();
-		if (wanted.equals(client.gameRenderer.currentPostEffect())) return;
-		((GameRendererPostEffectInvoker) client.gameRenderer)
-				.thefourthfrequency$setPostEffect(wanted);
+		PostEffectArbiter.claim(client, PostEffectArbiter.Owner.PURSUIT, postEffectForGrade());
 	}
 
 	private static void clearOwnedPostEffect(Minecraft client) {
-		Identifier active = client.gameRenderer.currentPostEffect();
-		// Any band we may have installed counts as ours; checking only the mid one would strand
-		// the chain whenever the pursuit ended while the corrector was near or far.
-		if (PURSUIT_POST_EFFECT.equals(active) || PURSUIT_POST_EFFECT_DISTANT.equals(active)
-				|| PURSUIT_POST_EFFECT_CLOSE.equals(active) || PURSUIT_POST_EFFECT_CONTACT.equals(active)) {
-			client.gameRenderer.clearPostEffect();
-		}
+		// Dropping the claim rather than clearing the slot. Which of the four proximity bands was up
+		// stops mattering - the arbiter knows what it installed - and, more to the point, a chain
+		// somebody else owns is no longer something this can take down by accident.
+		PostEffectArbiter.release(client, PostEffectArbiter.Owner.PURSUIT);
 	}
 
 	private static void renderOverlay(GuiGraphics graphics) {
@@ -423,14 +486,10 @@ public final class PursuitPresentationClient {
 			return;
 		}
 		if (phase == Phase.WARNING) return;
-		graphics.fill(0, 0, width, height, 0x14000000);
-		for (int y = 0; y < height; y += 3) graphics.fill(0, y, width, y + 1, 0x22000000);
-		renderInterference(graphics, clientTick(), 3, 38);
-		int border = Math.max(2, Math.min(width, height) / 38);
-		graphics.fill(0, 0, width, border, 0x8A000000);
-		graphics.fill(0, height - border, width, height, 0x8A000000);
-		graphics.fill(0, border, border, height - border, 0x8A000000);
-		graphics.fill(width - border, border, width, height - border, 0x8A000000);
+		// The dim, the scanlines, the interference bands and the border frame all used to be drawn
+		// here as rectangles. Every one of them is a term in digital_corrupt.fsh now - ScanDepth and
+		// Vignette were added to it for exactly these two - so the treatment reaches the picture
+		// instead of covering it. renderInterference is kept below and no longer called.
 	}
 
 	private static int clientTick() {
@@ -438,6 +497,15 @@ public final class PursuitPresentationClient {
 		return client.player == null ? warningTicks : client.player.tickCount;
 	}
 
+	/**
+	 * <b>Retired.</b> The pursuit's interference bands, superseded by the band displacement and signal loss digital_corrupt.fsh does to the picture itself.
+	 *
+	 * <p>Kept rather than deleted. It is the reference for what the shader term replacing it is
+	 * meant to look like, and the fallback if a driver ever turns out not to compile the chain -
+	 * a coloured band drawn on top of the picture is a poor version of the effect, but it is a
+	 * version, and nothing calls it today.
+	 */
+	@SuppressWarnings("unused")
 	private static void renderInterference(GuiGraphics graphics, int tick, int bands, int alpha) {
 		int width = graphics.guiWidth();
 		int height = graphics.guiHeight();

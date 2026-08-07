@@ -42,8 +42,11 @@ import net.minecraft.world.phys.Vec3;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -52,6 +55,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /** Server-authoritative transient executor for the nine world-interface actions. */
@@ -71,6 +75,19 @@ public final class WorldInterfaceAttackService {
 	private static final int LASER_SCAR_INTERVAL_TICKS = 2;
 	private static final int LASER_SCAR_RADIUS = 2;
 	private static final int LASER_SCAR_EDITS = 6;
+	/**
+	 * How far the beam's contact detonation is felt, in blocks.
+	 *
+	 * <p>Smaller than the shots that land once. The contact is a burn walking across the floor rather
+	 * than an arrival, so it should be felt by whoever it is walking toward and by nobody else.
+	 */
+	private static final double LASER_CONTACT_SHAKE_RADIUS = 42.0D;
+	/** The lance is the encounter's heaviest single impact; it is felt from most of the island. */
+	private static final double SKY_LANCE_SHAKE_RADIUS = 72.0D;
+	/** One limb coming down. Local, and there are three of them a flurry. */
+	private static final double TENDRIL_SHAKE_RADIUS = 34.0D;
+	/** Ticks between the ticking that counts a lash down. */
+	private static final long TENDRIL_TELEGRAPH_CUE_INTERVAL = 8L;
 	private static final int ORB_WARNING_TICKS = WorldInterfaceProtocol.ORB_WARNING_TICKS;
 	private static final int ORB_TRACKING_TICKS = WorldInterfaceEnergyOrbEntity.MAX_FLIGHT_TICKS;
 	private static final int GRAB_WARNING_TICKS = WorldInterfaceProtocol.GRAB_WARNING_TICKS;
@@ -189,8 +206,31 @@ public final class WorldInterfaceAttackService {
 	 */
 	private static final List<WorldInterfaceAction> VOLLEY_ACTIONS = List.of(
 			WorldInterfaceAction.ENERGY_ORB, WorldInterfaceAction.TENDRIL_LASH);
-	/** Extra attacks that may be in flight at once, on top of the scheduled one. */
+	/** Extra attacks that may be in flight at once, on top of the scheduled one, for a solo table. */
 	public static final int MAX_VOLLEY = 3;
+	/**
+	 * When each player was last singled out, per encounter, newest last.
+	 *
+	 * <p>What {@link WorldInterfaceTargetPolicy} weighs its picks against, and the only memory the
+	 * fight has of who it has been paying attention to.
+	 *
+	 * <p>Transient, for the same reason {@link #VOLLEY} is. This decides who the <em>next</em> attack
+	 * names and nothing else: no damage, no item, no persisted state depends on it, and an encounter
+	 * that comes back from a restart with an empty ledger simply picks uniformly for the next thirty
+	 * seconds until it has learned the table again. Persisting it would mean a schema version, a
+	 * migration and a state-validator rule to protect a preference. A restart already cancels the
+	 * running attack and grants recovery grace, so the fight forgetting who it was looking at in the
+	 * same moment is the same promise it already makes.
+	 */
+	private static final Map<UUID, Map<UUID, ConcurrentLinkedDeque<Long>>> PRESSURE =
+			new ConcurrentHashMap<>();
+	/**
+	 * Everyone an encounter has actually disconnected, so a second eviction reaches for somebody new.
+	 *
+	 * <p>Transient like the pressure ledger, and harmless in the same way: losing it on a restart
+	 * returns the selection to the plain shuffle it used to be, never to something incorrect.
+	 */
+	private static final Map<UUID, Set<UUID>> EVICTED = new ConcurrentHashMap<>();
 	private static boolean initialized;
 
 	private WorldInterfaceAttackService() {
@@ -211,7 +251,101 @@ public final class WorldInterfaceAttackService {
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
 			ACTIVE.clear();
 			VOLLEY.clear();
+			PRESSURE.clear();
+			EVICTED.clear();
 		});
+	}
+
+	/**
+	 * How often each candidate has been singled out inside the policy's memory window.
+	 *
+	 * <p>Read-only and cheap: the scheduler calls this once per candidate action while it scans for
+	 * something it can throw, so it must not write anything. Recording happens once, after an attack
+	 * has actually been committed - see {@link #recordTargeting}.
+	 *
+	 * @param activeTick the encounter's own elapsed tick, which is the clock the window is measured on
+	 * @return one count per candidate, in the order they were supplied
+	 */
+	public static int[] recentPicks(UUID encounterId, List<UUID> candidates, long activeTick) {
+		Objects.requireNonNull(candidates, "candidates");
+		int[] counts = new int[candidates.size()];
+		Map<UUID, ConcurrentLinkedDeque<Long>> ledger = encounterId == null ? null : PRESSURE.get(encounterId);
+		if (ledger == null) return counts;
+		long horizon = activeTick - WorldInterfaceTargetPolicy.PRESSURE_MEMORY_TICKS;
+		for (int index = 0; index < counts.length; index++) {
+			ConcurrentLinkedDeque<Long> picks = ledger.get(candidates.get(index));
+			if (picks == null) continue;
+			prune(picks, horizon);
+			counts[index] = picks.size();
+		}
+		return counts;
+	}
+
+	/**
+	 * When each candidate was last singled out, {@link WorldInterfaceTargetPolicy#NEVER_PICKED} if
+	 * this encounter has not named them inside the memory window.
+	 *
+	 * <p>Kept apart from {@link #recentPicks} rather than returned alongside it because the two
+	 * answer different questions - how heavily the fight has leaned on someone, and whether it just
+	 * did - and only the second one is a hard exclusion.
+	 */
+	public static long[] lastPickTicks(UUID encounterId, List<UUID> candidates, long activeTick) {
+		Objects.requireNonNull(candidates, "candidates");
+		long[] stamps = new long[candidates.size()];
+		Arrays.fill(stamps, WorldInterfaceTargetPolicy.NEVER_PICKED);
+		Map<UUID, ConcurrentLinkedDeque<Long>> ledger = encounterId == null ? null : PRESSURE.get(encounterId);
+		if (ledger == null) return stamps;
+		long horizon = activeTick - WorldInterfaceTargetPolicy.PRESSURE_MEMORY_TICKS;
+		for (int index = 0; index < stamps.length; index++) {
+			ConcurrentLinkedDeque<Long> picks = ledger.get(candidates.get(index));
+			if (picks == null) continue;
+			prune(picks, horizon);
+			Long newest = picks.peekLast();
+			if (newest != null) stamps[index] = newest;
+		}
+		return stamps;
+	}
+
+	/**
+	 * Notes that an attack has been committed against these players.
+	 *
+	 * <p>Called once the envelope is stored rather than at selection time, because the scheduler's
+	 * scan asks about several candidate actions before committing to one and only the committed pick
+	 * is attention anybody in the arena can feel.
+	 */
+	public static void recordTargeting(UUID encounterId, Collection<UUID> targets, long activeTick) {
+		if (encounterId == null || targets == null || targets.isEmpty()) return;
+		Map<UUID, ConcurrentLinkedDeque<Long>> ledger =
+				PRESSURE.computeIfAbsent(encounterId, ignored -> new ConcurrentHashMap<>());
+		long horizon = activeTick - WorldInterfaceTargetPolicy.PRESSURE_MEMORY_TICKS;
+		for (UUID target : targets) {
+			if (target == null) continue;
+			ConcurrentLinkedDeque<Long> picks =
+					ledger.computeIfAbsent(target, ignored -> new ConcurrentLinkedDeque<>());
+			picks.addLast(activeTick);
+			prune(picks, horizon);
+			// Bounded regardless of the window, so a stalled clock cannot grow this without limit.
+			while (picks.size() > WorldInterfaceTargetPolicy.MAX_TRACKED_PICKS + 1) picks.pollFirst();
+		}
+	}
+
+	private static void prune(ConcurrentLinkedDeque<Long> picks, long horizon) {
+		Long oldest;
+		while ((oldest = picks.peekFirst()) != null && oldest < horizon) picks.pollFirst();
+	}
+
+	/** Everyone this encounter has already thrown off the island; never null. */
+	public static Set<UUID> evictedThisEncounter(UUID encounterId) {
+		if (encounterId == null) return Set.of();
+		Set<UUID> evicted = EVICTED.get(encounterId);
+		return evicted == null ? Set.of() : Set.copyOf(evicted);
+	}
+
+	/** Drops both transient ledgers for an encounter that is over or restarting. */
+	public static void clearLedgers(UUID encounterId) {
+		if (encounterId == null) return;
+		PRESSURE.remove(encounterId);
+		EVICTED.remove(encounterId);
 	}
 
 	public static AttackStart begin(ServerLevel level, WorldInterfaceEntity boss,
@@ -323,14 +457,36 @@ public final class WorldInterfaceAttackService {
 		if (encounterId == null || !encounterId.equals(boss.encounterId())) return 0;
 		List<AttackRuntime> lane = VOLLEY.computeIfAbsent(encounterId,
 				ignored -> new CopyOnWriteArrayList<>());
-		int room = MAX_VOLLEY - lane.size();
+		int roster = Math.clamp(participants.size(), 1, WorldInterfacePolicy.MAX_ROSTER_SIZE);
+		int room = WorldInterfaceActionScheduler.volleyConcurrency(MAX_VOLLEY, roster) - lane.size();
 		if (room <= 0) return 0;
 
 		WorldInterfaceAction scheduled = snapshot.currentAttack()
 				.flatMap(envelope -> WorldInterfaceAction.fromWireIdOrEmpty(envelope.actionWireId()))
 				.orElse(null);
-		int wanted = Math.min(room,
-				WorldInterfaceActionScheduler.volleySize(snapshot.deterministicSeed(), activeTick));
+		// Everyone the encounter is already aiming at this instant: the scheduled attack's own
+		// targets, plus whatever the rest of this lane is mid-flight against.
+		//
+		// This is the difference between a third phase that is busy and one that is a pile-on. The
+		// lane used to roll its own seed with no knowledge of the scheduled attack at all, so a
+		// player could be locked by the schedule and picked by three volley slots on the same tick -
+		// four telegraphs, one person, and nothing any of the others had to answer for.
+		//
+		// A whole-roster action claims nobody. The lash names everyone by construction, so counting
+		// its targets here would empty the pool on the spot and hand every later slot the fallback -
+		// which is the exclusion silently doing nothing, in exactly the phase it matters most. Only
+		// an attack that singles somebody out is holding them.
+		Set<UUID> pressured = new HashSet<>();
+		snapshot.currentAttack()
+				.filter(envelope -> singlesSomebodyOut(envelope.targets().size(), participants.size()))
+				.ifPresent(envelope -> pressured.addAll(envelope.targets()));
+		for (AttackRuntime running : lane) {
+			if (singlesSomebodyOut(running.targets.size(), participants.size())) {
+				pressured.addAll(running.targets);
+			}
+		}
+		int wanted = Math.min(room, WorldInterfaceActionScheduler.volleySize(
+				snapshot.deterministicSeed(), activeTick, roster));
 		int started = 0;
 		for (int slot = 0; slot < wanted; slot++) {
 			long seed = mix(snapshot.deterministicSeed() ^ (activeTick * 0x9E3779B97F4A7C15L)
@@ -343,12 +499,19 @@ public final class WorldInterfaceAttackService {
 					&& (scheduled == action || laneHolds(lane, action))) {
 				action = WorldInterfaceAction.ENERGY_ORB;
 			}
-			List<UUID> targets = volleyTargets(action, participants, seed);
+			List<UUID> targets = volleyTargets(encounterId, action, participants, pressured, seed,
+					activeTick);
 			if (targets.isEmpty() && requiresTarget(action)) continue;
 			AttackRuntime runtime = new AttackRuntime(encounterId, boss.getUUID(), action, activeTick,
 					activeTick + durationTicks(action), sequence, seed, targets, boss.blockPosition(),
 					snapshot.arenaCenter(), snapshot.safeSpawn());
 			lane.add(runtime);
+			// A whole-roster action is not attention on anybody in particular, so it neither claims
+			// the roster against the next slot nor counts against anyone in the ledger.
+			if (singlesSomebodyOut(targets.size(), participants.size())) {
+				pressured.addAll(targets);
+				recordTargeting(encounterId, targets, activeTick);
+			}
 			started++;
 		}
 		return started;
@@ -385,14 +548,34 @@ public final class WorldInterfaceAttackService {
 		}
 	}
 
+	/**
+	 * Whether an attack is attention on particular people rather than on the arena.
+	 *
+	 * <p>The one rule both the exclusion and the attention ledger are built on. An action aimed at
+	 * everybody present says nothing about who the fight is leaning on, and treating it as though it
+	 * did is the difference between a working preference and one that quietly always yields.
+	 */
+	private static boolean singlesSomebodyOut(int targetCount, int participantCount) {
+		return targetCount > 0 && targetCount < participantCount;
+	}
+
 	private static boolean laneHolds(List<AttackRuntime> lane, WorldInterfaceAction action) {
 		for (AttackRuntime runtime : lane) if (runtime.action == action) return true;
 		return false;
 	}
 
-	/** A lash swings at whoever is nearest when it lands, so it takes the whole island. */
-	private static List<UUID> volleyTargets(WorldInterfaceAction action,
-			List<ServerPlayer> participants, long seed) {
+	/**
+	 * A lash swings at whoever is nearest when it lands, so it takes the whole island. Everything
+	 * else in this lane picks one player, and picks them from whoever the fight is not already
+	 * aiming at.
+	 *
+	 * <p>The exclusion is a preference rather than a rule: if every candidate is already under
+	 * something, the bolt is thrown at one of them anyway. A volley slot that declined to fire would
+	 * make a table of two quieter than a table of one, which is the opposite of what this lane is
+	 * for.</p>
+	 */
+	private static List<UUID> volleyTargets(UUID encounterId, WorldInterfaceAction action,
+			List<ServerPlayer> participants, Set<UUID> pressured, long seed, long activeTick) {
 		List<UUID> roster = participants.stream()
 				.filter(player -> player.isAlive() && !player.isSpectator())
 				.map(ServerPlayer::getUUID)
@@ -400,7 +583,11 @@ public final class WorldInterfaceAttackService {
 				.toList();
 		if (roster.isEmpty()) return List.of();
 		if (action == WorldInterfaceAction.TENDRIL_LASH) return roster;
-		return List.of(roster.get((int) Math.floorMod(seed >>> 24, roster.size())));
+		List<UUID> free = roster.stream().filter(id -> !pressured.contains(id)).toList();
+		List<UUID> pool = free.isEmpty() ? roster : free;
+		return List.of(pool.get(WorldInterfaceTargetPolicy.selectIndex(
+				recentPicks(encounterId, pool, activeTick),
+				lastPickTicks(encounterId, pool, activeTick), seed, activeTick)));
 	}
 
 	private static void clearVolley(MinecraftServer server, UUID encounterId) {
@@ -415,6 +602,34 @@ public final class WorldInterfaceAttackService {
 		if (level == null) return;
 		Entity orb = level.getEntity(runtime.orbId);
 		if (orb != null) orb.discard();
+	}
+
+	/**
+	 * Drops a transient runtime that no longer has a persisted envelope behind it.
+	 *
+	 * <p>The two are meant to be mirrors: {@link #ACTIVE} holds the live executor, the encounter state
+	 * holds the record a restart can resume from, and {@link #tick} is what keeps them in step. But
+	 * {@code tick} is only ever called while the <em>envelope</em> exists, so the one direction it
+	 * cannot repair is a runtime that outlives its envelope. In that state the scheduler asks
+	 * {@link #begin} for the next attack, {@code begin} refuses because an action is already active,
+	 * and the refusal repeats forever - the encounter stops attacking and says nothing at all.
+	 *
+	 * <p>Called from the scheduler on the path where the envelope is known to be absent, so it costs a
+	 * map lookup on a fight that is behaving and repairs one that is not. The runtime is cancelled
+	 * rather than dropped, so anything it was holding - a seized weapon, a controlled player, a bolt
+	 * in the air - goes back through the same teardown a normal cancellation uses.
+	 *
+	 * @return whether an orphan was actually found
+	 */
+	public static boolean discardOrphanedRuntime(MinecraftServer server, UUID encounterId) {
+		AttackRuntime orphan = ACTIVE.remove(encounterId);
+		if (orphan == null) return false;
+		TheFourthFrequency.LOGGER.warn(
+				"World-interface discarded an orphaned {} runtime (sequence {}): it outlived its"
+						+ " persisted envelope and would have blocked every later attack",
+				orphan.action, orphan.sequence);
+		cancelRuntime(server, orphan, true);
+		return true;
 	}
 
 	public static int cancelAndRestore(MinecraftServer server, UUID encounterId) {
@@ -461,6 +676,9 @@ public final class WorldInterfaceAttackService {
 		AttackRuntime runtime = ACTIVE.remove(encounterId);
 		if (runtime != null) cancelRuntime(server, runtime, true);
 		clearVolley(server, encounterId);
+		// The attention ledger is a preference, not state to be recovered. A restart hands the fight
+		// back a table it has not looked at yet, which is the same thing it hands back everywhere else.
+		clearLedgers(encounterId);
 		clearRestartTransients(server, encounterId);
 		return restoreRecoveryEntries(server, encounterId, null);
 	}
@@ -548,19 +766,29 @@ public final class WorldInterfaceAttackService {
 			// island, where one every tick would just be a wall of smoke nobody can see through.
 			level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, end.x, end.y + 0.4D, end.z,
 					1, 0.0D, 0.0D, 0.0D, 0.0D);
+		}
+		// The audible half of the contact runs on its own, slower clock.
+		//
+		// The scar walks every other tick because that is what draws a continuous burn line; the
+		// sound and the shake used to ride the same interval, which meant one sweep spent twenty
+		// explosion samples and twenty camera impulses in two seconds. Both are throttled to one
+		// source now - see WorldInterfaceBlastService for why the mixer, and not just the mix, cares.
+		if (WorldInterfaceBlastService.allows(level, WorldInterfaceBlastService.SOURCE_LASER)) {
 			AudioService.playBounded(level, impact, ModSounds.WORLD_INTERFACE_LASER_FIRE,
 					SoundSource.HOSTILE, 0.55F, 1.18F);
 			// The contact detonates, so it sounds like a detonation: vanilla's own explosion, the
 			// one every player already reads as "that just blew a hole in something".
 			//
-			// Pitched off the impact position rather than drawn from a random source. Twenty of
+			// Pitched off the impact position rather than drawn from a random source. Several of
 			// these land during a single sweep, and at a fixed pitch that reads as one sample on
 			// loop; the scatter hides the repetition while keeping a replayed encounter identical
 			// to the one that was recorded, which the rest of this fight is built on.
 			float scatter = 1.0F
 					+ ((mix(impact.asLong()) >>> 40) / (float) 0xFFFFFF * 2.0F - 1.0F) * 0.16F;
-			AudioService.playBounded(level, impact, SoundEvents.GENERIC_EXPLODE.value(),
-					SoundSource.HOSTILE, 0.75F, scatter);
+			AudioService.playWithReach(level, impact, SoundEvents.GENERIC_EXPLODE.value(),
+					SoundSource.HOSTILE, 0.75F, scatter, AudioService.BLAST_REACH_BLOCKS);
+			WorldInterfaceBlastService.emit(level, runtime.encounterId, end,
+					LASER_CONTACT_SHAKE_RADIUS, WorldInterfaceProtocol.BlastGrade.MEDIUM);
 		}
 		return elapsed >= LASER_WARNING_TICKS + LASER_SWEEP_TICKS;
 	}
@@ -649,7 +877,7 @@ public final class WorldInterfaceAttackService {
 			markLanceImpact(level, boss, runtime, 0.55F + charge * 0.75F);
 			if ((elapsed - chargeStart) % 3L == 0L) {
 				AudioService.playBounded(level, BlockPos.containing(runtime.lanceImpact),
-						ModSounds.WORLD_INTERFACE_MENTAL, SoundSource.HOSTILE,
+						ModSounds.WORLD_INTERFACE_LANCE, SoundSource.HOSTILE,
 						0.55F + charge * 0.35F, 0.85F + charge * 0.5F);
 			}
 			return false;
@@ -668,6 +896,11 @@ public final class WorldInterfaceAttackService {
 			// Vanilla's own detonation, in the shape a player already reads as "that was an
 			// explosion": the emitter plus the sound TNT makes, at the point of contact.
 			BlockPos impactPos = BlockPos.containing(impact);
+			// The landing has its own cue, arena-wide. The charge above is a telegraph the player
+			// dodges by; this is the confirmation it arrived, and it has to carry to whoever was not
+			// the one being aimed at.
+			AudioService.playBounded(level, impactPos, ModSounds.WORLD_INTERFACE_LANCE_IMPACT,
+					SoundSource.HOSTILE, 1.0F, 0.94F);
 			// A detonation that travels outward rather than a puff at a point.
 			//
 			// Emitters at the centre alone read as one small explosion no matter how big the crater
@@ -699,8 +932,8 @@ public final class WorldInterfaceAttackService {
 			}
 			level.sendParticles(ParticleTypes.END_ROD, impact.x, impact.y + 1.0D, impact.z,
 					90, 0.6D, 3.5D, 0.6D, 0.28D);
-			AudioService.playBounded(level, impactPos, SoundEvents.GENERIC_EXPLODE.value(),
-					SoundSource.HOSTILE, 1.0F, 0.82F);
+			AudioService.playWithReach(level, impactPos, SoundEvents.GENERIC_EXPLODE.value(),
+					SoundSource.HOSTILE, 1.0F, 0.82F, AudioService.BLAST_REACH_BLOCKS);
 			craterAt(level, boss, runtime, impact, SKY_LANCE_SCAR_RADIUS, SKY_LANCE_SCAR_EDITS);
 			corruptAround(level, runtime, impactPos);
 			// Only the third form is large enough for this to read as reach rather than coincidence.
@@ -710,6 +943,12 @@ public final class WorldInterfaceAttackService {
 			}
 			AudioService.playBounded(level, BlockPos.containing(impact),
 					ModSounds.WORLD_INTERFACE_LASER_FIRE, SoundSource.HOSTILE, 1.0F, 0.72F);
+			// The camera answers on the tick the column arrives, not on the tick it starts falling.
+			// The client used to derive this from SKY_LANCE_FALL_TICKS, which is a render-only number
+			// describing the last three ticks of the charge - so the shake landed a second and a half
+			// before the crater did, and read as an unrelated tremor.
+			WorldInterfaceBlastService.emit(level, runtime.encounterId, impact,
+					SKY_LANCE_SHAKE_RADIUS, WorldInterfaceProtocol.BlastGrade.HEAVY);
 			runtime.damageApplied = true;
 		}
 		// The column keeps burning for a moment, so the strike has a visible aftermath.
@@ -901,7 +1140,19 @@ public final class WorldInterfaceAttackService {
 			// it had chosen, so the only way to not be hit was to not be the closest - which is not
 			// something a player under attack can act on. Choosing now and marking the ground turns
 			// the flurry into three readable events instead of three unavoidable ones.
-			ServerPlayer struck = nearestTarget(level, runtime, boss);
+			//
+			// And each lash reaches for somebody the flurry has not had yet. Nearest-of-everyone,
+			// evaluated three times in a row, is nearest-of-everyone three times: whoever is holding
+			// the front - which on any table with a melee player is the same person every flurry -
+			// took all three landings, and three overlapping five-block circles inside two seconds is
+			// not a telegraph anybody can answer. Once the flurry has been round the table it starts
+			// again, so this narrows nothing on a solo player.
+			ServerPlayer struck = nearestTarget(level, runtime, boss, runtime.struckThisFlurry);
+			if (struck == null) {
+				runtime.struckThisFlurry.clear();
+				struck = nearestTarget(level, runtime, boss, Set.of());
+			}
+			if (struck != null) runtime.struckThisFlurry.add(struck.getUUID());
 			runtime.tendrilImpact = struck != null ? groundUnder(level, struck.position())
 					: groundUnder(level, boss.position().add(boss.getLookAngle().scale(12.0D)));
 			AudioService.playBounded(level, BlockPos.containing(runtime.tendrilImpact),
@@ -914,7 +1165,11 @@ public final class WorldInterfaceAttackService {
 			// The mark tightens as the limb comes down, on the same clock the damage lands on.
 			float charge = phase / (float) TENDRIL_STRIKE_TELEGRAPH_TICKS;
 			markGround(level, impact, TENDRIL_REACH, 0.4F + charge * 0.9F);
-			if (phase % 4L == 0L) {
+			// Every eight ticks rather than every four. Three limbs telegraphing at once - which is
+			// what the third phase's volley lane produces - was twenty-four samples in a second and a
+			// half, on top of everything else the fight is playing. The mark on the ground is what
+			// carries the warning; the ticking is only there so it is noticed.
+			if (phase % TENDRIL_TELEGRAPH_CUE_INTERVAL == 0L) {
 				AudioService.playBounded(level, BlockPos.containing(impact),
 						ModSounds.WORLD_INTERFACE_IMPACT, SoundSource.HOSTILE,
 						0.32F, 1.35F + charge * 0.35F);
@@ -941,6 +1196,13 @@ public final class WorldInterfaceAttackService {
 			craterAt(level, boss, runtime, impact, TENDRIL_SCAR_RADIUS, TENDRIL_SCAR_EDITS);
 			playActionCue(level, BlockPos.containing(impact), runtime.action,
 					0.95F, 0.86F + runtime.cursor * 0.09F);
+			// On the landing frame. The client used to shake every thirty ticks off the action clock,
+			// which lines up with none of the three landings - they fall at the warning plus a
+			// telegraph, every forty-five ticks - so the camera was shaking to its own rhythm while
+			// the limbs hit to another. The volley lane throws these outside the action envelope
+			// entirely, so there was no clock to derive them from there at all.
+			WorldInterfaceBlastService.emit(level, runtime.encounterId, impact,
+					TENDRIL_SHAKE_RADIUS, WorldInterfaceProtocol.BlastGrade.MEDIUM);
 		}
 		return false;
 	}
@@ -948,12 +1210,21 @@ public final class WorldInterfaceAttackService {
 	private static boolean tickEviction(ServerLevel level, AttackRuntime runtime, long elapsed) {
 		if (!runtime.damageApplied && elapsed >= WorldInterfaceActionScheduler.FORCED_EVICTION_WARNING_TICKS) {
 			MinecraftServer server = level.getServer();
+			// The execution frame was silent: players simply vanished. Whoever is left needs to hear
+			// that the interface did that, or a disconnected teammate reads as their own connection.
+			AudioService.playBounded(level, BlockPos.containing(runtime.safeSpawn.getCenter()),
+					ModSounds.WORLD_INTERFACE_EVICTION, SoundSource.HOSTILE, 1.0F, 1.0F);
 			for (UUID targetId : runtime.targets) {
 				if (runtime.unavailableTargets.contains(targetId)) continue;
 				ServerPlayer target = server.getPlayerList().getPlayer(targetId);
 				if (target == null || target.level() != level
 						|| server.isSingleplayerOwner(target.nameAndId())) continue;
 				target.connection.disconnect(EVICTION_REASON);
+				// Recorded where it actually happens, not where it was selected: a target that was
+				// skipped above because they had already left has not been evicted by the interface,
+				// and must not be moved to the back of the queue as though it had.
+				EVICTED.computeIfAbsent(runtime.encounterId, ignored -> ConcurrentHashMap.newKeySet())
+						.add(targetId);
 			}
 			runtime.damageApplied = true;
 		}
@@ -1136,13 +1407,14 @@ public final class WorldInterfaceAttackService {
 				radius * 0.5D, 0.05D + intensity * 0.06D);
 	}
 
+	/** The closest live target this runtime still has, skipping anyone the caller has already used. */
 	private static ServerPlayer nearestTarget(ServerLevel level, AttackRuntime runtime,
-			WorldInterfaceEntity boss) {
+			WorldInterfaceEntity boss, Set<UUID> excluded) {
 		ServerPlayer nearest = null;
 		double best = Double.MAX_VALUE;
 		for (int index = 0; index < runtime.targets.size(); index++) {
 			ServerPlayer candidate = onlineTarget(level, runtime, index);
-			if (candidate == null) continue;
+			if (candidate == null || excluded.contains(candidate.getUUID())) continue;
 			double distance = candidate.distanceToSqr(boss);
 			if (distance < best) {
 				best = distance;
@@ -1596,7 +1868,10 @@ public final class WorldInterfaceAttackService {
 		return switch (action) {
 			case LASER_SWEEP -> ModSounds.WORLD_INTERFACE_LASER;
 			case ENERGY_ORB -> ModSounds.WORLD_INTERFACE_ORB;
-			case SKY_LANCE -> ModSounds.WORLD_INTERFACE_MENTAL;
+			// Its own voice, not the mental-interference one. Sharing that sample meant the attack
+			// that drops a column on your head and the one that only distorts what you see announced
+			// themselves identically, which is most of why the telegraphs were unreadable.
+			case SKY_LANCE -> ModSounds.WORLD_INTERFACE_LANCE;
 			case CHARGE_WEAPON_STEAL -> ModSounds.WORLD_INTERFACE_WEAPON;
 			case GRAB_THROW -> ModSounds.WORLD_INTERFACE_THROW;
 			case GAZE_HOTBAR_CLEAR -> ModSounds.WORLD_INTERFACE_HOTBAR;
@@ -1651,6 +1926,12 @@ public final class WorldInterfaceAttackService {
 		private final BlockPos arenaCenter;
 		private final BlockPos safeSpawn;
 		private final Set<UUID> unavailableTargets = new LinkedHashSet<>();
+		/**
+		 * Who the current lash flurry has already brought a limb down on.
+		 *
+		 * @see WorldInterfaceAttackService#tickTendrilLash
+		 */
+		private final Set<UUID> struckThisFlurry = new LinkedHashSet<>();
 		/**
 		 * A short trail of where the laser's target has been, newest last. The sweep aims at the
 		 * entry {@link WorldInterfaceProtocol#LASER_TRACKING_LAG_TICKS} back, which is the whole

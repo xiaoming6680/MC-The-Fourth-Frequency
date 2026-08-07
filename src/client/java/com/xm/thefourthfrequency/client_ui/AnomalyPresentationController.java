@@ -10,6 +10,7 @@ import com.xm.thefourthfrequency.networking.AnomalyCompleteC2S;
 import com.xm.thefourthfrequency.networking.AnomalyPhaseS2C;
 import com.xm.thefourthfrequency.networking.AnomalyStartS2C;
 import com.xm.thefourthfrequency.terminal.AnomalyCompletionStatus;
+import com.xm.thefourthfrequency.terminal.AnomalyRuntimeService;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -70,7 +71,19 @@ public final class AnomalyPresentationController {
 	private static final int GLITCH_STREAK_COLOR = 0x00C8C4BC;
 	private static final int GLITCH_CHROMA_RED = 0x00FF2A2A;
 	private static final int GLITCH_CHROMA_CYAN = 0x0022E0FF;
-	private static final int GLITCH_SCANLINE_COLOR = 0x00000306;
+	/**
+	 * The four analog-signal chains, weakest first, indexed by {@link GlitchImpactTimeline#signalStep}.
+	 *
+	 * <p>Four rather than one that ramps, because a post chain's uniforms are fixed when it loads.
+	 * The motion inside each step is not fixed - the shader reads {@code GameTime} out of the
+	 * Globals block - so the steps only quantise how hard the picture is bent, never how alive it is.
+	 */
+	private static final Identifier[] SIGNAL_CHAINS = {
+			Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "signal_1"),
+			Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "signal_2"),
+			Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "signal_3"),
+			Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "signal_4")
+	};
 	private static final int LOCAL_RULE_FRAGMENT_LIMIT = 24;
 	private static final double LOCAL_RULE_MIN_SPACING_SQR = 9.0D;
 	private static final int HISTORY_TICKS = 60;
@@ -188,6 +201,7 @@ public final class AnomalyPresentationController {
 		glitchImpactTicks = 0;
 		glitchTriggered = false;
 		attackWasDown = false;
+		playTriggerCue(client, payload);
 
 		switch (anomalyId) {
 			case "surface_fracture" -> {
@@ -210,10 +224,12 @@ public final class AnomalyPresentationController {
 				client.levelRenderer.allChanged();
 			}
 			case "red_horizon" -> {
-				// The sweep is the only part of this anomaly that arrives on a single frame, and
-				// it arrives before anything is visible: by the time the horizon is worth looking
-				// at, the player has already been given a reason to look at it.
-				playSignalCue(client, ModSounds.SIGNAL_TUNING_SWEEP, 0.48F);
+				// The pursuit's own warning, deliberately. This is not something to be pointed at -
+				// it is the whole sky - so the directional cave cue does nothing for it, and it is
+				// now excluded from that set. What it needs instead is the sound the player has
+				// already learned means the mod is about to do something to them; borrowing it here
+				// puts a sky going red in the same category, before they look up and find out.
+				playSignalCue(client, ModSounds.SIGNAL_ALERT, 0.85F);
 				dedicatedSoundCount++;
 			}
 			case "channel_override" -> client.setScreen(new ChannelOverrideScreen());
@@ -227,6 +243,14 @@ public final class AnomalyPresentationController {
 		if (instanceId == null || !instanceId.equals(payload.instanceId())
 				|| payload.sequence() <= lastPhaseSequence) return;
 		lastPhaseSequence = payload.sequence();
+		// The server has ended this instance and is telling us to stop. Nothing else can: the client
+		// otherwise runs its own copy of the clock to the end, and the line below deliberately takes
+		// the larger of the two remaining counts, so a shortened one cannot arrive this way. Reported
+		// as false because the instance the report would name is already gone.
+		if (AnomalyRuntimeService.INTERRUPTED_PHASE.equals(payload.phase())) {
+			restore(Minecraft.getInstance(), false, AnomalyCompletionStatus.INTERRUPTED);
+			return;
+		}
 		currentPhase = payload.phase();
 		remainingTicks = Math.max(remainingTicks, payload.remainingTicks());
 		phaseBlackout = payload.blackout();
@@ -285,6 +309,33 @@ public final class AnomalyPresentationController {
 		attackWasDown = attackDown;
 	}
 
+	/**
+	 * Puts the burst on the frame rather than only over it.
+	 *
+	 * <p>The overlay draws what is <em>in front of</em> the picture - the hands being shredded, the
+	 * dark the carrier drops into, the line it closes on. This is the picture itself coming apart:
+	 * rows wobbling, colour separating outward, the tube blooming, a mistracked bar climbing through
+	 * it. One is meaningless without the other, which is why they share
+	 * {@link GlitchImpactTimeline}'s beats down to the tick.
+	 *
+	 * <p>Through {@link ScreenFilterDriver} rather than the level's own post-effect slot, so the HUD
+	 * and this overlay are <em>inside</em> the damage instead of floating on top of it. A burst that
+	 * leaves the hotbar pristine is a filter over the world; a burst that takes the hotbar with it is
+	 * the screen failing, and the second one is the whole idea.
+	 *
+	 * <p>Asked from the render path, once per frame, because the driver's requests last exactly one
+	 * frame. There is no path out of an anomaly - completed, interrupted, failed, disconnected -
+	 * that can leave this switched on.
+	 */
+	private static void requestSignalFilter() {
+		if (glitchImpactTicks <= 0) return;
+		int step = GlitchImpactTimeline.signalStep(
+				GlitchImpactTimeline.IMPACT_TICKS - glitchImpactTicks);
+		if (step <= 0) return;
+		ScreenFilterDriver.request(ScreenFilterDriver.Owner.ANOMALY,
+				SIGNAL_CHAINS[Math.min(step, SIGNAL_CHAINS.length) - 1]);
+	}
+
 	private static void triggerGlitchImpact(Minecraft client) {
 		glitchTriggered = true;
 		glitchImpactTicks = GlitchImpactTimeline.IMPACT_TICKS;
@@ -314,9 +365,6 @@ public final class AnomalyPresentationController {
 		if (glitchTick == GlitchImpactTimeline.SECOND_HIT_TICK) {
 			client.level.playLocalSound(client.player.getX(), client.player.getEyeY(), client.player.getZ(),
 					ModSounds.LAYER_DEEPSLATE_BREAK, SoundSource.MASTER, 0.62F, 0.42F, false);
-			dedicatedSoundCount++;
-		} else if (glitchTick == GlitchImpactTimeline.GHOST_END_TICK) {
-			playSignalCue(client, ModSounds.SIGNAL_CARRIER_LOST, 0.42F);
 			dedicatedSoundCount++;
 		}
 	}
@@ -589,7 +637,10 @@ public final class AnomalyPresentationController {
 			// One palm texture is reused; only X is mirrored so both palms keep facing the viewer.
 			drawPeripheralHand(graphics, hands.rightX(), hands.rightY(), hands.width(), hands.height(), true, 255);
 		}
-		if (glitchImpactTicks > 0) renderGlitchImpact(graphics, width, height);
+		if (glitchImpactTicks > 0) {
+			requestSignalFilter();
+			renderGlitchImpact(graphics, width, height);
+		}
 		if (simulatedWindow) {
 			int elapsed = totalTicks - remainingTicks;
 			int insetX = 12 + Math.floorMod(elapsed * 7, Math.max(13, width / 8));
@@ -662,8 +713,13 @@ public final class AnomalyPresentationController {
 	/**
 	 * The burst that ends a corruption impact, drawn in the order the layers physically stack:
 	 * the flash, the dark it leaves, whatever the tear is currently eating, the tear itself, the
-	 * mistracked band on the picture that comes back, the medium showing through it, and the
-	 * frame it all closes on. {@link GlitchImpactTimeline} owns every number.
+	 * mistracked band on the picture that comes back, and the frame it all closes on.
+	 * {@link GlitchImpactTimeline} owns every number.
+	 *
+	 * <p>The medium showing through is no longer here. Scanlines and grain used to be drawn into this
+	 * overlay, and they are the two layers that most obviously belong to the <em>screen</em> rather
+	 * than to anything on it - {@code analog_signal.fsh} now lays both over the finished frame, so
+	 * they fall across this overlay and the HUD instead of stopping underneath them.
 	 */
 	private static void renderGlitchImpact(GuiGraphics graphics, int width, int height) {
 		int tick = GlitchImpactTimeline.IMPACT_TICKS - glitchImpactTicks;
@@ -673,9 +729,9 @@ public final class AnomalyPresentationController {
 		int dropout = GlitchImpactTimeline.dropoutAlpha(tick);
 		if (dropout > 0) graphics.fill(0, 0, width, height, dropout << 24);
 		renderGlitchDebris(graphics, tick, width, height);
-		renderTornPicture(graphics, tick, width, height);
-		renderMistrackedBand(graphics, tick, width, height);
-		renderGlitchScanlines(graphics, tick, width, height);
+		// The tear and the mistracked band are the shader's now: analog_signal.fsh drags whole bands
+		// of the picture sideways and drops the line out of some of them, which is the thing the two
+		// methods below could only ever imitate with rectangles. Both are kept and neither is called.
 		renderGlitchCollapse(graphics, tick, width, height);
 	}
 
@@ -715,12 +771,25 @@ public final class AnomalyPresentationController {
 	 * {@link AlphaCorruptionRenderer#drawTrackingBand} draws them that way - the read is identical
 	 * at a fraction of the cost.</p>
 	 */
+	/**
+	 * <b>Retired.</b> The burst's torn bands, superseded by the TearBands stage of analog_signal.fsh, which drags the picture rather than covering it.
+	 *
+	 * <p>Kept rather than deleted. It is the reference for what the shader term replacing it is
+	 * meant to look like, and the fallback if a driver ever turns out not to compile the chain -
+	 * a coloured band drawn on top of the picture is a poor version of the effect, but it is a
+	 * version, and nothing calls it today.
+	 */
+	@SuppressWarnings("unused")
 	private static void renderTornPicture(GuiGraphics graphics, int tick, int width, int height) {
 		float strength = GlitchImpactTimeline.tearStrength(tick);
 		if (strength <= 0.0F) return;
 		int chroma = Math.round(GlitchImpactTimeline.chromaOffset(tick));
-		int streakAlpha = Math.round(148 * strength);
-		int ghostAlpha = Math.round(104 * strength);
+		// Quieter than it was, because it is no longer the whole effect. The world underneath is
+		// being displaced by analog_signal.fsh now, so this layer's job has changed from faking a
+		// tear to carrying what a tear leaves behind. Painted at the old weight on top of a picture
+		// that is already moving, it simply hid it.
+		int streakAlpha = Math.round(104 * strength);
+		int ghostAlpha = Math.round(78 * strength);
 		for (int slice = 0; slice < GlitchImpactTimeline.SLICES; slice++) {
 			int top = GlitchImpactTimeline.sliceTop(slice, height);
 			int bottom = GlitchImpactTimeline.sliceTop(slice + 1, height);
@@ -735,32 +804,46 @@ public final class AnomalyPresentationController {
 			int left = GlitchImpactTimeline.sliceStreakLeft(slice, tick, width) + shift;
 			int right = left + GlitchImpactTimeline.sliceStreakWidth(slice, tick, width);
 			if (chroma > 0) {
-				fillClamped(graphics, left - chroma, top, right - chroma, bottom,
-						ghostAlpha << 24 | GLITCH_CHROMA_RED, width);
-				fillClamped(graphics, left + chroma, top, right + chroma, bottom,
-						ghostAlpha << 24 | GLITCH_CHROMA_CYAN, width);
+				softStreak(graphics, left - chroma, top, right - chroma, bottom,
+						ghostAlpha, GLITCH_CHROMA_RED, width);
+				softStreak(graphics, left + chroma, top, right + chroma, bottom,
+						ghostAlpha, GLITCH_CHROMA_CYAN, width);
 			}
-			fillClamped(graphics, left, top, right, bottom,
-					streakAlpha << 24 | GLITCH_STREAK_COLOR, width);
+			softStreak(graphics, left, top, right, bottom, streakAlpha, GLITCH_STREAK_COLOR, width);
 		}
 	}
 
+	/**
+	 * One displaced streak, with its ends faded rather than cut.
+	 *
+	 * <p>A flat rectangle has four hard edges, and the two vertical ones are the giveaway - nothing
+	 * in a signal stops at a column. Drawn as a bright core with a faint shoulder either side, the
+	 * same streak reads as a piece of a line that arrived at the wrong place instead of as a box.
+	 */
+	private static void softStreak(GuiGraphics graphics, int left, int top, int right, int bottom,
+			int alpha, int color, int width) {
+		if (alpha <= 0 || right <= left) return;
+		int shoulder = Math.max(2, (right - left) / 5);
+		fillClamped(graphics, left - shoulder, top, left, bottom, alpha / 3 << 24 | color, width);
+		fillClamped(graphics, left, top, right, bottom, alpha << 24 | color, width);
+		fillClamped(graphics, right, top, right + shoulder, bottom, alpha / 3 << 24 | color, width);
+	}
+
+	/**
+	 * <b>Retired.</b> The burst's mistracked band, superseded by the shader's own roll bar.
+	 *
+	 * <p>Kept rather than deleted. It is the reference for what the shader term replacing it is
+	 * meant to look like, and the fallback if a driver ever turns out not to compile the chain -
+	 * a coloured band drawn on top of the picture is a poor version of the effect, but it is a
+	 * version, and nothing calls it today.
+	 */
+	@SuppressWarnings("unused")
 	private static void renderMistrackedBand(GuiGraphics graphics, int tick, int width, int height) {
 		int top = GlitchImpactTimeline.rollBandTop(tick, height);
 		if (top == Integer.MIN_VALUE) return;
-		int bottom = Math.min(height, top + GlitchImpactTimeline.rollBandHeight(height));
-		if (bottom <= 0 || top >= height) return;
-		graphics.fill(0, Math.max(0, top), width, bottom, 0x30FFFFFF);
-		if (top >= 0) graphics.fill(0, top, width, top + 1, 0x5AFFFFFF);
-		if (bottom < height) graphics.fill(0, bottom - 1, width, bottom, 0x4D000000);
-	}
-
-	private static void renderGlitchScanlines(GuiGraphics graphics, int tick, int width, int height) {
-		int alpha = GlitchImpactTimeline.scanlineAlpha(tick);
-		if (alpha <= 0) return;
-		int color = alpha << 24 | GLITCH_SCANLINE_COLOR;
-		for (int y = 0; y < height; y += AlphaLoadTimeline.SCANLINE_SPACING)
-			graphics.fill(0, y, width, y + 1, color);
+		int bandHeight = GlitchImpactTimeline.rollBandHeight(height);
+		if (top + bandHeight <= 0 || top >= height) return;
+		AnalogFilter.rollBar(graphics, top, bandHeight, 1.0F);
 	}
 
 	private static void renderGlitchCollapse(GuiGraphics graphics, int tick, int width, int height) {
@@ -819,12 +902,10 @@ public final class AnomalyPresentationController {
 		restoring = true;
 		try {
 			UUID completed = instanceId;
-			// A sustained anomaly ending is the moment a transmission stops, and that reads as
-			// worse than one starting. The short cues are excluded: at four seconds the tail would
-			// land almost on top of the anomaly's own start, which just sounds like a glitch.
-			if (completed != null && isSustainedAnomaly(anomalyId)) {
-				playSignalCue(client, ModSounds.SIGNAL_CARRIER_LOST, 0.55F);
-			}
+			// No closing cue. A sustained anomaly used to end on a carrier-lost tone, on the reasoning
+			// that a transmission stopping reads as worse than one starting - but in play it only
+			// announced that the thing was over, which is the one fact these are built not to give.
+			// Silence returning is the ending.
 			if (fracturePos != null && activeLevel != null)
 				activeLevel.destroyBlockProgress(fractureBreakerId(), fracturePos, -1);
 			if (echoCrack != null && activeLevel != null)
@@ -885,14 +966,63 @@ public final class AnomalyPresentationController {
 	/**
 	 * The anomalies long enough that a closing cue reads as an ending rather than as a stutter.
 	 *
-	 * <p>Three of these run for minutes. red_horizon is the one exception at forty seconds, and
-	 * it earns the tail for the same reason: it is a transmission the player has been living
-	 * inside long enough to notice the moment it stops.</p>
+	 * <p>Three of these run for minutes; red_horizon runs for one. All four earn the tail for the
+	 * same reason: they are transmissions the player has been living inside long enough to notice
+	 * the moment one stops.</p>
 	 */
 	private static boolean isSustainedAnomaly(String id) {
 		return id.equals("silent_world") || id.equals("temporal_drift") || id.equals("metric_drift")
 				|| id.equals("red_horizon");
 	}
+	/** How far out an anchorless anomaly's opening cue is placed, in blocks. */
+	private static final double ANCHORLESS_CUE_DISTANCE = 9.0D;
+
+	/**
+	 * The one cue every anomaly opens on: vanilla's own cave ambience, placed in the world.
+	 *
+	 * <p>Deliberately a sound the player has already heard a thousand times and already has an
+	 * instinct about. A bespoke synthetic cue announces "the mod is doing something"; the cave
+	 * ambience means "something is here that you did not put here", which is what an anomaly is,
+	 * and it means that before the player has consciously identified the sound at all.</p>
+	 *
+	 * <p>Positioned rather than played into the player's ears, so it carries a bearing: the anomaly
+	 * comes from somewhere, and turning to look is a thing the player can do about it. An anomaly
+	 * with an anchor sounds from the anchor, because that is genuinely where it is happening; one
+	 * without gets a direction derived from its own seed, which keeps the bearing stable for the
+	 * whole instance and identical on every client rather than re-rolled per lookup.</p>
+	 */
+	/**
+	 * The anomalies that announce themselves.
+	 *
+	 * <p>The cue used to fire for all nineteen, which made every anomaly arrive the same way: a
+	 * sound from a direction, and then something to find. That is the wrong instrument for most of
+	 * them. These four are the ones a player can miss entirely - a herd turning its head, an echo of
+	 * what they just did, an item wearing the wrong face, a wall that stopped having a texture - and
+	 * each is somewhere specific, so a bearing is genuinely information. The rest either fill the
+	 * screen or change a rule; those do not need to be pointed at, and pointing at them turns
+	 * "something is wrong here" into a notification.
+	 */
+	private static final Set<String> CUED_ANOMALIES = Set.of(
+			"watcher_alignment", "action_echo", "organ_misread", "peripheral_residue");
+
+	private static void playTriggerCue(Minecraft client, AnomalyStartS2C payload) {
+		if (client.player == null || client.level == null) return;
+		if (!CUED_ANOMALIES.contains(payload.anomalyId())) return;
+		Vec3 source = triggerSource(client, payload);
+		client.level.playLocalSound(source.x, source.y, source.z, SoundEvents.AMBIENT_CAVE.value(),
+				SoundSource.AMBIENT, 1.0F, 0.72F, false);
+		ambientSoundCount++;
+	}
+
+	private static Vec3 triggerSource(Minecraft client, AnomalyStartS2C payload) {
+		if (payload.hasAnchor()) return Vec3.atCenterOf(BlockPos.of(payload.anchorPosition()));
+		// Level with the player's eyes rather than offset vertically: the horizontal bearing is the
+		// whole point of positioning it, and a height difference only muddies it.
+		double angle = Math.toRadians(Math.floorMod(payload.seed(), 360L));
+		return client.player.getEyePosition().add(Math.cos(angle) * ANCHORLESS_CUE_DISTANCE, 0.0D,
+				Math.sin(angle) * ANCHORLESS_CUE_DISTANCE);
+	}
+
 	/**
 	 * Signal cues play as UI sound rather than through the level: restore() runs on disconnect and
 	 * dimension changes where {@code client.level} may already be gone, and the signal is not a
@@ -919,10 +1049,23 @@ public final class AnomalyPresentationController {
 	public static boolean isTemporalDriftActive() {
 		return instanceId != null && anomalyId.equals("temporal_drift");
 	}
+	/**
+	 * How far the sky has been rotated away from the local clock, as a fraction of a full turn.
+	 *
+	 * <p>Zero unless temporal_drift is running. Exposed because the weather tool's phase channel
+	 * reports exactly this quantity: the terminal reads the real server clock while the sky above
+	 * it does not, and that disagreement is the whole point of the anomaly. Derived here rather
+	 * than re-computed by the instrument so the number the tool prints and the rotation the sky
+	 * renderer applies can never come apart.</p>
+	 */
+	public static float celestialPhaseError() {
+		if (!isTemporalDriftActive()) return 0.0F;
+		return 0.30F + Math.floorMod(seed, 1_000L) / 1_000.0F * 0.40F;
+	}
 	/** Rotates a celestial angle (radians) by a stable per-session fraction of a full turn. */
 	public static float driftedCelestialAngle(float original) {
 		if (!isTemporalDriftActive()) return original;
-		float turn = 0.30F + Math.floorMod(seed, 1_000L) / 1_000.0F * 0.40F;
+		float turn = celestialPhaseError();
 		return (float) Math.floorMod((long) ((original + turn * Mth.TWO_PI) * 1_000.0F),
 				(long) (Mth.TWO_PI * 1_000.0F)) / 1_000.0F;
 	}
@@ -1034,6 +1177,8 @@ public final class AnomalyPresentationController {
 	}
 	public static String activeId() { return anomalyId; }
 	public static int remainingTicks() { return remainingTicks; }
+	/** Total scheduled length of the running anomaly, so envelopes can be positioned within it. */
+	public static int totalTicks() { return totalTicks; }
 	public static AnomalyTestSnapshot testSnapshot() {
 		Set<String> overlays = new java.util.LinkedHashSet<>();
 		boolean echoRegistered = actionEcho != null && activeLevel != null

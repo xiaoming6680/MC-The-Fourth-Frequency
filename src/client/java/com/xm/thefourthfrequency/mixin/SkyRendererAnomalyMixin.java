@@ -1,6 +1,7 @@
 package com.xm.thefourthfrequency.mixin;
 
 import com.xm.thefourthfrequency.client_ui.AnomalyPresentationController;
+import com.xm.thefourthfrequency.client_ui.SkyInstrumentSampler;
 import com.xm.thefourthfrequency.client_ui.WorldInterfaceAtmosphereController;
 import net.minecraft.client.Camera;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -27,10 +28,16 @@ public abstract class SkyRendererAnomalyMixin {
 					AnomalyPresentationController.driftedStarBrightness(state.starBrightness);
 		}
 		float strength = AnomalyPresentationController.redHorizonStrength();
-		if (strength <= 0.0F) return;
+		if (strength <= 0.0F) {
+			SkyInstrumentSampler.observe(state);
+			return;
+		}
 		if (state.sunriseAndSunsetColor != 0)
 			state.sunriseAndSunsetColor = AnomalyPresentationController.redHorizonShaderColor(
 					state.sunriseAndSunsetColor);
 		state.starBrightness *= 1.0F - strength;
+		// Sampled after every rewrite above, so the weather tool measures the sky the player is
+		// actually being shown rather than the one vanilla would have drawn.
+		SkyInstrumentSampler.observe(state);
 	}
 }

@@ -87,6 +87,14 @@ final class AnomalyClientAutomationContractTest {
 		assertTrue(worldInterface.runsWorldInterface());
 		assertFalse(worldInterface.runsMainline());
 		assertFalse(worldInterface.runsAnomalies());
+		// The screen filters are in the full run as well as on their own: a chain that will not
+		// compile installs nothing and logs nothing a player would find, so it must not be left to
+		// a targeted suite somebody remembers to ask for.
+		assertTrue(defaults.runsScreenFilters());
+		var screenFilters = ClientGameTestSelection.parse("screen-filters", "");
+		assertTrue(screenFilters.runsScreenFilters());
+		assertFalse(screenFilters.runsMainline());
+		assertFalse(screenFilters.runsAnomalies());
 		assertThrows(IllegalArgumentException.class,
 				() -> ClientGameTestSelection.parse("mainline", "phantom_echo"));
 		assertThrows(IllegalArgumentException.class,

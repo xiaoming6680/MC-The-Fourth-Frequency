@@ -51,7 +51,25 @@ public final class AnomalyRuntimeService {
 				anomaly.tier(), anomaly.variant(), anomaly.seed(), now, durationTicks, anchor != null,
 				anchor == null ? "" : anchor.dimension(), anchor == null ? 0L : anchor.position().asLong()));
 		anomaly.markRunning();
+		recordSkyShift(player, definition);
 		return true;
+	}
+
+	/**
+	 * Leaves a RECORDS line when the sky turns.
+	 *
+	 * <p>Ordinary anomalies deliberately never reach that page - {@code TerminalSignalService.record}
+	 * refuses any type that is an anomaly id, which is what keeps the page a log of the story rather
+	 * than a list of everything that has glitched. The red horizon is the exception worth making: it
+	 * is the one anomaly the terminal has an instrument for, so a player who reads the weather tool
+	 * and then finds nothing in RECORDS has been shown a reading the device claims not to have taken.
+	 *
+	 * <p>Filed under its own type rather than the anomaly id, so the guard above stays intact and no
+	 * other anomaly can slip through with it.
+	 */
+	private static void recordSkyShift(ServerPlayer player, AnomalyDefinition definition) {
+		if (!definition.id().equals("red_horizon")) return;
+		TerminalSignalService.record(player, SignalBand.WEATHER, "sky_red_shift", 0, 2, true);
 	}
 
 	public static boolean phase(ServerPlayer player, String phase, boolean blackout, int remainingTicks, Anchor anchor) {
@@ -76,11 +94,50 @@ public final class AnomalyRuntimeService {
 		return true;
 	}
 
+	/**
+	 * Ends {@code dark_watcher} the moment its figure is found.
+	 *
+	 * <p>Every other anomaly is completed by the client, because every other anomaly's end condition
+	 * is something the client can see: a timer running out, a screen being dismissed. This one ends
+	 * when the server decides the player has looked at the entity long enough, and the client is
+	 * never told - so left to the ordinary path the instance sat there until it timed out, counted
+	 * as interrupted, with nothing in the world to show for it.
+	 *
+	 * <p>Silently does nothing unless the running anomaly is actually this one, so a watcher that
+	 * belongs to the ambient sighting rather than to an anomaly cannot end an unrelated instance.
+	 */
+	public static void completeWatcherSighting(ServerPlayer player) {
+		RuntimeEntry entry = ACTIVE.get(player);
+		if (entry == null || !entry.anomaly.anomalyId().equals("dark_watcher")) return;
+		long now = player.level().getGameTime();
+		cleanup(entry);
+		if (!entry.anomaly.acceptCompletion(player.getUUID(), entry.anomaly.instanceId(), now,
+				AnomalyCompletionStatus.COMPLETED)) return;
+		finalizeEntry(player, entry);
+	}
+
+	/**
+	 * Phase name that tells the client to tear its presentation down now.
+	 *
+	 * <p>The client otherwise only ends an anomaly when its own copy of the clock runs out, and
+	 * {@link #phase} takes the <em>larger</em> of the two remaining counts, so a server-side
+	 * interruption could not shorten it. Everything the server does here - suspending anomalies for
+	 * the finale, a respawn, a leave - therefore left the client running the presentation to full
+	 * length against an instance that no longer existed.
+	 *
+	 * <p><b>This is what silenced the boss fight.</b> {@code silent_world} mutes MUSIC, AMBIENT and
+	 * HOSTILE for as long as the client believes it is running, and it is a sustained anomaly - up to
+	 * five minutes. Starting the finale interrupts it server-side, the client never hears about it,
+	 * and the encounter plays out with no attack cues and no score, the ending track included.
+	 */
+	public static final String INTERRUPTED_PHASE = "interrupted";
+
 	public static void interrupt(ServerPlayer player, boolean clearSuspension) {
 		RuntimeEntry entry = ACTIVE.remove(player);
 		if (entry != null) {
 			cleanup(entry);
 			entry.anomaly.interrupt();
+			notifyInterrupted(player, entry);
 		}
 		FrequencyWorldData data = FrequencyWorldData.get(player.level().getServer());
 		data.updateTerminalRecord(player.getUUID(), tag -> {
@@ -119,9 +176,25 @@ public final class AnomalyRuntimeService {
 			if (now >= entry.anomaly.timeoutTick()) {
 				entry.anomaly.interrupt();
 				ACTIVE.remove(player);
+				// The timeout is reached precisely when the client did not report a completion, so it
+				// is also the case where the client may still be running the presentation.
+				notifyInterrupted(player, entry);
 				clearProjection(player);
 			}
 		}
+	}
+
+	/**
+	 * Sends the teardown, if there is still anyone to send it to.
+	 *
+	 * <p>The disconnect check is not just defensive. {@code interrupt} is called from the leave event,
+	 * where the client is already going away and has nothing left to tear down - and writing to a
+	 * closing connection there is exactly what the client GameTest network synchronizer refuses.
+	 */
+	private static void notifyInterrupted(ServerPlayer player, RuntimeEntry entry) {
+		if (player.hasDisconnected() || !ServerPlayNetworking.canSend(player, AnomalyPhaseS2C.TYPE)) return;
+		ServerPlayNetworking.send(player, new AnomalyPhaseS2C(entry.anomaly.instanceId(),
+				entry.anomaly.nextPhaseSequence(), INTERRUPTED_PHASE, false, 0, false, "", 0L));
 	}
 
 	private static void cleanup(RuntimeEntry entry) {

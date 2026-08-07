@@ -148,11 +148,25 @@ final class ResourceContractTest {
 	void customModelDispatchCoversEveryProjectionValue() throws Exception {
 		JsonObject root = JsonParser.parseString(Files.readString(ASSETS.resolve("items/old_terminal.json"),
 				StandardCharsets.UTF_8)).getAsJsonObject();
-		var entries = root.getAsJsonObject("model").getAsJsonArray("entries");
-		assertEquals(5, entries.size());
+		// The flat projection is no longer the whole definition. Every view except the inventory slot
+		// now draws the 3D shell, so the six stage-and-unread icons sit under the display-context
+		// case that keeps them. Both branches dispatch on the same six values from the same slot,
+		// which is what lets the item in hand and the icon in the bag never disagree about the form.
+		JsonObject flat = root.getAsJsonObject("model").getAsJsonArray("cases").get(0)
+				.getAsJsonObject().getAsJsonObject("model");
+		JsonObject shell = root.getAsJsonObject("model").getAsJsonObject("fallback");
+		for (var branch : new JsonObject[]{flat, shell}) {
+			assertEquals(0, branch.get("index").getAsInt(),
+					"both projections must stay in custom model data slot 0");
+			assertEquals(5, branch.getAsJsonArray("entries").size());
+		}
+		var entries = flat.getAsJsonArray("entries");
+		var shellEntries = shell.getAsJsonArray("entries");
 		for (int index = 0; index < 5; index++) {
 			assertEquals(index + 1.0F, entries.get(index).getAsJsonObject().get("threshold").getAsFloat());
+			assertEquals(index + 1.0F, shellEntries.get(index).getAsJsonObject().get("threshold").getAsFloat());
 			assertTrue(Files.isRegularFile(ASSETS.resolve("models/item/old_terminal_" + (index + 1) + ".json")));
+			assertTrue(Files.isRegularFile(ASSETS.resolve("models/item/old_terminal_held_" + (index + 1) + ".json")));
 		}
 	}
 
@@ -191,14 +205,27 @@ final class ResourceContractTest {
 		assertTrue(generator.contains("311.0 * index / buffer_samples"));
 		assertFalse(generator.contains("+ time * 170.0"),
 				"The full-screen failure cue must not rise in pitch before its stuck buffer");
+		// Each variant is a different *kind* of hang rather than the same one re-rolled, which
+		// is the whole reason a set exists: the pursuit freeze replays these every five ticks
+		// and a repeated sample stops being a machine failing and becomes a recognisable effect.
+		for (String recipe : new String[]{"def warning_relay_chatter(", "def warning_tape_dip(",
+				"def collapse_driver_stall(", "def collapse_bit_decay("}) {
+			assertTrue(generator.contains(recipe), recipe);
+		}
 		for (String event : new String[]{"alpha_corruption_warning", "alpha_corruption_collapse"}) {
 			assertTrue(sounds.has(event), event);
 			// These two are events, not ambience: one warns that the downgrade is coming apart
 			// and the other is the failure itself. Withholding their subtitles did not protect
 			// any atmosphere, it just meant a player reading captions got no warning at all.
 			assertTrue(sounds.getAsJsonObject(event).has("subtitle"), event);
-			for (var sound : sounds.getAsJsonObject(event).getAsJsonArray("sounds")) {
+			var variants = sounds.getAsJsonObject(event).getAsJsonArray("sounds");
+			assertTrue(variants.size() >= 3,
+					event + " must keep at least three variants; one sample replayed through a"
+							+ " freeze reads as a sound effect, not as a failure");
+			Set<String> distinct = new HashSet<>();
+			for (var sound : variants) {
 				String name = sound.getAsString();
+				assertTrue(distinct.add(name), name + " is listed twice");
 				Path path = ASSETS.resolve("sounds/"
 						+ name.substring(name.indexOf(':') + 1) + ".ogg");
 				byte[] header = Files.readAllBytes(path);
@@ -266,6 +293,57 @@ final class ResourceContractTest {
 		// else down too, so the mod has to supply the trim itself.
 		assertTrue(bed.contains("effectiveBedVolume"),
 				"the beds must read their own volume trim, not the shared peak volume");
+	}
+
+	/**
+	 * The sky monitor's corruption is confined to the weather tool's own card.
+	 *
+	 * <p>Three separate promises are pinned here because all three are invisible in review and
+	 * expensive to rediscover: the presentation cannot reach the rest of the screen, it cannot
+	 * pretend to be a crash, and every fault string it can draw actually exists in both languages.
+	 * The first is the one that keeps the page tabs - the player's way out - legible during a
+	 * burst.</p>
+	 */
+	@Test
+	void theSkyMonitorStaysInsideTheWeatherToolAndSpeaksAsAnInstrument() throws Exception {
+		String renderer = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/SkyInstrumentRenderer.java"),
+				StandardCharsets.UTF_8);
+		// Full-viewport helpers would put tearing and snow over the tabs and the close hint.
+		assertFalse(renderer.contains("guiWidth"),
+				"the sky monitor must not reach outside the weather tool's card");
+		assertFalse(renderer.contains("guiHeight"),
+				"the sky monitor must not reach outside the weather tool's card");
+		assertTrue(renderer.contains("enableScissor"),
+				"torn rows are displaced horizontally and must be clipped to the card");
+		assertTrue(renderer.contains("disableScissor"));
+
+		JsonObject zh = JsonParser.parseString(Files.readString(
+				ASSETS.resolve("lang/zh_cn.json"), StandardCharsets.UTF_8)).getAsJsonObject();
+		JsonObject en = JsonParser.parseString(Files.readString(
+				ASSETS.resolve("lang/en_us.json"), StandardCharsets.UTF_8)).getAsJsonObject();
+		String prefix = "terminal.thefourthfrequency.tool.weather.";
+		for (String fault : new String[]{"no_carrier", "rejected", "saturated", "phase_lost",
+				"resync", "dome_timeout", "star_underflow", "clock_mismatch"}) {
+			assertTrue(renderer.contains('"' + fault + '"'),
+					fault + " is translated but the flood can never draw it");
+			assertTrue(zh.has(prefix + "fault." + fault), fault);
+			assertTrue(en.has(prefix + "fault." + fault), fault);
+		}
+		for (String channel : new String[]{"zenith", "horizon", "stars", "phase", "saturated"}) {
+			assertTrue(zh.has(prefix + "channel." + channel), channel);
+			assertTrue(en.has(prefix + "channel." + channel), channel);
+		}
+		// The line that carries "N minutes until dark" may fail visibly, but never silently.
+		assertTrue(zh.has(prefix + "lost"));
+		assertTrue(en.has(prefix + "lost"));
+
+		// A fabricated stack trace would both stand in for a rule prompt and convince players the
+		// game had crashed. The faults are instrument language and have to stay that way.
+		for (String forbidden : new String[]{"Exception", "at com.", "Caused by", "Traceback"}) {
+			assertFalse(en.get(prefix + "fault.no_carrier").getAsString().contains(forbidden));
+			assertFalse(renderer.contains('"' + forbidden), forbidden);
+		}
 	}
 
 	@Test
@@ -342,11 +420,12 @@ final class ResourceContractTest {
 		for (String retired : List.of("terminal.thefourthfrequency.band.weather",
 				"terminal.thefourthfrequency.band.mining", "terminal.thefourthfrequency.band.public",
 				"terminal.thefourthfrequency.band.unknown", "terminal.thefourthfrequency.objective.calibrate",
-				"terminal.thefourthfrequency.tuning.auto", "terminal.thefourthfrequency.tuning.manual")) {
+				"terminal.thefourthfrequency.tuning.auto", "terminal.thefourthfrequency.tuning.manual",
+				"terminal.thefourthfrequency.signal.feed.empty",
+				"terminal.thefourthfrequency.signal.navigation_prefix",
+				"terminal.thefourthfrequency.signal.marker.unrecorded")) {
 			assertFalse(zh.has(retired), "Retired fixed-band copy must stay absent: " + retired);
 		}
-		assertEquals("·· 未记录",
-				zh.get("terminal.thefourthfrequency.signal.marker.unrecorded").getAsString());
 		assertEquals("选取文件来查看",
 				zh.get("terminal.thefourthfrequency.file.select_prompt").getAsString());
 		assertEquals("文件", zh.get("terminal.thefourthfrequency.tab.files").getAsString());
@@ -380,8 +459,13 @@ final class ResourceContractTest {
 				zh.get("message.thefourthfrequency.terminal.unread_reminder").getAsString());
 		assertFalse(zh.has("message.thefourthfrequency.task.completed"),
 				"Completion folded into the reward line it always preceded");
-		assertEquals("任务完成 · 已领取 %s ×%s。",
+		// Names the task, because nothing was pressed to earn it: the first one pays out while the
+		// player is still inside the first-boot walkthrough, and "claimed bread ×6" on its own is an
+		// effect with no stated cause. The name only, not the objective line - this has to fit on one
+		// line above the hotbar.
+		assertEquals("任务完成：%s · %s ×%s",
 				zh.get("message.thefourthfrequency.task.completed_reward_claimed").getAsString());
+		assertEquals("认识终端", zh.get("terminal.thefourthfrequency.task.name.learn_terminal").getAsString());
 		assertFalse(zh.has("message.thefourthfrequency.terminal.stock_zero"),
 				"The empty rack folded into the single dispense line it always followed");
 		assertEquals("零号站给了你一台个人终端；这里已经没有备用的了。",
@@ -396,10 +480,13 @@ final class ResourceContractTest {
 				zh.get("terminal.thefourthfrequency.navigation.completed").getAsString());
 		assertEquals("开始导航", zh.get("terminal.thefourthfrequency.tool.guide").getAsString());
 		assertEquals("停止导航", zh.get("terminal.thefourthfrequency.tool.stop").getAsString());
-		for (var entry : zh.entrySet()) {
-			if (!entry.getKey().startsWith("terminal.thefourthfrequency.signal.card.")) continue;
-			assertFalse(entry.getValue().getAsString().contains("碎片"),
-					"SIGNAL card copy must not expose fragment labels: " + entry.getKey());
+		// The signal-card feed and its copy are gone along with the code that never drew them.
+		for (String retiredPrefix : List.of("terminal.thefourthfrequency.signal.card.",
+				"terminal.thefourthfrequency.structure.location.",
+				"terminal.thefourthfrequency.dimension.")) {
+			assertTrue(zh.keySet().stream().noneMatch(key -> key.startsWith(retiredPrefix)),
+					"Copy for the removed signal-card feed must stay absent: " + retiredPrefix);
+			assertTrue(en.keySet().stream().noneMatch(key -> key.startsWith(retiredPrefix)), retiredPrefix);
 		}
 		for (String abstractTerm : new String[]{"经历连续性", "身份连续性", "身体映射", "关系异常",
 				"跨维度连续性", "关系证据", "关系层", "连续性样本", "关系触点",
@@ -479,12 +566,81 @@ final class ResourceContractTest {
 				"Nearby side-route tuning must not require opening the navigation detail page");
 		assertFalse(runtime.contains("view.selectedTool != TerminalTool.NAVIGATION.slot()"),
 				"Server tuning and lock progress must not depend on the selected tool");
+		// fragmentLockedSinceTick is written from server.getTickCount(). Measuring it against
+		// level.getGameTime() only agrees on a world that has never been reloaded; everywhere else the
+		// difference clamps to the maximum, so the panel claimed a lock a full second before the file
+		// was granted and never counted up.
+		assertTrue(runtime.contains("private static int receiverLockTicks(ServerPlayer player, ViewState view) {"),
+				"Lock progress must read its own clock instead of accepting one from the caller");
+		assertTrue(runtime.contains("long now = player.level().getServer().getTickCount();"));
+		assertFalse(runtime.contains("receiverLockTicks(player, view, now)"),
+				"Lock progress must never be measured against the level's game time");
 		assertTrue(screen.contains("TerminalUiLayout.RECEIVER_SLIDER"));
 		assertTrue(screen.contains("displayedObjectiveFraction"));
-		assertTrue(screen.contains("drawTaskReward(graphics)"));
+		// The bar used to advance by a fixed fraction of the remaining distance once per client tick,
+		// which is twenty visible steps a second on something that gains a pixel or two per step. It
+		// follows the frame clock now; an exponential follower keeps the rate machine-independent,
+		// which is the part a per-tick fraction cannot offer.
+		assertTrue(screen.contains("displayedObjectiveFraction = TerminalMotion.catchUp"),
+				"The objective bar must follow the frame clock rather than stepping once per tick");
+		assertFalse(screen.contains("displayedObjectiveFraction +="),
+				"The objective bar must not go back to a per-tick fraction of the remaining distance");
+		// GuiGraphics#enableScissor runs the current pose itself, so the page transition hands it the
+		// terminal's own 512x256 coordinates. Converting to screen pixels first applies the panel
+		// transform twice and clips the entire display away.
+		assertTrue(screen.contains("graphics.enableScissor(body.left(), body.top(), body.right(), body.bottom())"),
+				"The page transition must clip in panel space, not screen space");
+		// Hit testing follows the page the instant it changes; only the drawing lags. Otherwise a
+		// control could be clicked at a position it merely appears to occupy mid-slide.
+		assertTrue(screen.contains("private void enterPage(TerminalPage next)"));
+		assertTrue(screen.contains("motion.beginPageTransition(page, next, nowMillis())"));
+		assertTrue(screen.contains("private TerminalMotionState.Control controlAt(double x, double y)"),
+				"Hover and click must resolve a control through one shared walk of the layout");
+
+		// The first-boot walkthrough is the single sanctioned exception to "never take the exit
+		// away", and it only holds while all four of its conditions hold with it.
+		assertTrue(screen.contains("snapshot.onboardingRequired()"),
+				"Whether the walkthrough runs is the server's answer, not the client's guess");
+		assertTrue(screen.contains("public boolean shouldCloseOnEsc()"),
+				"The walkthrough must refuse Escape through vanilla's own gate, not only by swallowing keys");
+		assertTrue(screen.contains("!closedByServer && onboardingLocksExit()"),
+				"A server-side close must outrank the walkthrough's hold on the exit");
+		assertTrue(screen.contains("player.hurtTime > 0"),
+				"The walkthrough must release the exit as soon as the player takes damage");
+		// hurtTime counts down over ten ticks, so a per-frame sample reads one hit as many. Twenty
+		// samples a second has ten times the margin it needs and cannot double-count.
+		assertTrue(screen.contains("\t\ttickOnboarding();"),
+				"The damage failsafe must be driven from tick(), not from render()");
+		assertEquals(1, screen.split("player\\.hurtTime", -1).length - 1,
+				"hurtTime must be sampled in exactly one place");
+		// The client walks the player to the tabs; it never reports that it finished. Anything that
+		// could write task state from here would be a way to claim the reward without the visits.
+		assertFalse(screen.contains("TerminalData.ONBOARDING_DONE"),
+				"The client must not latch the walkthrough closed; that is the server's to record");
+		assertFalse(screen.contains("TerminalData.TERMINAL_PAGE_VISIT_MASK"),
+				"The client must not write the task's own progress mask");
+		assertTrue(screen.contains("drawTaskReward(graphics, settled ? completedTask.reward()"));
 		assertTrue(screen.contains("graphics.renderItem(reward"));
-		assertTrue(screen.contains("TerminalUiLayout.HOME_TASK.contains"));
-		assertTrue(screen.contains("TerminalControlPayload.CLAIM_TASK_REWARD"));
+		// The card has to survive the instant its task is paid for. The snapshot that reports the
+		// delivery already names the next task, so without the hold the completed one is never drawn
+		// at all - the bar the player was watching is replaced by an empty one for an objective they
+		// have not read, while the reward lands in their inventory unaccounted for.
+		assertTrue(screen.contains("next.objectiveIndex() > snapshot.objectiveIndex()"),
+				"The home card must notice the task it was showing being completed and paid for");
+		// The hold is what says it; the card must not also spell it out in words. The objective at
+		// n/n, the filled bar, the completion colour and the reward box already carry the whole
+		// message, and a fifth line beside them was the card still talking after it had finished.
+		assertFalse(screen.contains("terminal.thefourthfrequency.home.reward_delivered"),
+				"A held completion must not restate the reward the card is already drawing");
+		// Rewards are delivered the moment a task completes, so the card is a readout: still drawn,
+		// no longer hit-tested. A claim control could only ask for something the player already has,
+		// and the packet behind it also paid out every other finished task at once. The server still
+		// answers the action for older clients.
+		assertTrue(screen.contains("TerminalUiLayout.HOME_TASK"));
+		assertFalse(screen.contains("TerminalUiLayout.HOME_TASK.contains"),
+				"The task card must not be a click target once nothing on it is claimable");
+		assertFalse(screen.contains("send(TerminalControlPayload.CLAIM_TASK_REWARD"),
+				"The task card must not offer a claim the automatic delivery has already made");
 		assertTrue(screen.contains("TerminalControlPayload.VISIT_PAGE"));
 		assertTrue(screen.contains("recommendedPrimaryTool()"));
 		assertTrue(screen.contains("tools.mineralSurveyNearby()"));
@@ -504,7 +660,7 @@ final class ResourceContractTest {
 		assertTrue(screen.contains("HOME_TOOL_DETAIL"));
 		assertTrue(screen.contains("HOME_TOOL_CLOSE"));
 		assertTrue(screen.contains("returnHomeAfterToolActivation"));
-		assertTrue(screen.contains("!toolVisible(tool) || !tools.available(tool)"),
+		assertTrue(screen.contains("tool == null || !tools.available(tool)"),
 				"Locked tools must be rejected by the shared detail-opening boundary");
 		assertFalse(screen.contains("localLockedTool"),
 				"Locked tools must not retain a local-only detail state");
@@ -527,8 +683,15 @@ final class ResourceContractTest {
 		assertTrue(screen.contains("\".\".repeat(dots)"));
 		assertTrue(screen.contains("drawFittedLine(graphics, lineTwo"));
 		assertTrue(screen.contains("navigationOptionBounds"));
-		assertTrue(screen.contains("targets.size() >= 3"));
-		assertTrue(screen.contains("index < 3"));
+		// Structures no longer take all three option slots. The unstable signal is story content and
+		// used to vanish without a mark exactly when three structures were available; structures are
+		// the ones that can be counted in words instead.
+		assertTrue(screen.contains("TOOL_OPTION_SLOTS - (unstable ? 1 : 0)"),
+				"The unstable signal must keep a reserved option slot");
+		assertTrue(screen.contains("index >= structureSlots"));
+		assertTrue(screen.contains("omittedNavigationTargets()"),
+				"Destinations the option row could not show must be counted, not dropped in silence");
+		assertFalse(screen.contains("targets.size() >= 3"));
 		assertTrue(screen.contains("TerminalControlPayload.MARK_RECORDS_READ"));
 		assertTrue(screen.contains("snapshot.unreadFileCount() > 0"));
 		assertTrue(screen.contains("TerminalControlPayload.MARK_FILES_SEEN"));
@@ -541,10 +704,14 @@ final class ResourceContractTest {
 		assertTrue(screen.contains("drawFileScrollbar(graphics"));
 		assertTrue(screen.contains("rows.add(FileRow.gap(FILE_PARAGRAPH_GAP))"),
 				"Document paragraphs must retain visible spacing after wrapping");
-		assertTrue(screen.contains("maxFileScroll(rows, viewportHeight)"));
+		assertTrue(screen.contains("maxFileScroll(fileDetailRows(), fileViewportHeight())"),
+				"File scrolling must stay clamped against the built rows and the viewport height");
 		assertTrue(screen.contains("TerminalUiLayout.unreadFlashOn"));
 		assertTrue(screen.contains("Component.literal(\" [!]\")"));
-		assertTrue(screen.contains("snapshot.recordEntries()"));
+		// Both readers of the log take the same navigator-gated list. Filtering in one and not the
+		// other is what let the home card advertise a lead the Records page did not list.
+		assertTrue(screen.contains("snapshot.recordEntries(navigator)"));
+		assertTrue(screen.contains("snapshot.latestSignalEvent(tools.available(TerminalTool.NAVIGATION))"));
 		assertFalse(screen.contains("advanceAutomaticTuning"));
 		assertTrue(screen.contains("TerminalUiLayout.FILE_LIST.contains"));
 		assertTrue(screen.contains("TerminalUiLayout.FILE_CONTENT.contains"));
@@ -694,10 +861,22 @@ final class ResourceContractTest {
 		assertFalse(taskService.contains("TerminalNoticeService.taskComplete(player)"),
 				"Completion and its reward are one moment and must not take two stack slots");
 		assertTrue(taskService.contains(
-				"TerminalNoticeService.rewardClaimed(player, rewardName, rewardCount, completed[0] >= 0)"),
+				"TerminalNoticeService.rewardClaimed(player, taskName(task), rewardName,"),
 				"Automatic and manual reward delivery must share the single merged notice");
-		assertTrue(noticeService.contains(
-				"message.thefourthfrequency.task.reward_claimed\", rewardName, rewardCount"));
+		// A reward that arrives without the player pressing anything has to say what it is for, or
+		// the first task pays out mid-walkthrough and reads as an unexplained handout.
+		assertTrue(noticeService.contains("taskName, rewardName, rewardCount)"),
+				"A completion notice must name the task it is paying for");
+		// Every task's short name has to exist as a literal, or a missing one silently degrades to
+		// the full objective line in the middle of a notice sized for a name.
+		for (String task : new String[]{"learn_terminal", "mine_logs", "bring_iron", "enter_nether",
+				"collect_blaze_rods", "return_from_nether", "craft_eye", "record_eye",
+				"find_stronghold", "enter_end", "defeat_boss"}) {
+			assertTrue(taskService.contains("terminal.thefourthfrequency.task.name." + task),
+					"A task with a reward must have a short name for its completion notice: " + task);
+		}
+		assertTrue(noticeService.contains("message.thefourthfrequency.task.completed_reward_claimed"));
+		assertTrue(noticeService.contains("message.thefourthfrequency.task.reward_claimed"));
 		assertTrue(noticeService.contains("TerminalNoticePayload.TONE_TASK_COMPLETE"),
 				"Reward notices must retain the task-completion tone and green presentation");
 		assertFalse(signalService.contains("TerminalNoticeService.unread(player)"),
@@ -722,6 +901,13 @@ final class ResourceContractTest {
 		assertTrue(survivalProgress.contains("public static final int REQUIRED_IRON = 6;"));
 		assertTrue(taskService.contains(
 				"new TaskDefinition(\"bring_iron\", SurvivalProgressService.REQUIRED_IRON, Items.TORCH, 24)"));
+		// Completion and its reward are one moment, so delivery hangs off progress changing rather
+		// than off opening a page. Anywhere else and a finished task waits, which is what made the
+		// manual claim button feel necessary and made the two paths contradict each other.
+		assertTrue(survivalProgress.contains("TerminalTaskService.notifyIfCompleted(player)"),
+				"Reward delivery must trigger where progress changes");
+		assertFalse(taskService.contains("notifyIfCompleted(player);\n\t\treturn ClaimResult.CLAIMED;"),
+				"A claim packet must not chain the catch-up loop into a burst of rewards");
 		assertTrue(targets.contains("MINESHAFT(2, \"mineshaft\", true"));
 		assertTrue(targets.contains("TRIAL_CHAMBERS(3, \"trial_chambers\", true"));
 		assertTrue(targets.contains("BASTION(5, \"bastion\", true"));
@@ -757,7 +943,10 @@ final class ResourceContractTest {
 		String structureNavigation = Files.readString(Path.of(
 				"src/main/java/com/xm/thefourthfrequency/world/StructureNavigationService.java"),
 				StandardCharsets.UTF_8);
-		assertTrue(snapshot.contains("CURRENT_PROTOCOL_VERSION = 11"));
+		// 13 since the unread lamp joined the snapshot. The three protocols are versioned separately
+		// on purpose, which is the property this line exists to keep honest: adding a field to one
+		// must not silently pass for the others.
+		assertTrue(snapshot.contains("CURRENT_PROTOCOL_VERSION = 13"));
 		assertTrue(navigation.contains("CURRENT_PROTOCOL_VERSION = 6"));
 		assertTrue(toolSnapshot.contains("CURRENT_PROTOCOL_VERSION = 6"));
 		assertTrue(resourceGuidance.contains("TerminalRuntimeService.isOpen(player)"),
@@ -845,7 +1034,7 @@ final class ResourceContractTest {
 		}
 		assertTrue(ritual.contains("RitualResult deposit(") && ritual.contains("RitualResult withdraw(")
 				&& ritual.contains("RitualResult cancel("));
-		assertTrue(policy.contains("COLLAPSE_DURATION_TICKS = 7_200")
+		assertTrue(policy.contains("COLLAPSE_DURATION_TICKS = 12_000")
 				&& policy.contains("MAX_PERMANENT_TERRAIN_EDITS = 8_192")
 				&& policy.contains("MAX_TERRAIN_EDITS_PER_TICK = 32"));
 		assertTrue(stages.contains("SUCCESS_RESOLUTION") && stages.contains("FAILURE_RESOLUTION")
@@ -867,7 +1056,7 @@ final class ResourceContractTest {
 		// stopped being built long ago, and the cage wrapped a bright band of custom texture around
 		// the one thing in the arena a player is meant to be looking at.
 		assertFalse(blocks.contains("WARP_GATE_CORE") || blocks.contains("STABILITY_ANCHOR_CAGE"));
-		assertTrue(protocol.contains("VERSION = 1") && protocol.contains("MAX_PARTICIPANTS = 8")
+		assertTrue(protocol.contains("VERSION = 2") && protocol.contains("MAX_PARTICIPANTS = 8")
 				&& protocol.contains("MAX_GATEWAYS = 20") && protocol.contains("ANCHOR_MASK = 0x03FF"));
 		assertFalse(immunityTag.get("replace").getAsBoolean());
 		String immuneValues = immunityTag.getAsJsonArray("values").toString();
@@ -876,9 +1065,14 @@ final class ResourceContractTest {
 		}
 		// A tag entry naming an unregistered block fails the whole tag on data-pack load.
 		assertFalse(immuneValues.contains("warp_gate_core") || immuneValues.contains("stability_anchor_cage"));
-		assertTrue(mixins.contains("EndCrystalMixin") && mixins.contains("EndPortalBlockMixin")
+		assertTrue(mixins.contains("EndPortalBlockMixin")
 				&& mixins.contains("EnderEyeItemMixin") && mixins.contains("EnderDragonMixin")
 				&& !mixins.contains("ServerPlayerDropMixin"));
+		// The anchors are a bespoke entity now, so nothing has to reach into EndCrystal at all.
+		// A leftover injection there would put mod damage rules back on every vanilla crystal.
+		assertFalse(mixins.contains("EndCrystalMixin"));
+		assertFalse(Files.exists(Path.of(
+				"src/main/java/com/xm/thefourthfrequency/mixin/EndCrystalMixin.java")));
 	}
 
 	@Test
@@ -921,14 +1115,28 @@ final class ResourceContractTest {
 		assertTrue(encounter.contains("prepareVanillaEndReturn(player, result.snapshot())")
 				&& encounter.contains("restoreRespawnAfterVanillaReturn(player, snapshot)"));
 
-		for (String resource : List.of("end_success_zh_cn.txt", "end_failure_zh_cn.txt",
-				"end_success_en_us.txt", "end_failure_en_us.txt")) {
+		for (String resource : List.of("end_success_zh_cn.txt", "end_success_partial_zh_cn.txt",
+				"end_success_preserved_zh_cn.txt", "end_failure_zh_cn.txt",
+				"end_success_en_us.txt", "end_success_partial_en_us.txt",
+				"end_success_preserved_en_us.txt", "end_failure_en_us.txt")) {
 			Path poem = ASSETS.resolve("texts").resolve(resource);
 			assertTrue(Files.isRegularFile(poem), resource);
 			long authoredLines = Files.readAllLines(poem, StandardCharsets.UTF_8).stream()
 					.filter(line -> !line.isBlank()).count();
-			assertEquals(15L, authoredLines, resource + " must retain all authored paragraphs");
+			long expectedParagraphs = resource.contains("failure") ? 62L : 65L;
+			assertEquals(expectedParagraphs, authoredLines,
+					resource + " must retain all authored paragraphs");
 		}
+
+		// The roll now owns the closing quote too, so ordinal 2 has somewhere to read from.
+		for (String resource : List.of("postcredits_zh_cn.txt", "postcredits_en_us.txt")) {
+			Path quote = ASSETS.resolve("texts").resolve(resource);
+			assertTrue(Files.isRegularFile(quote), resource);
+			assertFalse(Files.readString(quote, StandardCharsets.UTF_8).contains("§7"),
+					resource + " must stay unattributed");
+		}
+		assertTrue(winScreenMixin.contains("postcreditsResource()"),
+				"The closing quote must not fall back to the vanilla sailing quote");
 	}
 
 	@Test
@@ -1068,6 +1276,184 @@ final class ResourceContractTest {
 		}
 	}
 
+	/**
+	 * The held shell is six materials on one unmoving body.
+	 *
+	 * <p>The rigidity is the product rule here, not a modelling convenience: the terminal is a
+	 * sealed instrument, and a lid that opened would have made "the device is working" something
+	 * the player reads off a hinge instead of off the screen. So the geometry must be byte-identical
+	 * across all six forms, and no element may carry a rotation at all - the previous shell had a
+	 * lid on a hinge and six hand-placed frames to swing it through, and both are gone.</p>
+	 */
+	@Test
+	void heldShellIsOneRigidBodyAcrossSixFormsDrivenWithoutTouchingTheServerStack() throws Exception {
+		String geometry = null;
+		for (int form = 0; form < 6; form++) {
+			var atlas = ImageIO.read(ASSETS.resolve("textures/item/old_terminal_shell_" + form + ".png").toFile());
+			assertEquals(128, atlas.getWidth());
+			assertEquals(128, atlas.getHeight());
+
+			Path model = ASSETS.resolve("models/item/old_terminal_held_" + form + ".json");
+			assertTrue(Files.exists(model), () -> "missing held form: " + model);
+			JsonObject json = JsonParser.parseString(Files.readString(model, StandardCharsets.UTF_8))
+					.getAsJsonObject();
+			var elements = json.getAsJsonArray("elements");
+			assertTrue(elements.size() >= 2, "the shell needs a chassis and its raised rim");
+			for (var element : elements) {
+				assertFalse(element.getAsJsonObject().has("rotation"),
+						() -> "form " + json + " carries a rotated element; the device does not fold");
+			}
+			// Same body, different material. A form that moved a vertex would be a mechanical change
+			// dressed as a palette change.
+			if (geometry == null) geometry = elements.toString();
+			else assertEquals(geometry, elements.toString(),
+					"every form must share one geometry and differ only in its atlas");
+
+			assertEquals("thefourthfrequency:item/old_terminal_shell_" + form,
+					json.getAsJsonObject("textures").get("shell").getAsString());
+			JsonObject display = json.getAsJsonObject("display");
+			for (String view : new String[]{"thirdperson_righthand", "thirdperson_lefthand",
+					"firstperson_righthand", "firstperson_lefthand", "gui", "head", "ground", "fixed"}) {
+				assertTrue(display.has(view), () -> "held form " + model + " has no " + view + " pose");
+			}
+			// FIXED is the pose the two-handed presentation renders through, and every position in
+			// TerminalHandheldPose is written as an absolute point in the frame on the assumption
+			// that it leaves the model centred at unit scale. A translation or scale here would
+			// silently shift the whole performance off centre.
+			JsonObject fixed = display.getAsJsonObject("fixed");
+			for (int axis = 0; axis < 3; axis++) {
+				assertEquals(0, fixed.getAsJsonArray("translation").get(axis).getAsDouble());
+				assertEquals(1, fixed.getAsJsonArray("scale").get(axis).getAsDouble());
+			}
+		}
+
+		// The face is as wide relative to its height as the open panel is, so the CRT reads as the
+		// same screen in hand and on screen. An earlier pass made the body nearly square, which
+		// turned a landscape monitor into a portrait one.
+		JsonObject chassis = JsonParser.parseString(Files.readString(
+				ASSETS.resolve("models/item/old_terminal_held_0.json"), StandardCharsets.UTF_8))
+				.getAsJsonObject().getAsJsonArray("elements").get(0).getAsJsonObject();
+		double width = chassis.getAsJsonArray("to").get(0).getAsDouble()
+				- chassis.getAsJsonArray("from").get(0).getAsDouble();
+		double height = chassis.getAsJsonArray("to").get(1).getAsDouble()
+				- chassis.getAsJsonArray("from").get(1).getAsDouble();
+		assertTrue(width / height >= 1.7D && width / height <= 2.3D,
+				() -> "the device is not a landscape panel: " + width + "x" + height);
+
+		// Nothing may still point at the folding shell, in either direction: a leftover model would
+		// be shipped dead weight, and a leftover reference would be a missing-texture cube in hand.
+		assertFalse(Files.exists(ASSETS.resolve("textures/item/old_terminal_shell.png")),
+				"the shared fold atlas must not remain in the runtime pack");
+		for (int frame = 0; frame < 6; frame++) {
+			Path stale = ASSETS.resolve("models/item/old_terminal_fold_" + frame + ".json");
+			assertFalse(Files.exists(stale), () -> "retired fold frame still present: " + stale);
+		}
+
+		String definition = Files.readString(ASSETS.resolve("items/old_terminal.json"), StandardCharsets.UTF_8);
+		assertTrue(definition.contains("minecraft:display_context"),
+				"The inventory icon keeps the flat art while every other view gets the shell");
+		assertTrue(definition.contains("old_terminal_held_5"));
+		assertFalse(definition.contains("old_terminal_fold"),
+				"the item definition must not reference the retired fold frames");
+		assertTrue(definition.contains("\"index\": 0"),
+				"Slot 0 carries the visual stage and unread lamp, exactly as before");
+		assertFalse(definition.contains("\"index\": 1"),
+				"The second animation index is retired; the shell no longer has frames to select");
+
+		String animator = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/TerminalHandheldAnimator.java"),
+				StandardCharsets.UTF_8);
+		assertFalse(animator.contains("CustomModelData"),
+				"The performance must not write item components; that replays vanilla's equip swing");
+		// The server pushes a snapshot roughly once a second while the terminal is open. Restarting
+		// the phase on each would hold the device mid-travel and the screen would never arrive.
+		assertTrue(animator.contains("if (state == State.OPENING || state == State.OPEN) return;"),
+				"A repeated snapshot must not restart the opening");
+		assertTrue(animator.contains("!holdingTerminal(client)") && animator.contains("client.player == null"),
+				"The animation must abort when the item or the player goes away");
+
+		String mixin = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/ItemInHandRendererTerminalMixin.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(mixin.contains("FIRST_PERSON_RIGHT_HAND") && mixin.contains("FIRST_PERSON_LEFT_HAND"),
+				"The performance is the holder's own first-person view and nobody else's");
+		assertTrue(mixin.contains("HumanoidArm.RIGHT") && mixin.contains("HumanoidArm.LEFT"),
+				"The terminal is a two-handed instrument and is carried in both hands");
+		assertTrue(mixin.contains("this.offHandItem.isEmpty()"),
+				"Taking both hands must never silently hide whatever is in the off hand");
+		assertTrue(mixin.contains("AnomalyPresentationController.isFirstPersonHandHidden()"),
+				"A detached second-person camera must not get the hands back through this path");
+		// Vanilla replays the equip animation whenever the visible stack changes, and decides that
+		// by comparing components. The terminal rewrites custom_data every sync and
+		// custom_model_data whenever the lamp moves, and neither type is exempt - so an open
+		// terminal would drop out of the hands and climb back several times a second.
+		assertTrue(mixin.contains("shouldInstantlyReplaceVisibleItem"),
+				"The terminal's own state updates must not be mistaken for a change of item");
+		assertTrue(mixin.contains("from.is(ModItems.OLD_TERMINAL) && to.is(ModItems.OLD_TERMINAL)"),
+				"Only terminal-to-terminal is instant; real swaps keep vanilla's equip animation");
+		assertTrue(mixin.contains("this.oMainHandHeight, this.mainHandHeight"),
+				"The equip height must still be honoured, so selecting the terminal raises it");
+		// Cancelling the method also skips vanilla's turning lag. Without it the device is welded
+		// rigidly to the camera, and on something this large and this central that is the first
+		// thing a player notices when they turn their head.
+		assertTrue(mixin.contains("player.xBobO, player.xBob")
+						&& mixin.contains("player.yBobO, player.yBob"),
+				"The hands must keep trailing the view the way vanilla's do");
+		// The failure this one guards is the worst the device has had. renderItem only submits
+		// nodes; the flush that draws them is the last thing the cancelled method does. Without it
+		// the terminal waited for the next frame's flush and was drawn against that frame's
+		// matrices - permanently one frame stale, so turning the head threw it out of view.
+		assertTrue(mixin.contains("getFeatureRenderDispatcher().renderAllFeatures()")
+						&& mixin.contains("renderBuffers().bufferSource().endBatch()"),
+				"Cancelling renderHandsWithItems must not skip the flush that actually draws");
+		String fov = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/mixin/GameRendererTerminalFovMixin.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(fov.contains("getCameraType().isFirstPerson()"),
+				"The field-of-view lean must not follow the player into third person");
+
+		String mixins = Files.readString(Path.of("src/main/resources/thefourthfrequency.mixins.json"),
+				StandardCharsets.UTF_8);
+		for (String registered : new String[]{"ItemInHandRendererTerminalMixin", "GameRendererTerminalFovMixin"}) {
+			assertTrue(mixins.contains(registered), "An unregistered mixin silently does nothing");
+		}
+	}
+
+	/**
+	 * The odd forms are their even neighbour with the lamp lit, and nothing else.
+	 *
+	 * <p>Asserted on the pixels rather than on the generator, because the whole point of the pairing
+	 * is that a player who sees the amber light knows it means "something is waiting" and not "the
+	 * device changed". Any second difference between 0 and 1 would make the lamp ambiguous.</p>
+	 */
+	@Test
+	void unreadFormsDifferFromTheirStageOnlyInsideTheLampWindow() throws Exception {
+		// Matches LAMP in tools/generate_terminal_3d_assets.py, inclusive on both ends.
+		int lampLeft = 101;
+		int lampTop = 5;
+		int lampRight = 107;
+		int lampBottom = 11;
+		for (int index = 0; index < 3; index++) {
+			final int stage = index;
+			var dark = ImageIO.read(ASSETS.resolve(
+					"textures/item/old_terminal_shell_" + stage * 2 + ".png").toFile());
+			var lit = ImageIO.read(ASSETS.resolve(
+					"textures/item/old_terminal_shell_" + (stage * 2 + 1) + ".png").toFile());
+			int differences = 0;
+			for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
+				if (dark.getRGB(x, y) == lit.getRGB(x, y)) continue;
+				differences++;
+				boolean insideLamp = x >= lampLeft && x <= lampRight && y >= lampTop && y <= lampBottom;
+				final int fx = x;
+				final int fy = y;
+				assertTrue(insideLamp, () -> "stage " + stage + " forms differ outside the lamp at "
+						+ fx + "," + fy);
+			}
+			final int found = differences;
+			assertTrue(found > 0, () -> "stage " + stage + " lamp never lights up");
+		}
+	}
+
 	@Test
 	void currentFragmentMainlineUsesVanillaStructuresWithoutAllocatingFacilities() throws Exception {
 		String fragments = Files.readString(Path.of(
@@ -1085,6 +1471,23 @@ final class ResourceContractTest {
 				StandardCharsets.UTF_8);
 		assertFalse(terminalScreen.contains("0x0700FF70"),
 				"The terminal display must not restore the persistent green scanline overlay");
+		// The standing CRT layer lives in TerminalChrome now. What the rule above was protecting was
+		// never "no scanlines" - it was the flat green wash, which tinted every glyph read through it
+		// and cost more contrast than it bought. So the layer is allowed back on three conditions:
+		// neutral (no hue), still (no rolling band across the whole readable area), and confined to
+		// the display. Rolling distortion stays the sky monitor's vocabulary, where it means the
+		// instrument is failing and lasts only as long as the fault.
+		String chrome = Files.readString(Path.of(
+				"src/client/java/com/xm/thefourthfrequency/client_ui/TerminalChrome.java"),
+				StandardCharsets.UTF_8);
+		assertTrue(chrome.contains("SCANLINE_PITCH") && chrome.contains("SCANLINE_ALPHA"),
+				"The CRT layer must state its pitch and opacity as named constants");
+		assertFalse(chrome.contains("00FF70"),
+				"The CRT layer must darken neutrally rather than tint the display green");
+		assertFalse(chrome.contains("renderAge") || chrome.contains("ageTicks"),
+				"The CRT shell must be static; rolling distortion belongs to the sky monitor");
+		assertTrue(chrome.contains("TerminalUiLayout.DISPLAY"),
+				"The CRT layer must be confined to the display rather than the whole panel");
 		assertFalse(terminalScreen.contains("log.top() + 19"),
 				"The signal header must not restore a full-width horizontal divider");
 		assertFalse(terminalScreen.contains("y + ROW_HEIGHT - 1, 0x551C3A25"),
@@ -1095,16 +1498,13 @@ final class ResourceContractTest {
 				"Private fragment state must not restore moving horizontal glitch lines");
 		assertFalse(terminalScreen.contains("signal.objective_prefix"),
 				"Hidden story gates must not be rendered as a persistent task checklist");
-		assertTrue(terminalScreen.contains("expanded ? \"  －\" : \"  ＋\""),
-				"Folded signal cards use right-side plus/minus symbols");
-		assertTrue(terminalScreen.contains("String key = \"candidates:\" + fragment"),
-				"Anonymous candidate groups remain separately expandable instead of becoming one oversized card");
-		assertTrue(terminalScreen.contains("SIGNAL_ROW_HEIGHT = 12"),
-				"Expanded signal details retain readable vertical spacing");
-		assertTrue(terminalScreen.contains("Component.literal(\"    · \")"),
-				"Expanded signal details use a quiet indented list instead of dense tree branches");
-		assertTrue(terminalScreen.contains("markerFragment(entry.type())"),
-				"Position-free unrecorded markers remain distinct from expandable coordinate cards");
+		// The expandable signal-card feed was removed: drawSignalToolList had no caller, so none of it
+		// ever reached a frame. The assertions that used to pin its folded-card visual language went
+		// with it; what replaced them is the guarantee that it does not come back unnoticed.
+		assertFalse(terminalScreen.contains("drawSignalToolList"),
+				"The orphaned signal-card feed must not return without a render path");
+		assertFalse(terminalScreen.contains("SELECT_FRAGMENT_TARGET"),
+				"No client control may send an action the UI cannot reach");
 
 		String fragmentInvestigation = Files.readString(Path.of(
 				"src/main/java/com/xm/thefourthfrequency/world/FragmentInvestigationService.java"),
@@ -1313,7 +1713,22 @@ final class ResourceContractTest {
 			}
 			assertTrue(nonTransparent > 0, name + " is entirely transparent");
 			double coverage = nonTransparent / (double) (sheetWidth * sheetHeight);
-			assertTrue(coverage <= (glow ? 0.02 : 0.05), name + " coverage=" + coverage);
+			// Both ceilings were raised deliberately rather than to make a red test pass, and the
+			// reasons differ.
+			//
+			// Glow: the old 2% cap held the emissive sheet to 2.4KB, which is why the boss did not
+			// visibly light. The shell now carries a fracture network across the mass and plate
+			// islands, and because those islands are shared by every body slab that samples them, a
+			// canvas figure understates it badly - 2.2% of the sheet is roughly 70% of the drawn
+			// hull. The constraint that actually prevents stray glow is the generator's whitelist
+			// (glow may only land on a declared emissive island), and that is unchanged.
+			//
+			// Impact: the flash was a sparse scribble, invisible past about sixty blocks, which is
+			// most of this fight. It is a rim plus an interior wash on every island now.
+			assertTrue(coverage <= (glow ? 0.04 : 0.40), name + " coverage=" + coverage);
+			// And a floor, so neither sheet can quietly regress to the thing this replaced.
+			assertTrue(coverage >= (glow ? 0.008 : 0.15),
+					name + " coverage=" + coverage + " is too faint to read in the arena");
 		}
 
 		// The offset table and the painted sheets are produced by one script but checked in
@@ -1702,8 +2117,8 @@ final class ResourceContractTest {
 		assertTrue(controller.contains("screenTicks >= AlphaLoadTimeline.GLITCH_START_TICK"));
 		assertTrue(controller.contains("retainFinalWindowTitle"));
 		assertTrue(controller.contains("MENU_VERSION_TEXT = \"Minecraft 1.0.0\""));
-		assertTrue(controller.contains("MENU_WINDOW_TITLE = \"Minecraft Alpha 1.0.0\""),
-				"Docs, README and four client gametests pin the window bar to the Alpha era name");
+		assertTrue(controller.contains("MENU_WINDOW_TITLE = MENU_VERSION_TEXT"),
+				"The window bar and the in-game version stamp are one identity, not two");
 		assertEquals("%s - Singleplayer World", enLang.get(
 				"window.thefourthfrequency.alpha_load.singleplayer").getAsString());
 		assertEquals("%s - Multiplayer", enLang.get(
@@ -1819,15 +2234,48 @@ final class ResourceContractTest {
 		assertTrue(loadingMixin.contains("AlphaCorruptionRenderer.drawDeadAir"));
 		assertTrue(loadingMixin.contains("AlphaCorruptionRenderer.drawRecoveryLock"));
 		assertTrue(loadingMixin.contains("AlphaCorruptionRenderer.drawChromaString"));
-		assertTrue(loadingMixin.contains("AlphaLoadTimeline.floodWipeProgress"));
+		// The wall arrives whole rather than wiping outward: a wipe is a transition, and a
+		// transition is something a piece of software plays. A failing signal cuts.
+		assertFalse(loadingMixin.contains("floodWipeProgress") || loadingMixin.contains("wipeTop"),
+				"the failure wall must not fade or wipe itself in");
 		assertFalse(loadingMixin.contains("deadAirFlashbackFrame"),
 				"Dead air must stay dead; the lost picture does not come back in single frames");
 		assertTrue(loadingMixin.contains("AlphaLoadTimeline.noise"),
 				"One seed must drive every layer, or a frozen frame freezes unevenly");
-		for (String layer : new String[]{"drawScanlines", "drawTrackingBand", "drawTimecode",
+		for (String layer : new String[]{"requestSignalFilter", "drawTimecode",
 				"drawDeadAir", "drawRecoveryLock", "drawChromaCenteredString"}) {
 			assertTrue(corruptionRenderer.contains(layer), "missing medium layer " + layer);
 		}
+		// The display layer is not drawn any more, it is a filter over the finished frame - so it is
+		// asked for first and everything below composites *inside* it, the timecode included. What
+		// used to be here instead was an ordering assertion over drawScanlines and drawVignette,
+		// which were rectangles standing in for a raster and a tube. Both are shader terms now.
+		assertFalse(corruptionRenderer.contains("drawScanlines")
+						|| corruptionRenderer.contains("drawVignette"),
+				"scanlines and the tube are the filter's job; rectangles must not come back");
+		int filterAt = corruptionRenderer.indexOf("requestSignalFilter(screenTicks);");
+		int timecodeAt = corruptionRenderer.indexOf("drawTimecode(graphics, screenTicks)");
+		assertTrue(filterAt >= 0 && filterAt < timecodeAt,
+				"the medium is asked for before anything composites inside it");
+		// The corruption screen holds still: it is a wall of text a player reads for half a minute,
+		// and text that will not stay in one place stops being a fault and becomes a headache. Its
+		// filter family is the one with the per-frame row wobble and the tearing zeroed.
+		assertTrue(corruptionRenderer.contains("signal_still_1"),
+				"the loading screens must use the still filter family");
+		// The colour-band overlays are retired everywhere, not just here. They are kept as source -
+		// they are the reference for what the shader terms replacing them are meant to look like -
+		// but nothing may call them, or the picture ends up wearing the effect twice.
+		assertFalse(corruptionRenderer.contains("drawTrackingBand(graphics, screenTicks)"),
+				"the tracking band is the shader's roll bar now");
+		for (String retired : new String[]{"renderTornPicture(graphics", "renderMistrackedBand(graphics"}) {
+			assertFalse(Files.readString(Path.of("src/client/java/com/xm/thefourthfrequency"
+							+ "/client_ui/AnomalyPresentationController.java"), StandardCharsets.UTF_8)
+					.contains("		" + retired), "the burst must not draw " + retired + " any more");
+		}
+		assertFalse(Files.readString(Path.of("src/client/java/com/xm/thefourthfrequency"
+						+ "/client_ui/PursuitPresentationClient.java"), StandardCharsets.UTF_8)
+				.contains("		renderInterference(graphics"),
+				"the pursuit's interference bands are the shader's band displacement now");
 		// Phase boundaries belong to the timeline alone; the renderer only draws a given tick.
 		for (String phase : new String[]{"GLITCH_START_TICK", "FAILURE_TICK", "FLOOD_START_TICK",
 				"BLACKOUT_START_TICK", "LEGACY_RECOVERY_START_TICK"}) {
@@ -1844,9 +2292,15 @@ final class ResourceContractTest {
 		// has stopped; the recovered progress bar takes its own reassurance back once.
 		assertTrue(loadingMixin.contains("alpha_loading.wall_intrusion"));
 		assertTrue(loadingMixin.contains("INTRUSION_COLOR = 0xFFFF5C57"));
-		// Off the centre line: dead centre would present it, and it is meant to be found.
-		assertTrue(loadingMixin.contains("INTRUSION_CENTER_X = 0.66F"));
-		assertTrue(loadingMixin.contains("INTRUSION_CENTER_Y = 0.66F"));
+		// Woven into the wall, not laid on top of it: it stands in the flow of repeated text at
+		// the wall's own scale, with nothing framing it, so it has to be found rather than read.
+		assertTrue(loadingMixin.contains("int intrusionRow ="));
+		assertTrue(loadingMixin.contains("int intrusionOffsetX = font.width(intrusionHead)"));
+		assertTrue(loadingMixin.indexOf("x + intrusionOffsetX")
+						< loadingMixin.indexOf("graphics.pose().popMatrix()"),
+				"The contradicting line must be drawn inside the wall's own scale");
+		assertFalse(loadingMixin.contains("0xD9060000"),
+				"Nothing may frame the contradicting line; a backing box makes it a label");
 		// The wipe travels on its own; lit edges read as a transition effect laid over the screen.
 		assertFalse(loadingMixin.contains("0xB3E8DCD4"),
 				"The flood wipe must not draw leading edge lines");

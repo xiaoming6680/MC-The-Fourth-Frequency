@@ -9,14 +9,17 @@ import com.xm.thefourthfrequency.ending.EndBossArenaService;
 import com.xm.thefourthfrequency.ending.EndBossEncounterService;
 import com.xm.thefourthfrequency.ending.FriendlyDragonService;
 import com.xm.thefourthfrequency.ending.WorldInterfaceAction;
+import com.xm.thefourthfrequency.ending.WorldInterfaceActionScheduler;
 import com.xm.thefourthfrequency.ending.WorldInterfaceAttackService;
 import com.xm.thefourthfrequency.ending.WorldInterfaceGatewayState;
+import com.xm.thefourthfrequency.ending.WorldInterfacePolicy;
 import com.xm.thefourthfrequency.ending.WorldInterfaceRitualService;
 import com.xm.thefourthfrequency.ending.WorldInterfaceStage;
 import com.xm.thefourthfrequency.ending.WorldInterfaceState;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEnergyOrbEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfacePartEntity;
+import com.xm.thefourthfrequency.entity.StabilityAnchorEntity;
 import com.xm.thefourthfrequency.networking.WorldInterfaceProtocol;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -33,10 +36,10 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
 import net.minecraft.world.entity.boss.enderdragon.EnderDragon;
 import net.minecraft.world.entity.boss.enderdragon.phases.EnderDragonPhase;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -48,6 +51,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
@@ -110,11 +114,12 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 				helper.assertTrue(end.getBlockState(anchor.position().relative(side)).isAir(),
 						"No cage may be rebuilt around an anchor");
 			}
-			EndCrystal crystal = EndBossArenaService.findAuthoritativeAnchor(end, anchor.crystalUuid()).orElse(null);
-			helper.assertTrue(crystal != null
-						&& EndBossArenaService.isAuthoritativeAnchor(crystal, anchor.index())
-						&& crystal.isInvulnerable(),
-					"Every prepared anchor UUID must resolve to its authoritative crystal");
+			StabilityAnchorEntity anchorEntity = EndBossArenaService.findAuthoritativeAnchor(end,
+					anchor.anchorEntityUuid()).orElse(null);
+			helper.assertTrue(anchorEntity != null
+						&& EndBossArenaService.isAuthoritativeAnchor(anchorEntity, anchor.index()),
+					"Prepared anchor " + anchor.index() + " UUID " + anchor.anchorEntityUuid()
+							+ " must resolve to its indexed authoritative entity");
 			helper.assertTrue(protectedPositions.contains(anchor.position()),
 					"Every authoritative anchor position must be protected");
 		}
@@ -215,7 +220,12 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 		WorldInterfaceState.ArenaLayout layout = stateLayout(EndBossArenaService.prepare(requireEnd(helper)));
 		FrequencyWorldData data = FrequencyWorldData.get(server);
 		try {
-			for (int rosterSize : List.of(1, 3, 8)) {
+			// Roster size to the pool it has to produce, stated as literals on purpose. Deriving the
+			// expectation from WorldInterfacePolicy would leave this asserting only that a write
+			// round-trips; these three numbers are the balance decision itself, and a change to them
+			// should have to be made here as well as in the policy.
+			for (Map.Entry<Integer, Double> scaling : Map.of(1, 600.0D, 3, 1200.0D, 8, 2700.0D).entrySet()) {
+				int rosterSize = scaling.getKey();
 				clearWorldInterface(data);
 				UUID encounterId = UUID.randomUUID();
 				WorldInterfaceState.Snapshot snapshot = initializeWaiting(server, encounterId, layout);
@@ -232,12 +242,13 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 					for (WorldInterfaceState.TerminalTransaction transaction : transactions) {
 						state.putTerminalTransaction(transaction);
 					}
-					state.commitSacrifice(600.0D * rosterSize);
+					state.commitSacrifice(WorldInterfacePolicy.maxHealth(rosterSize));
 				}), "commit " + rosterSize + "-player sacrifice");
 				helper.assertValueEqual(snapshot.frozenRoster().size(), rosterSize,
 						"The committed roster size must remain frozen");
-				helper.assertTrue(Math.abs(snapshot.maxVirtualHealth() - 600.0D * rosterSize) < 0.000_001D,
-						"Maximum health must be exactly 600 times the frozen roster");
+				helper.assertTrue(Math.abs(snapshot.maxVirtualHealth() - scaling.getValue()) < 0.000_001D,
+						"A " + rosterSize + "-player roster must create exactly "
+								+ scaling.getValue() + " virtual health");
 				helper.assertTrue(snapshot.terminalTransactions().values().stream().allMatch(value ->
 						value.state() == WorldInterfaceState.TerminalTransactionState.COMMITTED),
 						"Every removed terminal must commit in the same state write");
@@ -285,8 +296,8 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 					&& committed.sacrificeCommitted(), "The third durable removal must atomically begin summoning");
 			helper.assertValueEqual(committed.frozenRoster().size(), 3,
 					"Exactly the three simultaneous participants must be frozen");
-			helper.assertTrue(Math.abs(committed.maxVirtualHealth() - 1_800.0D) < 0.000_001D,
-					"Three simultaneous deposits must create exactly 1800 virtual health");
+			helper.assertTrue(Math.abs(committed.maxVirtualHealth() - 1_200.0D) < 0.000_001D,
+					"Three simultaneous deposits must create exactly 1200 virtual health");
 		} finally {
 			restoreGameModes(server, originalGameModes);
 			clearWorldInterface(data);
@@ -407,8 +418,8 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 			helper.assertTrue(part.hurtServer(end, end.damageSources().playerAttack(second), 10.0F),
 					"A different late joiner in the same tick must still deal damage");
 			WorldInterfaceState.Snapshot after = WorldInterfaceState.snapshot(server);
-			helper.assertTrue(Math.abs(after.virtualHealth() - 580.0D) < 0.000_001D,
-					"Only one ten-point hit per attacker may reach the virtual health pool");
+			helper.assertTrue(Math.abs(after.virtualHealth() - 588.0D) < 0.000_001D,
+					"Only one six-point anchored-shell hit per attacker may reach the virtual health pool");
 		} finally {
 			if (part != null) part.discard();
 			if (boss != null) boss.discard();
@@ -429,16 +440,68 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 			WorldInterfaceState.Snapshot combat = committedCombat(server, encounterId, stateLayout(arena));
 			EndBossArenaService.restoreAuthoritativeAnchors(end, combat, false);
 			EndBossArenaService.AnchorSlot first = arena.anchors().getFirst();
-			EndCrystal crystal = EndBossArenaService.findAuthoritativeAnchor(end, first.crystalUuid()).orElse(null);
-			if (crystal == null) throw new AssertionError("Authoritative anchor fixture is missing");
+			StabilityAnchorEntity anchorEntity = EndBossArenaService.findAuthoritativeAnchor(end,
+					first.anchorEntityUuid()).orElse(null);
+			if (anchorEntity == null) throw new AssertionError("Authoritative anchor fixture is missing");
 			ServerPlayer lateJoiner = helper.makeMockServerPlayerInLevel();
 			lateJoiner.teleportTo(end, first.position().getX() + 2.5D, first.position().getY(),
 					first.position().getZ() + 0.5D, Set.of(), 0.0F, 0.0F, true);
-			helper.assertFalse(crystal.hurtServer(end, end.damageSources().playerAttack(lateJoiner), 0.0F),
+			helper.assertFalse(anchorEntity.hurtServer(end, end.damageSources().playerAttack(lateJoiner), 0.0F),
 					"A zero-damage player source must not consume an authoritative anchor");
 			WorldInterfaceState.Snapshot after = WorldInterfaceState.snapshot(server);
-			helper.assertFalse(after.anchors().get(first.index()).destroyed() || crystal.isRemoved(),
+			helper.assertFalse(after.anchors().get(first.index()).destroyed() || anchorEntity.isRemoved(),
 					"Zero damage must leave both the durable anchor bit and entity intact");
+			helper.assertFalse(anchorEntity.hurtServer(end, end.damageSources().magic(), 5.0F),
+					"A non-player damage source must be rejected by the anchor");
+			helper.assertTrue(anchorEntity.isAlive() && WorldInterfaceState.snapshot(server).aliveAnchorCount() == 10,
+					"Rejected non-player damage must preserve the entity and all ten authoritative anchors");
+			helper.assertTrue(anchorEntity.isPickable(),
+					"An intact anchor must remain a target");
+
+			helper.assertTrue(EndBossEncounterService.handleAnchorDamage(end, anchorEntity,
+					end.damageSources().playerAttack(lateJoiner), 1.0F).orElse(false),
+					"The first positive player hit must destroy an authoritative anchor immediately");
+			after = WorldInterfaceState.snapshot(server);
+			// The durable bit is written on the hit tick; the entity then spends sixteen ticks coming
+			// apart. What must be immediate is that it has stopped counting and stopped being
+			// hittable - the geometry leaving afterwards is presentation, and asserting on the
+			// discard instead would forbid the destruction ever being visible at all.
+			helper.assertTrue(after.anchors().get(first.index()).destroyed(),
+					"The first hit must persist the destroyed bit on the same tick");
+			helper.assertTrue(anchorEntity.collapsing(),
+					"A destroyed anchor must start its collapse rather than vanishing");
+			helper.assertFalse(anchorEntity.isPickable(),
+					"A destroyed anchor must stop being a target on the tick it falls");
+			helper.assertFalse(anchorEntity.hurtServer(end, end.damageSources().playerAttack(lateJoiner), 6.0F),
+					"Swinging again at a collapsing anchor must be rejected outright");
+			helper.assertFalse(EndBossEncounterService.handleAnchorDamage(end, anchorEntity,
+					end.damageSources().playerAttack(lateJoiner), 6.0F).orElse(true),
+					"The encounter service must not report a second destruction transaction");
+			helper.assertValueEqual(after.aliveAnchorCount(), 9,
+					"Exactly one anchor must fall on the first positive hit");
+			helper.assertValueEqual(WorldInterfaceState.snapshot(server).aliveAnchorCount(), 9,
+					"A second hit on a collapsing anchor must not take a second anchor with it");
+
+			BlockPos fieldProbe = null;
+			for (int dx = -8; dx <= 8 && fieldProbe == null; dx++) for (int dz = -8; dz <= 8; dz++) {
+				BlockPos candidate = first.position().offset(dx, 0, dz);
+				if (!WorldInterfacePolicy.insideStabilityField(candidate.getX() + 0.5D,
+						candidate.getZ() + 0.5D, first.position().getX() + 0.5D,
+						first.position().getZ() + 0.5D)) continue;
+				if (EndBossArenaService.canDestroy(end, candidate, Blocks.END_STONE.defaultBlockState())) {
+					fieldProbe = candidate;
+					break;
+				}
+			}
+			helper.assertTrue(fieldProbe != null,
+					"Destroying one anchor must expose at least one ordinary point in its former field");
+
+			clearWorldInterface(data);
+			WorldInterfaceState.Snapshot rebuilt = committedCombat(server, UUID.randomUUID(), stateLayout(arena));
+			EndBossArenaService.restoreAuthoritativeAnchors(end, rebuilt, true);
+			helper.assertFalse(EndBossArenaService.canDestroy(end, fieldProbe,
+					Blocks.END_STONE.defaultBlockState()),
+					"The same point must reject terrain edits while its anchor is alive");
 		} finally {
 			EndBossArenaService.setAnchorsInvulnerable(end, arena, true);
 			clearWorldInterface(data);
@@ -505,9 +568,10 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 			helper.assertTrue(dragon.isInvulnerable() && dragon.getTarget() == null,
 					"The successful ending dragon must remain non-hostile and player-immune");
 			// Harmlessness is expressed by invulnerability, no target, no fight registration and a
-			// phase that only holds station - never by freezing the entity. EnderDragon#aiStep gates
-			// the wing beat, the body-segment history and the part positioning behind isNoAi(), so a
-			// dragon with no AI is a rigid model, which is exactly what the ending used to show.
+			// phase that only holds station - never by freezing the entity. The one thing
+			// EnderDragon#aiStep puts behind isNoAi() is the wing beat, which it pins to a constant,
+			// so a dragon with no AI hangs in the sky with its wings held open - exactly what the
+			// ending used to show.
 			helper.assertFalse(dragon.isNoAi(),
 					"The ending dragon must keep its AI, or it has no animation at all");
 			helper.assertTrue(dragon.getPhaseManager().getCurrentPhase().getPhase()
@@ -515,6 +579,50 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 					"The ending dragon must be pinned to the phase that only holds station");
 			helper.assertTrue(FriendlyDragonService.recover(end, dragonId).orElse(null) == dragon,
 					"Recovery must resolve the same persistent friendly dragon instead of duplicating it");
+		} finally {
+			dragon.discard();
+		}
+		helper.succeed();
+	}
+
+	/**
+	 * The orbit is the only thing that moves the ending dragon.
+	 *
+	 * <p>It was not. The service writes the body onto its orbit from the start of the server tick,
+	 * before the level ticks its entities, and hands the step it just took to {@code setDeltaMovement}
+	 * - and then {@code EnderDragon#aiStep} ends with {@code move(SELF, getDeltaMovement())}, which
+	 * the hovering phase never gates because it always reports a fly target. So the dragon took every
+	 * step twice, and the service started the next tick from the wrong place: the error alternated
+	 * between a full step and none, ten times a second, which is the convulsion players saw. The
+	 * heading went with it, because it is derived from the step the body actually took and on every
+	 * second tick that step was the difference between two nearly equal numbers.
+	 *
+	 * <p>Asserted against vanilla's own step rather than against a screenshot: run {@code aiStep} on
+	 * the tick the service has just positioned the dragon on, and the body must not have moved.
+	 */
+	@GameTest(setupTicks = 80, maxTicks = 40)
+	public void friendlyDragonIsNotMovedByVanillaFlightIntegration(GameTestHelper helper) {
+		ServerLevel end = requireEnd(helper);
+		EndBossArenaService.PreparedArena arena = EndBossArenaService.prepare(end);
+		EnderDragon dragon = FriendlyDragonService.spawn(end, arena.center(), UUID.randomUUID());
+		try {
+			// Swept across the descent as well as the resting orbit: the step the integration used to
+			// double is largest while the dragon is spiralling out of the altar and coming down.
+			for (double approach : new double[]{0.0D, 0.25D, 0.5D, 0.75D, 1.0D}) {
+				FriendlyDragonService.tick(end, dragon, arena.center(), approach);
+				Vec3 authored = dragon.position();
+				float yaw = dragon.getYRot();
+				dragon.aiStep();
+				double drift = dragon.position().distanceTo(authored);
+				helper.assertTrue(drift < 1.0E-6D, "Vanilla's flight integration moved the ending dragon "
+						+ drift + " blocks off the orbit at approach " + approach
+						+ "; the service must be the only thing that decides where the body is");
+				// Compared as an angle, not as a float: aiStep wraps the yaw into [-180, 180) on its
+				// way past, which is the same heading written differently.
+				float turned = Math.abs(Mth.wrapDegrees(dragon.getYRot() - yaw));
+				helper.assertTrue(turned < 1.0E-3F, "Vanilla re-steered the ending dragon's heading by "
+						+ turned + " degrees at approach " + approach);
+			}
 		} finally {
 			dragon.discard();
 		}
@@ -582,8 +690,12 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 			before = target.getHealth();
 			orb.setPos(target.position());
 			orb.detonate(end, target.position(), true);
-			helper.assertTrue(Math.abs((before - target.getHealth()) - 12.0F) < 0.001F,
-					"Energy-bolt impact must deal exactly twelve damage");
+			// Read from the entity rather than restated, so tuning the bolt is one edit rather than
+			// two. What is being pinned is that a direct hit lands the declared first-form figure -
+			// the damage actually reaching the player, past the form curve and the damage service.
+			helper.assertTrue(Math.abs((before - target.getHealth())
+							- WorldInterfaceEnergyOrbEntity.IMPACT_DAMAGE) < 0.001F,
+					"Energy-bolt impact must deal its declared first-form damage");
 			WorldInterfaceAttackService.tick(end, boss, snapshot, 0L);
 			snapshot = cancelAndClearAttack(server, encounterId);
 			helper.assertTrue(end.getEntitiesOfClass(WorldInterfaceEnergyOrbEntity.class,
@@ -789,31 +901,6 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 		helper.succeed();
 	}
 
-	@GameTest(setupTicks = 86, maxTicks = 40)
-	public void authoritativeAnchorsRejectNonPlayerDamageThroughTheMixin(GameTestHelper helper) {
-		MinecraftServer server = helper.getLevel().getServer();
-		ServerLevel end = requireEnd(helper);
-		EndBossArenaService.PreparedArena arena = EndBossArenaService.prepare(end);
-		FrequencyWorldData data = FrequencyWorldData.get(server);
-		clearWorldInterface(data);
-		UUID encounterId = UUID.randomUUID();
-		try {
-			phaseThreeCombat(server, encounterId, stateLayout(arena));
-			EndBossArenaService.setAnchorsInvulnerable(end, arena, false);
-			EndCrystal anchor = EndBossArenaService.findAuthoritativeAnchor(end,
-					arena.anchors().getFirst().crystalUuid()).orElse(null);
-			if (anchor == null) throw new AssertionError("Authoritative anchor fixture is missing");
-			helper.assertFalse(anchor.hurtServer(end, end.damageSources().magic(), 5.0F),
-					"A non-player damage source must be rejected by the anchor mixin");
-			helper.assertTrue(anchor.isAlive() && WorldInterfaceState.snapshot(server).aliveAnchorCount() == 10,
-					"Rejected non-player damage must preserve the entity and all ten authoritative anchors");
-		} finally {
-			EndBossArenaService.setAnchorsInvulnerable(end, arena, true);
-			clearWorldInterface(data);
-		}
-		helper.succeed();
-	}
-
 	@GameTest(setupTicks = 88, maxTicks = 40)
 	public void completeStageRemovesStrayRootAndParts(GameTestHelper helper) throws ReflectiveOperationException {
 		MinecraftServer server = helper.getLevel().getServer();
@@ -872,6 +959,171 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 				center.getZ() + 0.5D, 0.0F, 0.0F);
 		if (!level.addFreshEntity(boss)) throw new AssertionError("World-interface attack fixture could not spawn");
 		return boss;
+	}
+
+	/**
+	 * A lash flurry spreads across the table instead of landing three times on the front player.
+	 *
+	 * <p>Each of the three strikes reaches for the nearest target the flurry has not had yet, so on a
+	 * table of three every one of them is hit exactly once. Before that rule existed all three
+	 * landings tracked whoever was closest - which on any table with somebody holding the front is
+	 * the same person every flurry, and at the third form thirty-one damage inside two seconds.
+	 */
+	@GameTest(setupTicks = 82, maxTicks = 60)
+	public void aTendrilFlurrySpreadsItsThreeLandingsAcrossTheTable(GameTestHelper helper) {
+		MinecraftServer server = helper.getLevel().getServer();
+		ServerLevel end = requireEnd(helper);
+		EndBossArenaService.PreparedArena arena = EndBossArenaService.prepare(end);
+		FrequencyWorldData data = FrequencyWorldData.get(server);
+		clearWorldInterface(data);
+		UUID encounterId = UUID.randomUUID();
+		WorldInterfaceEntity boss = null;
+		Map<UUID, GameType> originalGameModes = spectateExistingPlayers(server);
+		try {
+			WorldInterfaceState.Snapshot snapshot = phaseThreeCombat(server, encounterId, stateLayout(arena));
+			boss = spawnAttackBoss(end, encounterId, arena.center());
+			// Spaced well past the five-block reach of one lash, so a landing damages exactly the
+			// player it was aimed at and the test reads who was chosen rather than who was nearby.
+			List<ServerPlayer> table = List.of(
+					combatPlayerAt(helper, end, arena.safeSpawn(), 0, 0),
+					combatPlayerAt(helper, end, arena.safeSpawn(), 14, 0),
+					combatPlayerAt(helper, end, arena.safeSpawn(), 0, 14));
+			float[] before = new float[table.size()];
+			for (int index = 0; index < table.size(); index++) before[index] = table.get(index).getHealth();
+
+			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.TENDRIL_LASH, table, 41L);
+			long total = WorldInterfaceProtocol.TENDRIL_WARNING_TICKS
+					+ (long) WorldInterfaceProtocol.TENDRIL_STRIKE_INTERVAL_TICKS
+					* WorldInterfaceProtocol.TENDRIL_STRIKE_COUNT;
+			for (long tick = 0L; tick <= total; tick++) {
+				WorldInterfaceAttackService.tick(end, boss, snapshot, tick);
+			}
+
+			for (int index = 0; index < table.size(); index++) {
+				ServerPlayer player = table.get(index);
+				helper.assertTrue(player.getHealth() < before[index] - 0.001F,
+						"Every player on a table of three must take exactly one of the three lashes;"
+								+ " player " + index + " was never reached (health " + before[index]
+								+ "->" + player.getHealth() + ")");
+				helper.assertTrue(player.isAlive(),
+						"One lash each is survivable; player " + index + " took more than its share");
+			}
+		} finally {
+			if (boss != null) boss.discard();
+			WorldInterfaceAttackService.cancelAndRestore(server, encounterId);
+			WorldInterfaceAttackService.clearLedgers(encounterId);
+			restoreGameModes(server, originalGameModes);
+			clearWorldInterface(data);
+		}
+		helper.succeed();
+	}
+
+	/**
+	 * The third phase's second lane does not pile onto whoever the schedule is already locking.
+	 *
+	 * <p>The volley used to roll its own seed with no knowledge of the scheduled attack, so a player
+	 * could be locked by the schedule and picked by every volley slot on the same tick. Here the
+	 * schedule holds a laser on one player and every bolt the lane throws has to find somebody else.
+	 *
+	 * <p>Deliberately a full table. The exclusion is a preference and yields when there is nobody
+	 * left to prefer - a lane that declined to fire would make a table of two quieter than a table of
+	 * one - so a fixture with fewer players than the lane has slots would be testing the fallback
+	 * rather than the rule. At eight players the third phase's six concurrent slots and the one
+	 * locked player still fit inside the roster, so the preference is never allowed to yield and the
+	 * assertion is about the exclusion itself.
+	 */
+	@GameTest(setupTicks = 82, maxTicks = 60)
+	public void aVolleyNeverAimsAtThePlayerTheScheduleIsAlreadyLocking(GameTestHelper helper) {
+		MinecraftServer server = helper.getLevel().getServer();
+		ServerLevel end = requireEnd(helper);
+		EndBossArenaService.PreparedArena arena = EndBossArenaService.prepare(end);
+		FrequencyWorldData data = FrequencyWorldData.get(server);
+		clearWorldInterface(data);
+		UUID encounterId = UUID.randomUUID();
+		WorldInterfaceEntity boss = null;
+		Map<UUID, GameType> originalGameModes = spectateExistingPlayers(server);
+		try {
+			WorldInterfaceState.Snapshot snapshot = phaseThreeCombat(server, encounterId, stateLayout(arena));
+			boss = spawnAttackBoss(end, encounterId, arena.center());
+			int[][] offsets = {{0, 0}, {10, 0}, {0, 10}, {-10, 0}, {0, -10}, {10, 10}, {-10, -10}, {10, -10}};
+			List<ServerPlayer> table = new ArrayList<>(offsets.length);
+			for (int[] offset : offsets) {
+				table.add(combatPlayerAt(helper, end, arena.safeSpawn(), offset[0], offset[1]));
+			}
+			helper.assertValueEqual(table.size(), WorldInterfacePolicy.MAX_ROSTER_SIZE,
+					"This fixture is only meaningful against a full roster");
+			ServerPlayer locked = table.getFirst();
+
+			// The schedule takes one player with a single-target action, which is what the lane has
+			// to route around. A lash would claim the whole roster and there would be nothing to prove.
+			snapshot = beginAttack(end, boss, snapshot, WorldInterfaceAction.LASER_SWEEP,
+					List.of(locked), 51L);
+
+			int bolts = 0;
+			AABB arenaBox = new AABB(arena.center()).inflate(128.0D);
+			for (long round = 0L; round < 8L; round++) {
+				long activeTick = 400L + round * WorldInterfaceActionScheduler.VOLLEY_INTERVAL_TICKS;
+				WorldInterfaceAttackService.beginVolley(end, boss, snapshot, table, activeTick, 51L);
+				for (long tick = activeTick; tick <= activeTick + WorldInterfaceProtocol.ORB_WARNING_TICKS;
+						tick++) {
+					WorldInterfaceAttackService.tickVolley(end, boss, snapshot, tick);
+				}
+				for (WorldInterfaceEnergyOrbEntity orb : end.getEntitiesOfClass(
+						WorldInterfaceEnergyOrbEntity.class, arenaBox, Entity::isAlive)) {
+					bolts++;
+					helper.assertFalse(locked.getUUID().equals(orb.targetId()),
+							"A volley bolt was aimed at the player the schedule already had locked"
+									+ " (round " + round + ", locked=" + locked.getUUID()
+									+ ", orbTarget=" + orb.targetId()
+									+ ", orbEncounter=" + orb.encounterId()
+									+ ", envelope=" + WorldInterfaceState.snapshot(server).currentAttack()
+											.map(envelope -> envelope.actionWireId() + ":" + envelope.targets())
+											.orElse("absent")
+									+ ", passedEnvelope=" + snapshot.currentAttack()
+											.map(envelope -> envelope.actionWireId() + ":" + envelope.targets())
+											.orElse("absent")
+									+ ", table=" + table.stream().map(ServerPlayer::getUUID).toList() + ")");
+					orb.discard();
+				}
+			}
+			helper.assertTrue(bolts > 0,
+					"The volley lane threw nothing at all, so this proves nothing about who it avoids");
+		} finally {
+			if (boss != null) boss.discard();
+			WorldInterfaceAttackService.cancelAndRestore(server, encounterId);
+			WorldInterfaceAttackService.clearLedgers(encounterId);
+			restoreGameModes(server, originalGameModes);
+			clearWorldInterface(data);
+		}
+		helper.succeed();
+	}
+
+	/**
+	 * A survival-mode combat player standing on the surface at an offset from the safe spawn.
+	 *
+	 * <p>The height is read off the world rather than assumed, so a table can be spread far enough
+	 * apart for one impact to reach exactly one of them without the test depending on how flat the
+	 * island happens to be at that offset.
+	 */
+	private static ServerPlayer combatPlayerAt(GameTestHelper helper, ServerLevel level,
+			BlockPos safeSpawn, int offsetX, int offsetZ) {
+		ServerPlayer player = makeCombatServerPlayer(helper, level);
+		player.setGameMode(GameType.SURVIVAL);
+		if (player.gameMode.getGameModeForPlayer() != GameType.SURVIVAL) {
+			throw new AssertionError("Attack target could not enter survival mode");
+		}
+		int x = safeSpawn.getX() + offsetX;
+		int z = safeSpawn.getZ() + offsetZ;
+		int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+		if (!player.teleportTo(level, x + 0.5D, surface, z + 0.5D, Set.of(), 180.0F, 0.0F, true)) {
+			throw new AssertionError("Attack target could not enter the End arena");
+		}
+		player.setNoGravity(false);
+		player.setDeltaMovement(Vec3.ZERO);
+		player.setHealth(player.getMaxHealth());
+		player.invulnerableTime = 0;
+		player.getInventory().clearContent();
+		return player;
 	}
 
 	private static ServerPlayer attackTarget(GameTestHelper helper, ServerLevel level, BlockPos safeSpawn) {
@@ -1127,7 +1379,7 @@ public final class WorldInterfaceGameTests implements CustomTestMethodInvoker {
 		}
 		List<WorldInterfaceState.Anchor> anchors = arena.anchors().stream()
 				.map(anchor -> new WorldInterfaceState.Anchor(anchor.index(), anchor.position(),
-						Optional.of(anchor.crystalUuid()), false)).toList();
+						Optional.of(anchor.anchorEntityUuid()), false)).toList();
 		return new WorldInterfaceState.ArenaLayout(1, "minecraft:the_end", arena.center(), arena.altar(),
 				arena.safeSpawn(), gates, anchors);
 	}

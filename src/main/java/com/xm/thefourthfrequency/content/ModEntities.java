@@ -4,6 +4,8 @@ import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.correction.ReworkCollisionProfile;
 import com.xm.thefourthfrequency.entity.ReworkEntity;
 import com.xm.thefourthfrequency.entity.HimEntity;
+import com.xm.thefourthfrequency.entity.StabilityAnchorEntity;
+import com.xm.thefourthfrequency.entity.StabilityAnchorGeometry;
 import com.xm.thefourthfrequency.entity.WatcherEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEnergyOrbEntity;
@@ -31,6 +33,8 @@ public final class ModEntities {
 			Registries.ENTITY_TYPE, Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "world_interface_part"));
 	private static final ResourceKey<EntityType<?>> WORLD_INTERFACE_ENERGY_ORB_KEY = ResourceKey.create(
 			Registries.ENTITY_TYPE, WorldInterfaceEnergyOrbEntity.TYPE_ID);
+	private static final ResourceKey<EntityType<?>> STABILITY_ANCHOR_KEY = ResourceKey.create(
+			Registries.ENTITY_TYPE, StabilityAnchorEntity.TYPE_ID);
 
 	public static final EntityType<ReworkEntity> REWORK_BODY = Registry.register(
 			BuiltInRegistries.ENTITY_TYPE,
@@ -103,6 +107,24 @@ public final class ModEntities {
 					.updateInterval(1)
 					.build(WORLD_INTERFACE_ENERGY_ORB_KEY));
 
+	/**
+	 * The ten arena anchors. Saved, because the encounter reconciles the entities it finds against
+	 * the persisted anchor record rather than rebuilding all ten from scratch on every load, and
+	 * tracked as far as the interface itself so the tethers never end at an anchor the client has
+	 * not been told about.
+	 */
+	public static final EntityType<StabilityAnchorEntity> STABILITY_ANCHOR = Registry.register(
+			BuiltInRegistries.ENTITY_TYPE,
+			STABILITY_ANCHOR_KEY,
+			EntityType.Builder.of(StabilityAnchorEntity::new, MobCategory.MISC)
+					.sized(StabilityAnchorGeometry.WIDTH, StabilityAnchorGeometry.HEIGHT)
+					.eyeHeight(StabilityAnchorGeometry.EYE_HEIGHT)
+					.fireImmune()
+					.noSummon()
+					.clientTrackingRange(32)
+					.updateInterval(1)
+					.build(STABILITY_ANCHOR_KEY));
+
 	private ModEntities() {
 	}
 
@@ -111,6 +133,7 @@ public final class ModEntities {
 		FabricDefaultAttributeRegistry.register(WATCHER, WatcherEntity.createAttributes());
 		FabricDefaultAttributeRegistry.register(HIM, HimEntity.createAttributes());
 		FabricDefaultAttributeRegistry.register(WORLD_INTERFACE, WorldInterfaceEntity.createAttributes());
-		TheFourthFrequency.LOGGER.info("Registered rework, watcher, and world-interface entities");
+		TheFourthFrequency.LOGGER.info(
+				"Registered rework, watcher, stability-anchor and world-interface entities");
 	}
 }

@@ -39,7 +39,10 @@ public record AnomalyClientScenario(int catalogNumber, String id, int tier, long
 		List<String> scenarios = DEFINITIONS.stream().map(AnomalyClientScenario::id).toList();
 		if (!catalog.equals(scenarios)) throw new AssertionError("Anomaly client scenarios differ from catalog: "
 				+ scenarios + " vs " + catalog);
-		if (DEFINITIONS.size() != 19) throw new AssertionError("Expected exactly nineteen anomaly client scenarios");
+		// No second count written down here. The list equality above already proves the scenarios and
+		// the catalog match; a literal beside it can only ever go stale and start failing for a
+		// number rather than for a missing scenario, which is what "sixteen" did in the runner.
+		if (DEFINITIONS.isEmpty()) throw new AssertionError("Anomaly client scenarios must not be empty");
 		AnomalyTestTimeline.assertCatalogCoverage();
 	}
 

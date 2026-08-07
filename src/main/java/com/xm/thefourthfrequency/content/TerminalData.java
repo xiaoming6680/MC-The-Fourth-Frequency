@@ -8,6 +8,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.item.component.CustomModelData;
+import com.xm.thefourthfrequency.terminal.TerminalAttentionPolicy;
 import com.xm.thefourthfrequency.terminal.TerminalControlPolicy;
 import com.xm.thefourthfrequency.terminal.SignalBand;
 import com.xm.thefourthfrequency.terminal.TerminalSignalLog;
@@ -156,6 +157,15 @@ public final class TerminalData {
 	public static final String TERMINAL_PAGE_VISIT_MASK = "terminal_page_visit_mask";
 	public static final String TASK_REWARD_CLAIMED_MASK = "task_reward_claimed_mask";
 	public static final String TASK_COMPLETION_NOTIFIED_MASK = "task_completion_notified_mask";
+	/**
+	 * Whether this player has already been through the first-boot walkthrough. A one-way latch.
+	 *
+	 * <p>Kept separate from {@link #TERMINAL_PAGE_VISIT_MASK} on purpose. That mask is task progress:
+	 * it can be reset, and it would change shape if the terminal ever gained a fifth page. This bit
+	 * records that something happened to this player once, which must stay true however the task
+	 * around it is redefined.</p>
+	 */
+	public static final String ONBOARDING_DONE = "onboarding_done";
 	public static final String UNREAD_ALERT_ACTIVE = "unread_alert_active";
 	public static final String BREACH_MASK = "breach_mask";
 	public static final String TRUTH_READ = "truth_read";
@@ -326,6 +336,7 @@ public final class TerminalData {
 		tag.putInt(TERMINAL_PAGE_VISIT_MASK, 0);
 		tag.putInt(TASK_REWARD_CLAIMED_MASK, 0);
 		tag.putInt(TASK_COMPLETION_NOTIFIED_MASK, 0);
+		tag.putBoolean(ONBOARDING_DONE, false);
 		tag.putBoolean(UNREAD_ALERT_ACTIVE, false);
 		tag.putInt(BREACH_MASK, 0);
 		tag.putBoolean(TRUTH_READ, false);
@@ -470,6 +481,30 @@ public final class TerminalData {
 		if (!record.contains(TERMINAL_PAGE_VISIT_MASK)) record.putInt(TERMINAL_PAGE_VISIT_MASK, 0);
 		if (!record.contains(TASK_REWARD_CLAIMED_MASK)) record.putInt(TASK_REWARD_CLAIMED_MASK, 0);
 		if (!record.contains(TASK_COMPLETION_NOTIFIED_MASK)) record.putInt(TASK_COMPLETION_NOTIFIED_MASK, 0);
+		// Schema 11 inserted find_fortress at index 4, shifting every task above it up one slot. Both
+		// of these store one bit per task index, so they have to be re-pointed or a save mid-Nether
+		// reads as having claimed the wrong tasks. See TerminalTaskService#migrateMaskForFortressInsert.
+		if (sourceSchema < 11) {
+			record.putInt(TASK_REWARD_CLAIMED_MASK, TerminalTaskService.migrateMaskForFortressInsert(
+					record.getIntOr(TASK_REWARD_CLAIMED_MASK, 0)));
+			record.putInt(TASK_COMPLETION_NOTIFIED_MASK, TerminalTaskService.migrateMaskForFortressInsert(
+					record.getIntOr(TASK_COMPLETION_NOTIFIED_MASK, 0)));
+			// The milestone the new task reads. Rods in hand are proof of a fortress visited, and this
+			// is the only chance to say so for a player who is already past the Nether: the live check
+			// only fires while standing in one.
+			int milestones = record.getIntOr(SURVIVAL_MILESTONE_MASK, 0);
+			if (SurvivalMilestone.COLLECTED_BLAZE_RODS.present(milestones)) {
+				record.putInt(SURVIVAL_MILESTONE_MASK,
+						milestones | SurvivalMilestone.FOUND_FORTRESS.mask());
+			}
+		}
+		// A save from before the walkthrough existed: anything already visited or claimed proves this
+		// player has used the terminal, and replaying their first boot would be staging something
+		// that already happened to them. Only a record with neither gets the walkthrough.
+		if (!record.contains(ONBOARDING_DONE)) {
+			record.putBoolean(ONBOARDING_DONE, record.getIntOr(TERMINAL_PAGE_VISIT_MASK, 0) != 0
+					|| record.getIntOr(TASK_REWARD_CLAIMED_MASK, 0) != 0);
+		}
 		if (!record.contains(UNREAD_ALERT_ACTIVE)) record.putBoolean(UNREAD_ALERT_ACTIVE, false);
 		if (!record.contains(BREACH_MASK)) record.putInt(BREACH_MASK, 0);
 		if (!record.contains(TRUTH_READ)) record.putBoolean(TRUTH_READ,
@@ -603,15 +638,32 @@ public final class TerminalData {
 		return applyAttentionProjection(stack, record) || changed;
 	}
 
+	/**
+	 * Whether the terminal is asking for the player's attention, read off the authoritative record.
+	 *
+	 * <p>The one place that turns a stored record into that answer. The item's six forms and the
+	 * amber lamp on the open panel are the same statement shown twice, so both go through here -
+	 * the projection below for the item, and {@code TerminalRuntimeService} for the snapshot the
+	 * client draws the panel from.</p>
+	 *
+	 * <p>Unread signals are counted from the log rather than read out of {@link #UNREAD_SIGNAL_COUNT},
+	 * so the lamp agrees with the number the Records page prints even if that cached field is ever
+	 * left behind by a write path.</p>
+	 */
+	public static boolean attentionActive(CompoundTag record) {
+		return TerminalAttentionPolicy.attentionActive(
+				TerminalSignalLog.unreadCount(record),
+				record.getIntOr(UNREAD_FILE_COUNT, 0),
+				record.getBooleanOr(NAVIGATION_COMPLETION_UNREAD, false),
+				TerminalTaskService.hasClaimableReward(record));
+	}
+
 	public static boolean applyAttentionProjection(ItemStack stack, CompoundTag record) {
 		int stage = TerminalControlPolicy.pursuitVisualStage(
 				record.getIntOr(PURSUIT_RESOLVED_CHASES, 0),
 				record.getIntOr(PURSUIT_ALLOWED_FORM, 0),
 				record.getIntOr(ANOMALY_TIER, 0));
-		boolean unread = record.getIntOr(UNREAD_SIGNAL_COUNT, 0) > 0
-				|| record.getIntOr(UNREAD_FILE_COUNT, 0) > 0
-				|| record.getBooleanOr(NAVIGATION_COMPLETION_UNREAD, false)
-				|| TerminalTaskService.hasClaimableReward(record);
+		boolean unread = attentionActive(record);
 		CustomModelData model = new CustomModelData(List.of((float) (stage * 2 + (unread ? 1 : 0))),
 				List.of(), List.of(), List.of());
 		if (!model.equals(stack.get(DataComponents.CUSTOM_MODEL_DATA))) {

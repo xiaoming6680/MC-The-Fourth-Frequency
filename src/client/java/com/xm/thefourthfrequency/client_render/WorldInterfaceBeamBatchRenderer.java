@@ -1,7 +1,11 @@
 package com.xm.thefourthfrequency.client_render;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.xm.thefourthfrequency.client_ui.WorldInterfaceBeamPolicy;
 import com.xm.thefourthfrequency.client_ui.WorldInterfaceClientState;
+import com.xm.thefourthfrequency.ending.WorldInterfacePolicy;
+import com.xm.thefourthfrequency.entity.StabilityAnchorEntity;
+import com.xm.thefourthfrequency.entity.StabilityAnchorGeometry;
 import com.xm.thefourthfrequency.entity.WorldInterfaceAnatomy;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEnergyOrbEntity;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEntity;
@@ -15,8 +19,8 @@ import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
-import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
@@ -26,7 +30,6 @@ import org.joml.Vector3fc;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.Deque;
 import java.util.List;
 import java.util.UUID;
@@ -48,6 +51,8 @@ public final class WorldInterfaceBeamBatchRenderer {
 	public static final int RENDER_LAYER_COUNT = 1;
 	public static final int MAX_ANCHOR_TETHERS = Integer.bitCount(WorldInterfaceProtocol.ANCHOR_MASK);
 	public static final int MAX_VERTICES_PER_TETHER = 16;
+	/** A severed tether while it retracts: two beams plus the gathered point it was pulled off. */
+	public static final int MAX_VERTICES_PER_SNAPPED_TETHER = 12;
 	/**
 	 * Aim core while charging, then a white-hot core plus a coloured halo once it fires, and for
 	 * the first three fired ticks an over-wide discharge flare on top of both. The ground contact
@@ -75,10 +80,14 @@ public final class WorldInterfaceBeamBatchRenderer {
 	 */
 	public static final int MAX_STORM_MOTES = 160;
 	public static final int MAX_VERTICES_PER_MOTE = 4;
+	public static final int STABILITY_FIELD_SAMPLES = 24;
+	public static final int MAX_STABILITY_FIELD_HALOS = MAX_ANCHOR_TETHERS * STABILITY_FIELD_SAMPLES;
 	public static final int MAX_BATCH_VERTICES = MAX_ANCHOR_TETHERS * MAX_VERTICES_PER_TETHER
+			+ MAX_ANCHOR_TETHERS * MAX_VERTICES_PER_SNAPPED_TETHER
 			+ MAX_VERTICES_PER_LASER
 			+ MAX_VERTICES_PER_LANCE
 			+ MAX_ORB_HALOS * MAX_VERTICES_PER_ORB
+			+ MAX_STABILITY_FIELD_HALOS * 4
 			+ MAX_STORM_MOTES * MAX_VERTICES_PER_MOTE;
 	public static final double FULL_DETAIL_DISTANCE = 96.0D;
 	// Well past the arena: culling is now left to the render distance rather than a fixed cap.
@@ -87,8 +96,6 @@ public final class WorldInterfaceBeamBatchRenderer {
 	public static final double ARENA_SCAN_RADIUS = 224.0D;
 	private static final double FULL_DETAIL_DISTANCE_SQR = FULL_DETAIL_DISTANCE * FULL_DETAIL_DISTANCE;
 	private static final double RENDER_CUTOFF_DISTANCE_SQR = RENDER_CUTOFF_DISTANCE * RENDER_CUTOFF_DISTANCE;
-	/** Anchors never move, so their positions only need re-reading twice a second. */
-	private static final long ANCHOR_RESCAN_INTERVAL_TICKS = 10L;
 	private static final long BOSS_RESCAN_INTERVAL_TICKS = 20L;
 	private static final float LASER_HOLD_FRACTION = 0.42F;
 	private static final float LASER_FLARE_TICKS = 3.0F;
@@ -112,8 +119,6 @@ public final class WorldInterfaceBeamBatchRenderer {
 
 	private static WorldInterfaceEntity cachedBoss;
 	private static long lastBossScanTick = Long.MIN_VALUE;
-	private static List<Vec3> cachedAnchors = List.of();
-	private static long lastAnchorScanTick = Long.MIN_VALUE;
 	private static UUID cachedScanEncounterId;
 	/** Client-side mirror of the server's laser aim trail; see {@link #laserEnd}. */
 	private static final Deque<Vec3> laserTrail = new ArrayDeque<>();
@@ -133,9 +138,7 @@ public final class WorldInterfaceBeamBatchRenderer {
 	/** Drops entity references so a disconnect cannot strand a stale level's boss or anchors. */
 	public static void resetSession() {
 		cachedBoss = null;
-		cachedAnchors = List.of();
 		lastBossScanTick = Long.MIN_VALUE;
-		lastAnchorScanTick = Long.MIN_VALUE;
 		cachedScanEncounterId = null;
 		laserTrail.clear();
 		lastLaserSampleTick = Long.MIN_VALUE;
@@ -163,6 +166,10 @@ public final class WorldInterfaceBeamBatchRenderer {
 		int band = WorldInterfacePalette.band(encounter.stage());
 		List<Beam> beams = new ArrayList<>();
 		List<Halo> halos = new ArrayList<>();
+		List<Vec3> anchors = resolveAnchors(encounter);
+		if (stabilityFieldsVisible(encounter.stage())) {
+			extractStabilityFields(level, anchors, gameTime, halos);
+		}
 
 		WorldInterfaceEntity boss = resolveBoss(level, encounter, gameTime);
 		if (boss != null) {
@@ -170,7 +177,8 @@ public final class WorldInterfaceBeamBatchRenderer {
 			// blocks apart, and every beam used to leave the body out of blank plating.
 			Vec3 core = WorldInterfaceAnatomy.coreOrigin(boss.getPosition(partialTick), boss.form(),
 					Mth.rotLerp(partialTick, boss.yBodyRotO, boss.yBodyRot));
-			extractAnchorTethers(level, encounter, core, gameTime, band, beams);
+			extractAnchorTethers(encounter, anchors, core, gameTime, band, beams);
+			extractSnappedTethers(level, encounter, core, partialTick, band, beams, halos);
 			extractLaser(level, projection, boss, core, gameTime, partialTick, band, beams, halos);
 			extractSkyLance(level, projection, gameTime, partialTick, band, beams, halos);
 			extractOrbs(level, projection, encounter, core, gameTime, partialTick, band, beams, halos);
@@ -189,12 +197,14 @@ public final class WorldInterfaceBeamBatchRenderer {
 	 * Ties every surviving anchor back to the interface. The tethers are the only place the
 	 * "the anchors are holding it up" rule is stated visually, so they brighten as anchors fall.
 	 */
-	private static void extractAnchorTethers(ClientLevel level, WorldInterfaceSnapshotS2C encounter,
+	private static void extractAnchorTethers(WorldInterfaceSnapshotS2C encounter, List<Vec3> anchors,
 			Vec3 eye, long gameTime, int band, List<Beam> beams) {
 		if (!isCombatStage(encounter.stage())) return;
-		List<Vec3> anchors = resolveAnchors(level, encounter, gameTime);
 		if (anchors.isEmpty()) return;
-		float pressure = 1.0F - anchors.size() / (float) MAX_ANCHOR_TETHERS;
+		// Read off the authoritative mask and positions in the server snapshot, never from the set of
+		// anchor entities this client happens to have loaded. Chunk tracking must not change tether
+		// count or brightness.
+		float pressure = 1.0F - standingAnchors(encounter) / (float) MAX_ANCHOR_TETHERS;
 		int red = WorldInterfacePalette.red255(band);
 		int green = WorldInterfacePalette.green255(band);
 		int blue = WorldInterfacePalette.blue255(band);
@@ -205,6 +215,66 @@ public final class WorldInterfaceBeamBatchRenderer {
 			int alpha = Math.round(Mth.lerp(travel, 46.0F, 128.0F) * (0.72F + pressure * 0.52F));
 			beams.add(new Beam(anchor.x, anchor.y, anchor.z, eye.x, eye.y, eye.z,
 					0.09F + travel * 0.05F, red, green, blue, Math.clamp(alpha, 0, 255)));
+		}
+	}
+
+	/**
+	 * The tether of an anchor that has just fallen, being hauled back in.
+	 *
+	 * <p>Driven off the collapsing entities rather than off the snapshot, and it has to be: the alive
+	 * mask drops a destroyed anchor on the same tick the blow lands, so by the time this runs the
+	 * anchor is already out of {@link #resolveAnchors}. The band gathers to a point at the relay core
+	 * and then retracts along its own line toward the interface, which is what makes the connection
+	 * read as having been severed rather than switched off.</p>
+	 */
+	private static void extractSnappedTethers(ClientLevel level, WorldInterfaceSnapshotS2C encounter,
+			Vec3 core, float partialTick, int band, List<Beam> beams, List<Halo> halos) {
+		if (!isCombatStage(encounter.stage())) return;
+		List<StabilityAnchorEntity> collapsing = level.getEntitiesOfClass(StabilityAnchorEntity.class,
+				arenaBounds(encounter), StabilityAnchorEntity::collapsing);
+		if (collapsing.isEmpty()) return;
+		int red = WorldInterfacePalette.red255(band);
+		int green = WorldInterfacePalette.green255(band);
+		int blue = WorldInterfacePalette.blue255(band);
+		int count = Math.min(collapsing.size(), MAX_ANCHOR_TETHERS);
+		for (int index = 0; index < count; index++) {
+			StabilityAnchorEntity anchor = collapsing.get(index);
+			float age = anchor.collapseAge(partialTick);
+			float reach = StabilityAnchorGeometry.collapseTetherReach(age);
+			if (reach <= 0.001F) continue;
+			Vec3 relay = StabilityAnchorGeometry.relayCore(anchor.getPosition(partialTick));
+			// The anchor-side end is what retracts: the far end stays on the interface, so the band
+			// visibly leaves rather than shrinking symmetrically into nothing.
+			Vec3 tail = core.add(relay.subtract(core).scale(reach));
+			int alpha = Math.clamp(Math.round(210.0F * reach), 0, 255);
+			beams.add(new Beam(tail.x, tail.y, tail.z, core.x, core.y, core.z,
+					0.06F + reach * 0.09F, red, green, blue, alpha));
+			beams.add(new Beam(tail.x, tail.y, tail.z, core.x, core.y, core.z,
+					0.03F * reach, 255, 255, 255, alpha));
+			// The gathered point the band was pulled off, sitting on the relay core it left.
+			halos.add(new Halo(relay.x, relay.y, relay.z, 0.34F * reach, 255, 244, 214,
+					Math.clamp(Math.round(200.0F * reach), 0, 255)));
+		}
+	}
+
+	/** Draws the ground projection of every live anchor as a steady, low-contrast refuge boundary. */
+	private static void extractStabilityFields(ClientLevel level, List<Vec3> anchors,
+			long gameTime, List<Halo> halos) {
+		float pulse = 0.86F + 0.14F * Mth.sin(gameTime * 0.18F);
+		for (int anchorIndex = 0; anchorIndex < anchors.size(); anchorIndex++) {
+			Vec3 anchor = anchors.get(anchorIndex);
+			for (int sample = 0; sample < STABILITY_FIELD_SAMPLES; sample++) {
+				double angle = Math.PI * 2.0D * sample / STABILITY_FIELD_SAMPLES
+						+ anchorIndex * 0.19D;
+				double x = anchor.x + Math.cos(angle) * WorldInterfacePolicy.STABILITY_FIELD_RADIUS;
+				double z = anchor.z + Math.sin(angle) * WorldInterfacePolicy.STABILITY_FIELD_RADIUS;
+				int blockX = Mth.floor(x);
+				int blockZ = Mth.floor(z);
+				double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+						blockX, blockZ) + 0.10D;
+				halos.add(new Halo(x, y, z, 0.22F * pulse,
+						255, 224, 160, Math.round(118.0F * pulse)));
+			}
 		}
 	}
 
@@ -227,8 +297,13 @@ public final class WorldInterfaceBeamBatchRenderer {
 			float progress = age / WorldInterfaceProtocol.LASER_WARNING_TICKS;
 			// Squared so the tell stays thin and calm early and snaps taut in the last half second.
 			float charge = progress * progress;
+			// Slower and shallower than it was. At 1.9 radians per tick this ran at roughly six
+			// hertz with a 56% swing in brightness, on a beam whose muzzle is metres across - a
+			// large, high-contrast strobe rather than a charge tell, and squarely in the band that
+			// causes trouble for photosensitive players. The attack pacing rework made it worse by
+			// putting the laser on screen far more often. It still tightens; it no longer flashes.
 			float flicker = progress < 0.78F ? 1.0F
-					: 0.72F + 0.28F * Mth.sin(age * 1.9F);
+					: 0.86F + 0.14F * Mth.sin(age * 0.8F);
 			beams.add(new Beam(core.x, core.y, core.z, end.x, end.y, end.z,
 					0.035F + charge * 0.16F, red, green, blue,
 					Math.clamp(Math.round((54.0F + charge * 150.0F) * flicker), 0, 255)));
@@ -281,7 +356,9 @@ public final class WorldInterfaceBeamBatchRenderer {
 		// The ground contact is the part the player actually has to track, so it gets a detonation
 		// rather than a dot: a white core, a coloured shell, and a pulsing outer flash on the same
 		// clock as the server's own explosion bursts.
-		float detonation = 0.72F + 0.28F * Mth.sin(age * 1.6F);
+		// Same reasoning as the laser's charge flicker: five hertz across a large area reads as a
+		// strobe rather than as a detonation building.
+		float detonation = 0.82F + 0.18F * Mth.sin(age * 0.9F);
 		float impact = 2.4F + flare * 5.0F;
 		halos.add(new Halo(end.x, end.y, end.z, impact * fade, 255, 255, 255,
 				Math.round(230.0F * fade)));
@@ -342,8 +419,15 @@ public final class WorldInterfaceBeamBatchRenderer {
 					+ (fall - 0.5D) * radius * 0.30D;
 			float size = (float) (radius * (0.020D + hash(seed + index * 11) * 0.055D));
 			// Fades in and out at the ends of its fall so nothing pops into or out of existence.
+			//
+			// The fade must reach zero, and the floor of 38 that used to be added here meant it
+			// never did. `fall` is a sawtooth: when it wraps from 1 back to 0 the mote's position
+			// jumps - `pull` snaps from 0.66 back to 1.0 and its height flips from +0.15r to
+			// -0.15r - and the fade exists precisely to hide that instant. At alpha 38 the mote was
+			// still plainly visible while it teleported. With 120 of them wrapping at 120 different
+			// phases, the storm was a permanent scatter of blocks flicking between positions.
 			float alpha = Mth.sin(fall * Mth.PI) * detail;
-			halos.add(new Halo(x, y, z, size, red, green, blue, Math.round(38.0F + alpha * 120.0F)));
+			halos.add(new Halo(x, y, z, size, red, green, blue, Math.round(alpha * 150.0F)));
 		}
 	}
 
@@ -380,9 +464,13 @@ public final class WorldInterfaceBeamBatchRenderer {
 		if (aim == null) aim = target.getEyePosition(partialTick);
 		float age = gameTime - action.startTick() + partialTick;
 		// While it is still aiming the beam is drawn live, so the telegraph shows exactly who is
-		// locked. Only the fired sweep trails, which is what makes running a real answer.
-		return age < WorldInterfaceProtocol.LASER_WARNING_TICKS ? target.getEyePosition(partialTick)
-				: groundUnder(level, aim);
+		// locked. It must end under the target, never at their eyes: for the local player the eye
+		// position is the camera position, and a camera-facing quad whose endpoint touches the camera
+		// crosses the near plane and projects into giant wedges covering the screen. The ground point
+		// keeps the same tracking tell without turning a world-space beam into a full-screen overlay.
+		// Only the fired sweep trails, which is what makes running a real answer.
+		return age < WorldInterfaceProtocol.LASER_WARNING_TICKS
+				? groundUnder(level, target.getPosition(partialTick)) : groundUnder(level, aim);
 	}
 
 	private static Player laserTarget(ClientLevel level, BossActionS2C action) {
@@ -546,22 +634,26 @@ public final class WorldInterfaceBeamBatchRenderer {
 		return cachedBoss;
 	}
 
-	private static List<Vec3> resolveAnchors(ClientLevel level, WorldInterfaceSnapshotS2C encounter,
-			long gameTime) {
-		if (lastAnchorScanTick != Long.MIN_VALUE && gameTime >= lastAnchorScanTick
-				&& gameTime - lastAnchorScanTick < ANCHOR_RESCAN_INTERVAL_TICKS) {
-			return cachedAnchors;
+	/** How many anchors the server says are still standing; the only authority on that count. */
+	private static int standingAnchors(WorldInterfaceSnapshotS2C encounter) {
+		return Math.min(Integer.bitCount(encounter.anchorAliveMask()), MAX_ANCHOR_TETHERS);
+	}
+
+	/**
+	 * Resolves the server-ordered positions against the authoritative live mask.
+	 *
+	 * <p>The endpoint is the bare relay core on top of the anchor, taken from the same constant the
+	 * model builds it at. This used to be a literal {@code +0.7} over the block centre, which
+	 * described the old end crystal: against the bespoke anchor it put the tether's end inside the
+	 * torso, a block below the emitter it is supposed to be leaving from.</p>
+	 */
+	private static List<Vec3> resolveAnchors(WorldInterfaceSnapshotS2C encounter) {
+		List<Vec3> anchors = new ArrayList<>(MAX_ANCHOR_TETHERS);
+		for (int index = 0; index < encounter.anchorPositions().size(); index++) {
+			if ((encounter.anchorAliveMask() & 1 << index) == 0) continue;
+			anchors.add(StabilityAnchorGeometry.relayCore(encounter.anchorPositions().get(index)));
 		}
-		lastAnchorScanTick = gameTime;
-		cachedAnchors = level.getEntitiesOfClass(EndCrystal.class, arenaBounds(encounter),
-						EndCrystal::isAlive).stream()
-				// Entity iteration order is not stable across frames; sorting keeps the travelling
-				// pulse assigned to the same tether instead of shuffling every rescan.
-				.sorted(Comparator.comparingInt(EndCrystal::getId))
-				.limit(MAX_ANCHOR_TETHERS)
-				.map(crystal -> crystal.position().add(0.0D, 1.0D, 0.0D))
-				.toList();
-		return cachedAnchors;
+		return List.copyOf(anchors);
 	}
 
 	private static AABB arenaBounds(WorldInterfaceSnapshotS2C encounter) {
@@ -576,11 +668,15 @@ public final class WorldInterfaceBeamBatchRenderer {
 				|| stage == WorldInterfaceProtocol.Stage.PHASE_3;
 	}
 
+	private static boolean stabilityFieldsVisible(WorldInterfaceProtocol.Stage stage) {
+		return isCombatStage(stage) || stage == WorldInterfaceProtocol.Stage.FAILURE_RESOLUTION;
+	}
+
 	private static void draw(WorldRenderContext context) {
 		BeamBatch batch = ((FabricRenderState) context.worldState()).getData(STATE_KEY);
 		if (batch == null || batch.beams().isEmpty() && batch.halos().isEmpty()) return;
 		VertexConsumer vertices = context.consumers().getBuffer(RenderTypes.lightning());
-		for (Beam beam : batch.beams()) drawBeam(vertices, batch.camera(), beam);
+		for (Beam beam : batch.beams()) drawBeam(vertices, batch, beam);
 		for (Halo halo : batch.halos()) drawHalo(vertices, batch, halo);
 	}
 
@@ -588,7 +684,8 @@ public final class WorldInterfaceBeamBatchRenderer {
 	 * Emits one camera-facing quad spanning the segment. Winding is chosen so the front face points
 	 * at the camera, which keeps the beam correct even if the lightning pipeline ever starts culling.
 	 */
-	private static void drawBeam(VertexConsumer vertices, Vec3 camera, Beam beam) {
+	private static void drawBeam(VertexConsumer vertices, BeamBatch batch, Beam beam) {
+		Vec3 camera = batch.camera();
 		double ax = beam.ax() - camera.x;
 		double ay = beam.ay() - camera.y;
 		double az = beam.az() - camera.z;
@@ -632,14 +729,34 @@ public final class WorldInterfaceBeamBatchRenderer {
 			rightLength = Math.sqrt(rx * rx + ry * ry + rz * rz);
 			if (rightLength < 1.0E-5D) return;
 		}
-		double scale = beam.halfWidth() / rightLength;
-		rx *= scale;
-		ry *= scale;
-		rz *= scale;
-		vertex(vertices, ax + rx, ay + ry, az + rz, beam);
-		vertex(vertices, bx + rx, by + ry, bz + rz, beam);
-		vertex(vertices, bx - rx, by - ry, bz - rz, beam);
-		vertex(vertices, ax - rx, ay - ry, az - rz, beam);
+		rx /= rightLength;
+		ry /= rightLength;
+		rz /= rightLength;
+		// Held to a minimum apparent width, and dimmed by whatever that costs.
+		//
+		// An anchor tether is authored a tenth of a block across and reaches the body from a spike
+		// out on the ring, which puts its far end under two pixels wide. A line that thin has no
+		// stable pixel coverage: sub-pixel camera movement switches it on and off along its own
+		// length between frames, and it crawls. The floor gives it pixels to be sampled in; the
+		// alpha scaling gives back exactly the brightness the extra width added, so it still reads
+		// as the same thread rather than as a cord.
+		//
+		// Resolved per end rather than once for the quad: a tether's two ends are tens of blocks
+		// apart in depth, so a single width is wrong at one of them.
+		double nearWidth = stableHalfWidth(beam.halfWidth(), ax, ay, az);
+		double farWidth = stableHalfWidth(beam.halfWidth(), bx, by, bz);
+		int nearAlpha = WorldInterfaceBeamPolicy.stableAlpha(beam.alpha(), beam.halfWidth(), nearWidth);
+		int farAlpha = WorldInterfaceBeamPolicy.stableAlpha(beam.alpha(), beam.halfWidth(), farWidth);
+		vertex(vertices, ax + rx * nearWidth, ay + ry * nearWidth, az + rz * nearWidth, beam, nearAlpha);
+		vertex(vertices, bx + rx * farWidth, by + ry * farWidth, bz + rz * farWidth, beam, farAlpha);
+		vertex(vertices, bx - rx * farWidth, by - ry * farWidth, bz - rz * farWidth, beam, farAlpha);
+		vertex(vertices, ax - rx * nearWidth, ay - ry * nearWidth, az - rz * nearWidth, beam, nearAlpha);
+	}
+
+	/** The authored half-width, or the distance-scaled floor below which a beam stops holding still. */
+	private static double stableHalfWidth(float halfWidth, double x, double y, double z) {
+		return WorldInterfaceBeamPolicy.stableHalfWidth(halfWidth,
+				Math.sqrt(x * x + y * y + z * z));
 	}
 
 	private static void drawHalo(VertexConsumer vertices, BeamBatch batch, Halo halo) {
@@ -661,9 +778,11 @@ public final class WorldInterfaceBeamBatchRenderer {
 		vertex(vertices, x - lx + ux, y - ly + uy, z - lz + uz, halo);
 	}
 
-	private static void vertex(VertexConsumer vertices, double x, double y, double z, Beam beam) {
+	/** Alpha is passed in rather than read off the beam: the two ends can be drawn at different widths. */
+	private static void vertex(VertexConsumer vertices, double x, double y, double z, Beam beam,
+			int alpha) {
 		vertices.addVertex((float) x, (float) y, (float) z)
-				.setColor(beam.red(), beam.green(), beam.blue(), beam.alpha());
+				.setColor(beam.red(), beam.green(), beam.blue(), alpha);
 	}
 
 	private static void vertex(VertexConsumer vertices, double x, double y, double z, Halo halo) {

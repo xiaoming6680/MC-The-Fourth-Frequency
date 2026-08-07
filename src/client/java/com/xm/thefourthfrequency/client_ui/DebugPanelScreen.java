@@ -52,6 +52,21 @@ public final class DebugPanelScreen extends Screen {
 			.map(value -> value.id()).toList();
 	private static final List<String> FILES = NarrativeFileCatalog.definitions().stream()
 			.map(value -> value.id()).toList();
+	/**
+	 * The controls above the anomaly list.
+	 *
+	 * <p>HIM sits here rather than in the list because the catalogue does not carry it: it has no
+	 * tier, no duration and never occupies the active-anomaly slot, so there is no row for it to
+	 * have. It is placed by {@code HimService} on its own schedule, and this is the only way to
+	 * ask for one now instead of waiting out the 6000–15000 tick interval.</p>
+	 *
+	 * <p>Not marked as needing confirmation: it places one figure out of view that removes itself,
+	 * writes nothing to the record, and is the least destructive entry on this screen.</p>
+	 */
+	private static final List<ActionSpec> ANOMALY_TOOLBAR = List.of(
+			new ActionSpec("停止当前异象", "anomaly_stop", "", 0, true),
+			new ActionSpec("恢复自动触发", "anomaly_resume", "", 0, false),
+			new ActionSpec("生成 HIM", "him_spawn", "", 0, false));
 
 	private static PageMemory pageMemory = new PageMemory(0, 0, 0);
 	private DebugStatusPayload status;
@@ -167,11 +182,13 @@ public final class DebugPanelScreen extends Screen {
 
 	private void buildAnomalyActions(Layout layout) {
 		int toolbarY = layout.contentTop + 31;
-		int toolbarWidth = (layout.contentWidth() - BUTTON_GAP) / 2;
-		actionButton(layout.contentLeft, toolbarY, toolbarWidth,
-				new ActionSpec("停止当前异象", "anomaly_stop", "", 0, true));
-		actionButton(layout.contentLeft + toolbarWidth + BUTTON_GAP, toolbarY, toolbarWidth,
-				new ActionSpec("恢复自动触发", "anomaly_resume", "", 0, false));
+		int columns = anomalyToolbarColumns(layout);
+		int toolbarWidth = (layout.contentWidth() - BUTTON_GAP * (columns - 1)) / columns;
+		for (int index = 0; index < ANOMALY_TOOLBAR.size(); index++) {
+			actionButton(layout.contentLeft + index % columns * (toolbarWidth + BUTTON_GAP),
+					toolbarY + index / columns * (BUTTON_HEIGHT + BUTTON_GAP),
+					toolbarWidth, ANOMALY_TOOLBAR.get(index));
+		}
 
 		int listTop = anomalyListTop(layout);
 		int visibleRows = Math.max(1, (layout.contentBottom - listTop) / ANOMALY_ROW_HEIGHT);
@@ -513,8 +530,26 @@ public final class DebugPanelScreen extends Screen {
 				layout.top + (layout.panelHeight - height) / 2, width, height);
 	}
 
+	/**
+	 * Three across only while every label still has room for itself.
+	 *
+	 * <p>The narrow panel is the reason this is computed rather than fixed: the buttons carry
+	 * six-character Chinese labels, and a third column at the smallest content width leaves each
+	 * one too little room, so they would render as ellipses. Below the threshold they wrap onto a
+	 * second row and the list below starts that much lower.</p>
+	 */
+	private int anomalyToolbarColumns(Layout layout) {
+		return layout.contentWidth() >= 280 ? ANOMALY_TOOLBAR.size() : 2;
+	}
+
+	private int anomalyToolbarRows(Layout layout) {
+		int columns = anomalyToolbarColumns(layout);
+		return (ANOMALY_TOOLBAR.size() + columns - 1) / columns;
+	}
+
 	private int anomalyListTop(Layout layout) {
-		return layout.contentTop + ANOMALY_INFO_HEIGHT;
+		return layout.contentTop + ANOMALY_INFO_HEIGHT
+				+ (anomalyToolbarRows(layout) - 1) * (BUTTON_HEIGHT + BUTTON_GAP);
 	}
 
 	private int fileListTop(Layout layout) {
@@ -581,6 +616,16 @@ public final class DebugPanelScreen extends Screen {
 	public int rememberedSectionForTesting() { return pageMemory.sectionIndex; }
 	public int rememberedAnomalyScrollForTesting() { return pageMemory.anomalyScrollRow; }
 	public void triggerAnomalyForTesting(String id) { send("anomaly", id, 0); }
+	public static int anomalySectionIndexForTesting() { return Section.ANOMALIES.ordinal(); }
+	public List<String> toolbarActionsForTesting() {
+		return ANOMALY_TOOLBAR.stream().map(ActionSpec::action).toList();
+	}
+	public void selectSectionForTesting(int index) {
+		section = Section.values()[Math.clamp(index, 0, Section.values().length - 1)];
+		pending = null;
+		rememberPage();
+		rebuildWidgets();
+	}
 	public String statusMessageForTesting() { return statusMessage; }
 
 	private enum Section {

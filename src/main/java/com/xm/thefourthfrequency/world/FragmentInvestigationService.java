@@ -46,11 +46,17 @@ public final class FragmentInvestigationService {
 	private static final String DISCOVERIES = "discoveries";
 	private static final String ALLOCATION_CURSOR = "allocation_cursor";
 	private static final String ALLOCATION_COMPLETE = "allocation_complete";
+	/** Set once the rescue pass has run. Absent on saves written before that pass existed. */
+	private static final String ALLOCATION_RESCUED = "allocation_rescued";
+	private static final String OVERWORLD = "minecraft:overworld";
 	private static final String NEAR_KEY = "fragment_near_candidate";
 	private static final int STATE_VERSION = 1;
 	private static final int FRAGMENT_COUNT = HiddenFilePolicy.FILE_COUNT;
 	private static final int GROUPS_PER_FRAGMENT = 4;
 	private static final int MAX_CANDIDATES_PER_FRAGMENT = 3;
+	/** One step per (fragment, pooled group), then one rescue step per fragment. */
+	private static final int POOL_ALLOCATION_STEPS = FRAGMENT_COUNT * GROUPS_PER_FRAGMENT;
+	private static final int TOTAL_ALLOCATION_STEPS = POOL_ALLOCATION_STEPS + FRAGMENT_COUNT;
 	private static final int LOCATE_RADIUS_CHUNKS = 256;
 	private static final int ENTER_CHECK_INTERVAL = 10;
 	private static final SignalBand[] SIGNAL_BANDS = {
@@ -85,39 +91,80 @@ public final class FragmentInvestigationService {
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) updateNearby(player, data);
 	}
 
+	/**
+	 * Walks the allocation cursor one step per call: first the pooled pass, then a rescue pass for any
+	 * fragment the pool left empty.
+	 *
+	 * <p>The pooled pass gives each fragment exactly one attempt per group in its own pool, and an
+	 * attempt is spent whether or not the structure was found. A fragment whose four groups all failed
+	 * to locate therefore ended with no candidate at all, and because the cursor latched
+	 * {@link #ALLOCATION_COMPLETE} at the end it never got another chance for the life of the world.
+	 * That fragment's hidden file becomes unreachable: the receiver has nothing to point at, so no
+	 * structure the player walks into is ever the right one and the terminal stays silent. The rescue
+	 * pass looks outside the pool for those fragments, and runs on existing saves too.</p>
+	 */
 	private static void allocateNext(MinecraftServer server) {
 		FrequencyWorldData data = FrequencyWorldData.get(server);
 		if (!investigationsActive(data)) return;
 		CompoundTag state = state(data);
-		if (state.getBooleanOr(ALLOCATION_COMPLETE, false)) return;
-		int cursor = Math.clamp(state.getIntOr(ALLOCATION_CURSOR, 0), 0, FRAGMENT_COUNT * GROUPS_PER_FRAGMENT);
-		if (cursor >= FRAGMENT_COUNT * GROUPS_PER_FRAGMENT) {
-			storeAllocationCursor(data, cursor, true);
+		// Being complete is not enough on its own: saves written before the rescue pass existed
+		// latched that flag with the cursor parked at the end of the pooled pass, which is exactly
+		// where the rescue begins. Those worlds pick it up from there rather than staying stranded.
+		if (state.getBooleanOr(ALLOCATION_COMPLETE, false)
+				&& state.getBooleanOr(ALLOCATION_RESCUED, false)) return;
+		int cursor = Math.clamp(state.getIntOr(ALLOCATION_CURSOR, 0), 0, TOTAL_ALLOCATION_STEPS);
+		if (cursor >= TOTAL_ALLOCATION_STEPS) {
+			storeAllocationCursor(data, cursor, true, true);
 			return;
 		}
-		int fragment = cursor / GROUPS_PER_FRAGMENT;
+		ServerLevel level = server.overworld();
+		BlockPos origin = data.stationPosition().orElse(BlockPos.ZERO);
 		List<Candidate> current = candidates(data);
-		if (current.stream().filter(candidate -> candidate.fragment() == fragment).count()
-				< MAX_CANDIDATES_PER_FRAGMENT) {
-			int rotation = Math.floorMod(data.worldId().hashCode() + fragment * 31, GROUPS_PER_FRAGMENT);
-			Group group = POOLS[fragment][Math.floorMod(cursor % GROUPS_PER_FRAGMENT + rotation, GROUPS_PER_FRAGMENT)];
-			ServerLevel level = server.overworld();
-			BlockPos origin = data.stationPosition().orElse(BlockPos.ZERO);
-			Pair<BlockPos, Holder<Structure>> located = level.getChunkSource().getGenerator()
-					.findNearestMapStructure(level, holders(level, group), origin, LOCATE_RADIUS_CHUNKS, false);
-			if (located != null) {
-				BlockPos position = located.getFirst().immutable();
-				boolean duplicate = current.stream().anyMatch(candidate -> candidate.dimension().equals("minecraft:overworld")
-						&& candidate.position().equals(position));
-				if (!duplicate) {
-					current = new ArrayList<>(current);
-					current.add(new Candidate(fragment, group, position, "minecraft:overworld"));
-					storeCandidates(data, current);
-				}
-			}
-		}
+		if (cursor < POOL_ALLOCATION_STEPS) allocateFromPool(data, level, origin, current, cursor);
+		else allocateRescue(data, level, origin, current, cursor - POOL_ALLOCATION_STEPS);
 		int next = cursor + 1;
-		storeAllocationCursor(data, next, next >= FRAGMENT_COUNT * GROUPS_PER_FRAGMENT);
+		boolean done = next >= TOTAL_ALLOCATION_STEPS;
+		storeAllocationCursor(data, next, done, done);
+	}
+
+	private static void allocateFromPool(FrequencyWorldData data, ServerLevel level, BlockPos origin,
+			List<Candidate> current, int cursor) {
+		int fragment = cursor / GROUPS_PER_FRAGMENT;
+		if (current.stream().filter(candidate -> candidate.fragment() == fragment).count()
+				>= MAX_CANDIDATES_PER_FRAGMENT) return;
+		int rotation = Math.floorMod(data.worldId().hashCode() + fragment * 31, GROUPS_PER_FRAGMENT);
+		Group group = POOLS[fragment][Math.floorMod(cursor % GROUPS_PER_FRAGMENT + rotation, GROUPS_PER_FRAGMENT)];
+		addCandidate(data, level, origin, current, fragment, group);
+	}
+
+	/**
+	 * Last resort for a fragment the pooled pass left with nothing: try every group, not just that
+	 * fragment's four. Runs at most once per fragment and only while it has no candidate, so the extra
+	 * structure lookups are bounded and happen only on a world that would otherwise be missing a file.
+	 */
+	private static void allocateRescue(FrequencyWorldData data, ServerLevel level, BlockPos origin,
+			List<Candidate> current, int fragment) {
+		if (current.stream().anyMatch(candidate -> candidate.fragment() == fragment)) return;
+		Group[] groups = Group.values();
+		int rotation = Math.floorMod(data.worldId().hashCode() + fragment * 31, groups.length);
+		for (int step = 0; step < groups.length; step++) {
+			if (addCandidate(data, level, origin, current, fragment,
+					groups[Math.floorMod(step + rotation, groups.length)])) return;
+		}
+	}
+
+	private static boolean addCandidate(FrequencyWorldData data, ServerLevel level, BlockPos origin,
+			List<Candidate> current, int fragment, Group group) {
+		Pair<BlockPos, Holder<Structure>> located = level.getChunkSource().getGenerator()
+				.findNearestMapStructure(level, holders(level, group), origin, LOCATE_RADIUS_CHUNKS, false);
+		if (located == null) return false;
+		BlockPos position = located.getFirst().immutable();
+		if (current.stream().anyMatch(candidate -> candidate.dimension().equals(OVERWORLD)
+				&& candidate.position().equals(position))) return false;
+		List<Candidate> next = new ArrayList<>(current);
+		next.add(new Candidate(fragment, group, position, OVERWORLD));
+		storeCandidates(data, next);
+		return true;
 	}
 
 	private static boolean investigationsActive(FrequencyWorldData data) {
@@ -420,9 +467,25 @@ public final class FragmentInvestigationService {
 			state.remove(DISCOVERIES);
 			root.put(STATE, state);
 		});
+		// Only the derived cache is dropped. Forced entries belong to whichever test installed them,
+		// and game tests share one server: clearing them here let one test silently pull the
+		// candidate out from under another that was mid-hold.
 		NEARBY.clear();
-		FORCED_NEARBY_FOR_TESTS.clear();
-		storeAllocationCursor(data, FRAGMENT_COUNT * GROUPS_PER_FRAGMENT, true);
+		// Fixed candidates are the whole point of this hook, so both passes count as already run.
+		storeAllocationCursor(data, TOTAL_ALLOCATION_STEPS, true, true);
+	}
+
+	public static List<Candidate> candidatesForTesting(FrequencyWorldData data) {
+		return candidates(data);
+	}
+
+	/** Reproduces a save whose allocation latched before the rescue pass existed. */
+	public static void reopenAllocationForTesting(FrequencyWorldData data) {
+		storeAllocationCursor(data, POOL_ALLOCATION_STEPS, true, false);
+	}
+
+	public static boolean allocationRescuedForTesting(FrequencyWorldData data) {
+		return state(data).getBooleanOr(ALLOCATION_RESCUED, false);
 	}
 
 	public static void setNearbyForTesting(ServerPlayer player, Candidate candidate) {
@@ -502,12 +565,14 @@ public final class FragmentInvestigationService {
 		});
 	}
 
-	private static void storeAllocationCursor(FrequencyWorldData data, int cursor, boolean complete) {
+	private static void storeAllocationCursor(FrequencyWorldData data, int cursor, boolean complete,
+			boolean rescued) {
 		data.updateNarrativeState(root -> {
 			CompoundTag state = root.getCompoundOrEmpty(STATE).copy();
 			state.putInt("version", STATE_VERSION);
 			state.putInt(ALLOCATION_CURSOR, cursor);
 			state.putBoolean(ALLOCATION_COMPLETE, complete);
+			state.putBoolean(ALLOCATION_RESCUED, rescued);
 			root.put(STATE, state);
 		});
 	}

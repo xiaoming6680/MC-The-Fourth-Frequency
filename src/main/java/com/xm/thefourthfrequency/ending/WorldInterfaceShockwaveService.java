@@ -1,8 +1,13 @@
 package com.xm.thefourthfrequency.ending;
 
+import com.xm.thefourthfrequency.audio.AudioService;
+import com.xm.thefourthfrequency.audio.ModSounds;
+import com.xm.thefourthfrequency.networking.WorldInterfaceProtocol;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
@@ -48,7 +53,42 @@ public final class WorldInterfaceShockwaveService {
 		}
 		if (ACTIVE.size() >= MAX_CONCURRENT_WAVES) return false;
 		ACTIVE.add(new Wave(level, origin, level.getGameTime(), durationTicks, maxRadius));
+		// The ring was a purely visual event, which meant the biggest beats in the encounter -
+		// both morphs and every summon shockwave - arrived in silence for anyone not looking at
+		// the right part of the sky. Sounded here rather than at each call site so a wave can
+		// never exist without being heard.
+		AudioService.playBounded(level, BlockPos.containing(origin), ModSounds.WORLD_INTERFACE_SHOCKWAVE,
+				SoundSource.HOSTILE, 1.0F, radiusPitch(maxRadius));
+		// And the camera, for the same reason the sound is emitted here rather than at each call site:
+		// a ring that travels forty blocks across the arena is a world event, and a world event that
+		// passes through a player without touching them is scenery. Graded by reach, so the summon's
+		// largest wave and an anchor's local one are not the same shove.
+		WorldInterfaceState.snapshot(level.getServer()).encounterId().ifPresent(encounterId ->
+				WorldInterfaceBlastService.emit(level, encounterId, origin, maxRadius * SHAKE_REACH,
+						maxRadius >= MORPH_MAX_RADIUS
+								? WorldInterfaceProtocol.BlastGrade.HEAVY
+								: WorldInterfaceProtocol.BlastGrade.MEDIUM));
 		return true;
+	}
+
+	/**
+	 * How far past its own ring a wave is felt, as a multiple of the reach it draws.
+	 *
+	 * <p>Slightly wider than the ring itself: the wave is meant to arrive at a player a moment before
+	 * the light does, which is what makes the light read as the thing that caused it.
+	 */
+	private static final double SHAKE_REACH = 1.35D;
+	// Deliberately capped at HEAVY, however large the ring. The summon fires three of these inside a
+	// second, and the client puts its own cataclysm-grade freeze-and-release on the roar they land
+	// around; letting the rings reach the same grade would stack four peak impulses on one beat, and
+	// the shake budget is a comfort limit rather than a taste one.
+
+	/**
+	 * Bigger rings speak lower. The summon's third wave is half again the morph radius, and pitch is
+	 * the only channel that can say so before the ring has visibly travelled anywhere.
+	 */
+	private static float radiusPitch(double maxRadius) {
+		return (float) Math.clamp(1.18D - maxRadius / MORPH_MAX_RADIUS * 0.30D, 0.70D, 1.25D);
 	}
 
 	/** Advances every wave bound to this level. Returns how many are still alive afterwards. */

@@ -35,8 +35,12 @@ public final class M4GameTests implements CustomTestMethodInvoker {
 			record.putBoolean(TerminalData.BOUND, true);
 			record.putInt(TerminalData.BAND_STAGE, 2);
 			record.putInt(TerminalData.PLOT_STAGE, 3);
+			// FOUND_FORTRESS included so the objective really is the one named below: the fortress task
+			// sits between arriving in the Nether and the rods, and without it these players would be
+			// staged one objective earlier than the stalled-tick figure below assumes.
 			record.putInt(TerminalData.SURVIVAL_MILESTONE_MASK, SurvivalMilestone.MINED_LOGS.mask()
-					| SurvivalMilestone.IRON.mask() | SurvivalMilestone.ENTERED_NETHER.mask());
+					| SurvivalMilestone.IRON.mask() | SurvivalMilestone.ENTERED_NETHER.mask()
+					| SurvivalMilestone.FOUND_FORTRESS.mask());
 			record.putString(TerminalData.GUIDANCE_OBJECTIVE_ID, "collect_blaze_rods");
 			record.putInt(TerminalData.GUIDANCE_OBJECTIVE_PROGRESS, 0);
 			record.putLong(TerminalData.GUIDANCE_STALLED_TICKS, 6_000L);
@@ -190,6 +194,45 @@ public final class M4GameTests implements CustomTestMethodInvoker {
 		helper.assertValueEqual(record.getStringOr(TerminalData.LOCAL_FILE_HASH, ""), archive.contentHash(),
 				"Complete file hash remains immutable");
 		helper.succeed();
+	}
+
+	/**
+	 * A save that latched its allocation with a fragment left empty must reopen and run the rescue
+	 * pass. Until it did, a fragment whose four pooled groups all failed to locate stayed empty for
+	 * the life of the world: the receiver had nothing to point at, so no structure the player entered
+	 * was ever the right one and that hidden file was unreachable.
+	 *
+	 * <p>This asserts the pass runs, not that it finds something - whether any structure exists within
+	 * range is a property of the world, and the test level has no guarantee of one.</p>
+	 */
+	@GameTest(maxTicks = 400)
+	public void latchedAllocationReopensToRescueAnEmptyFragment(GameTestHelper helper) {
+		ServerPlayer player = helper.makeMockServerPlayerInLevel();
+		FrequencyWorldData data = FrequencyWorldData.get(helper.getLevel().getServer());
+		data.updateTerminalRecord(player.getUUID(), record -> {
+			record.putBoolean(TerminalData.BOUND, true);
+			record.putInt(TerminalData.BAND_STAGE, 1);
+		});
+		// An allocation that ran before the rescue pass existed: latched complete, fragment 3 empty.
+		FragmentInvestigationService.setCandidatesForTesting(data, List.of(
+				candidate(0, FragmentInvestigationService.Group.MINESHAFT, player.blockPosition().offset(600, -15, 0)),
+				candidate(1, FragmentInvestigationService.Group.DESERT_PYRAMID, player.blockPosition().offset(-900, 0, 400)),
+				candidate(2, FragmentInvestigationService.Group.TRIAL_CHAMBERS, player.blockPosition().offset(1200, -25, 800))));
+		FragmentInvestigationService.reopenAllocationForTesting(data);
+		helper.assertFalse(FragmentInvestigationService.allocationRescuedForTesting(data),
+				"The reopened save must start out without the rescue pass having run");
+		helper.runAfterDelay(300, () -> {
+			helper.assertTrue(FragmentInvestigationService.allocationRescuedForTesting(data),
+					"A latched allocation with an empty fragment must reopen and run the rescue pass");
+			// Fragments the pool already satisfied keep exactly what they had.
+			for (int fragment = 0; fragment < 3; fragment++) {
+				int index = fragment;
+				helper.assertTrue(FragmentInvestigationService.candidatesForTesting(data).stream()
+								.anyMatch(candidate -> candidate.fragment() == index),
+						"The rescue pass must not disturb a fragment that already had a candidate");
+			}
+			helper.succeed();
+		});
 	}
 
 	private static FragmentInvestigationService.Candidate candidate(int fragment,

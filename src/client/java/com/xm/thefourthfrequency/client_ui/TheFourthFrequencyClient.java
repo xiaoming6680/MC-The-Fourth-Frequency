@@ -13,6 +13,8 @@ import com.xm.thefourthfrequency.client_render.ReworkBodyModel;
 import com.xm.thefourthfrequency.client_render.ReworkBodyRenderer;
 import com.xm.thefourthfrequency.client_render.HimModel;
 import com.xm.thefourthfrequency.client_render.HimRenderer;
+import com.xm.thefourthfrequency.client_render.StabilityAnchorModel;
+import com.xm.thefourthfrequency.client_render.StabilityAnchorRenderer;
 import com.xm.thefourthfrequency.client_render.WatcherRenderer;
 import com.xm.thefourthfrequency.client_render.WatcherModel;
 import com.xm.thefourthfrequency.client_render.WorldInterfaceModel;
@@ -58,6 +60,9 @@ public final class TheFourthFrequencyClient implements ClientModInitializer {
 		EntityRendererRegistry.register(ModEntities.WORLD_INTERFACE_PART, NoopRenderer::new);
 		EntityRendererRegistry.register(ModEntities.WORLD_INTERFACE_ENERGY_ORB,
 				WorldInterfaceEnergyOrbRenderer::new);
+		EntityModelLayerRegistry.registerModelLayer(StabilityAnchorRenderer.MODEL_LAYER,
+				StabilityAnchorModel::createLayer);
+		EntityRendererRegistry.register(ModEntities.STABILITY_ANCHOR, StabilityAnchorRenderer::new);
 		// Vanilla's own portal renderer, unmodified. BlockEntityRenderers#register is not public and
 		// this mod pulls in no access wideners, so the deprecated Fabric helper is the way in. The
 		// provider is bound to the vanilla supertype explicitly: inferring it from the exit's own
@@ -82,6 +87,7 @@ public final class TheFourthFrequencyClient implements ClientModInitializer {
 		DebugPanelClient.initialize();
 		WorldDecayClient.initialize();
 		SignalBedController.initialize();
+		SkyInstrumentSampler.initialize();
 		UseItemCallback.EVENT.register((player, level, hand) -> {
 			if (level.isClientSide() && player.getItemInHand(hand).is(ModItems.OLD_TERMINAL)
 					&& TerminalData.belongsTo(player.getItemInHand(hand), player.getUUID())) {

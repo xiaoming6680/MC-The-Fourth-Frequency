@@ -12,6 +12,7 @@ import com.xm.thefourthfrequency.content.ModEntities;
 import com.xm.thefourthfrequency.content.ModItems;
 import com.xm.thefourthfrequency.content.ModBlocks;
 import com.xm.thefourthfrequency.content.TerminalData;
+import com.xm.thefourthfrequency.ending.AltarShape;
 import com.xm.thefourthfrequency.ending.EndBossArenaService;
 import com.xm.thefourthfrequency.ending.WorldInterfaceGatewayState;
 import com.xm.thefourthfrequency.ending.WorldInterfaceStage;
@@ -364,11 +365,16 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 	 */
 	private static void captureAnchorLossLeavesTheClock(ClientGameTestContext context,
 			TestSingleplayerContext singleplayer, Fixture fixture) {
+		// A quarter of the way through the clock, derived rather than written out: what this test is
+		// about is that cutting an anchor does not move the collapse projection, and the particular
+		// moment it samples at is incidental. A literal tick count silently starts describing a
+		// different fraction the moment the encounter's length changes.
+		long quarterTicks = WorldInterfaceProtocol.COLLAPSE_DURATION_TICKS / 4L;
 		long baselineSequence = singleplayer.getServer().computeOnServer(server -> {
 			body(requireEnd(server), fixture.bodyId()).clearAction();
 			return sendEncounter(server, fixture, WorldInterfaceProtocol.Stage.PHASE_3,
 					WorldInterfaceProtocol.Form.WORLD_INTERFACE, 0.28F,
-					WorldInterfaceProtocol.ANCHOR_MASK, 1_800L, true,
+					WorldInterfaceProtocol.ANCHOR_MASK, quarterTicks, true,
 					WorldInterfaceProtocol.GatewayState.PURPLE, WorldInterfaceProtocol.Outcome.NONE, 0.0F);
 		});
 		waitForEncounter(context, fixture, baselineSequence, WorldInterfaceProtocol.Stage.PHASE_3,
@@ -378,7 +384,7 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 
 		long cutSequence = singleplayer.getServer().computeOnServer(server -> sendEncounter(server, fixture,
 				WorldInterfaceProtocol.Stage.PHASE_3, WorldInterfaceProtocol.Form.WORLD_INTERFACE, 0.28F,
-				WorldInterfaceProtocol.ANCHOR_MASK & ~1, 1_800L, true,
+				WorldInterfaceProtocol.ANCHOR_MASK & ~1, quarterTicks, true,
 				WorldInterfaceProtocol.GatewayState.PURPLE, WorldInterfaceProtocol.Outcome.NONE, 0.0F));
 		waitForEncounter(context, fixture, cutSequence, WorldInterfaceProtocol.Stage.PHASE_3,
 				WorldInterfaceProtocol.Form.WORLD_INTERFACE);
@@ -429,15 +435,19 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 
 	private static void capturePoems(ClientGameTestContext context, TestSingleplayerContext singleplayer,
 			Fixture fixture) {
-		long successSequence = singleplayer.getServer().computeOnServer(server -> sendPoem(server, fixture,
-				WorldInterfaceProtocol.Outcome.SUCCESS));
-		waitForPoem(context, fixture, successSequence, WorldInterfaceProtocol.Outcome.SUCCESS);
-		openVanillaPoem(context);
-		context.takeScreenshot("world-interface-poem-success");
+		for (int destroyed : List.of(0, 5, WorldInterfaceProtocol.MAX_ANCHORS)) {
+			long successSequence = singleplayer.getServer().computeOnServer(server -> sendPoem(server, fixture,
+					WorldInterfaceProtocol.Outcome.SUCCESS, destroyed));
+			waitForPoem(context, fixture, successSequence, WorldInterfaceProtocol.Outcome.SUCCESS, destroyed);
+			openVanillaPoem(context);
+			String branch = destroyed == 0 ? "preserved"
+					: destroyed == WorldInterfaceProtocol.MAX_ANCHORS ? "all-destroyed" : "partial";
+			context.takeScreenshot("world-interface-poem-success-" + branch);
+		}
 
 		long failureSequence = singleplayer.getServer().computeOnServer(server -> sendPoem(server, fixture,
-				WorldInterfaceProtocol.Outcome.FAILURE));
-		waitForPoem(context, fixture, failureSequence, WorldInterfaceProtocol.Outcome.FAILURE);
+				WorldInterfaceProtocol.Outcome.FAILURE, 0));
+		waitForPoem(context, fixture, failureSequence, WorldInterfaceProtocol.Outcome.FAILURE, 0);
 		openVanillaPoem(context);
 		context.takeScreenshot("world-interface-poem-failure");
 	}
@@ -481,6 +491,16 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 					"The temporary End respawn remained active during vanilla credits");
 			require(requireEnd(server).getBlockState(liveExit.position()).is(ModBlocks.WORLD_INTERFACE_EXIT_PORTAL),
 					"The tested block was not the World Interface exit portal");
+			for (int x = -2; x <= 2; x++) {
+				for (int z = -2; z <= 2; z++) {
+					if (!AltarShape.isExitFrame(x, z)) continue;
+					BlockPos frame = liveExit.position().offset(x, 0, z);
+					require(requireEnd(server).getBlockState(frame).equals(AltarShape.exitFrameState()),
+							"The exit portal was missing its same-height altar frame at " + frame);
+					require(!requireEnd(server).getBlockState(frame.below()).isAir(),
+							"The exit portal frame was floating at " + frame);
+				}
+			}
 			return true;
 		});
 
@@ -571,7 +591,11 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 			snapshot = requireApplied(WorldInterfaceState.transition(server, encounterId, snapshot.revision(),
 					current, next), "advance live exit to " + next.serializedName());
 		}
+		// The state ledger names the former altar core; the actual exit replaces the three-by-three
+		// platform directly below it. The production shape owns that offset so this fixture cannot
+		// drift back to the short-lived raised-terrace layout.
 		BlockPos exit = arena.altar();
+		BlockPos portal = AltarShape.exitPortalCenter(exit);
 		snapshot = requireApplied(WorldInterfaceState.mutate(server, encounterId, snapshot.revision(), state -> {
 			state.setExit(exit, true);
 			state.transitionTo(WorldInterfaceStage.PORTAL_OPEN);
@@ -584,12 +608,19 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 		int flags = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS;
 		for (int x = -1; x <= 1; x++) {
 			for (int z = -1; z <= 1; z++) {
-				end.setBlock(exit.offset(x, 0, z), ModBlocks.WORLD_INTERFACE_EXIT_PORTAL.defaultBlockState(), flags);
+				end.setBlock(portal.offset(x, 0, z), ModBlocks.WORLD_INTERFACE_EXIT_PORTAL.defaultBlockState(), flags);
 			}
 		}
-		player.teleportTo(end, exit.getX() + 0.5D, exit.getY() + 0.1D, exit.getZ() + 0.5D,
+		for (int x = -2; x <= 2; x++) {
+			for (int z = -2; z <= 2; z++) {
+				if (AltarShape.isExitFrame(x, z)) {
+					end.setBlock(portal.offset(x, 0, z), AltarShape.exitFrameState(), flags);
+				}
+			}
+		}
+		player.teleportTo(end, portal.getX() + 0.5D, portal.getY() + 0.1D, portal.getZ() + 0.5D,
 				Set.of(), player.getYRot(), player.getXRot(), true);
-		return new LiveExit(encounterId, player.getUUID(), exit);
+		return new LiveExit(encounterId, player.getUUID(), portal);
 	}
 
 	private static Fixture createFixture(MinecraftServer server) {
@@ -603,6 +634,8 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 		EndBossArenaService.PreparedArena arena = EndBossArenaService.prepare(end);
 		BlockPos center = arena.center();
 		List<BlockPos> gateways = arena.gatewayCorePositions();
+		List<BlockPos> anchors = arena.anchors().stream()
+				.map(EndBossArenaService.AnchorSlot::position).toList();
 		BlockPos camera = surfaceAir(end, center.getX(), center.getZ() + 38);
 
 		UUID encounterId = UUID.randomUUID();
@@ -625,7 +658,8 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 		player.inventoryMenu.broadcastChanges();
 		player.teleportTo(end, camera.getX() + 0.5D, camera.getY(), camera.getZ() + 0.5D,
 				Set.of(), 180.0F, -24.0F, true);
-		return new Fixture(center, body.getUUID(), encounterId, List.copyOf(gateways), new AtomicLong());
+		return new Fixture(center, body.getUUID(), encounterId, List.copyOf(gateways), anchors,
+				new AtomicLong());
 	}
 
 	private static BlockPos surfaceAir(ServerLevel level, int x, int z) {
@@ -644,7 +678,7 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 				WorldInterfaceProtocol.VERSION, fixture.encounterId(), sequence, stage.wireId(), form.wireId(),
 				fixture.bodyId(), fixture.center(), 600.0F, 600.0F * healthRatio, anchorAliveMask,
 				elapsedTicks, timerPaused, Math.max(0L, end.getGameTime()), gatewayState.wireId(),
-				fixture.gateways(), outcome.wireId(), failureProgress));
+				fixture.gateways(), fixture.anchors(), outcome.wireId(), failureProgress));
 		return sequence;
 	}
 
@@ -663,10 +697,10 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 	}
 
 	private static long sendPoem(MinecraftServer server, Fixture fixture,
-			WorldInterfaceProtocol.Outcome outcome) {
+			WorldInterfaceProtocol.Outcome outcome, int destroyedAnchors) {
 		long sequence = fixture.nextSequence();
 		ServerPlayNetworking.send(firstPlayer(server), new PoemStartS2C(
-				fixture.encounterId(), sequence, outcome.wireId()));
+				fixture.encounterId(), sequence, outcome.wireId(), "", destroyedAnchors));
 		return sequence;
 	}
 
@@ -692,22 +726,29 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 	}
 
 	private static void waitForPoem(ClientGameTestContext context, Fixture fixture, long sequence,
-			WorldInterfaceProtocol.Outcome outcome) {
+			WorldInterfaceProtocol.Outcome outcome, int destroyedAnchors) {
 		context.waitFor(client -> {
 			WorldInterfaceClientState.Projection projection = WorldInterfaceClientState.snapshot();
 			return fixture.encounterId().equals(projection.encounterId())
 					&& projection.lastSequence() >= sequence && projection.poem() != null
-					&& projection.poem().sequence() == sequence && projection.poem().outcome() == outcome;
+					&& projection.poem().sequence() == sequence && projection.poem().outcome() == outcome
+					&& projection.poem().destroyedAnchors() == destroyedAnchors;
 		}, 160);
 	}
 
 	private static void assertWireContract() {
-		for (int index = 0; index < COMBAT_ACTIONS.size(); index++) {
-			WorldInterfaceProtocol.BossAction action = COMBAT_ACTIONS.get(index);
-			require(action.wireId() == index + 1,
-					"Combat action wire IDs must remain the contiguous range 1..9");
-			require(WorldInterfaceProtocol.BossAction.fromWireId(index + 1) == action,
+		// Not a contiguous range. Wire id 3 belonged to the retired grab-slam and is deliberately
+		// left unassigned so an old save's recorded action can never be silently decoded as a
+		// different one - see the comment on BossAction. This used to assert wireId == index + 1,
+		// which stopped describing the protocol the moment that id was vacated.
+		int previous = 0;
+		for (WorldInterfaceProtocol.BossAction action : COMBAT_ACTIONS) {
+			require(action.wireId() > previous && action.wireId() <= 9,
+					"Combat action wire IDs must stay unique, ascending and inside 1..9");
+			require(action.wireId() != 3, "Wire id 3 is retired and must never be reassigned");
+			require(WorldInterfaceProtocol.BossAction.fromWireId(action.wireId()) == action,
 					"Combat action wire decoding changed for " + action);
+			previous = action.wireId();
 		}
 		require(WorldInterfaceProtocol.BossAction.MORPH_TO_SECOND.wireId() == 11
 				&& WorldInterfaceProtocol.BossAction.MORPH_TO_THIRD.wireId() == 12,
@@ -757,7 +798,7 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 						: WorldInterfaceProtocol.Form.LISTENING_EMBRYO).wireId(), NIL_UUID, BlockPos.ZERO,
 				complete ? 0.0F : 600.0F, complete ? 0.0F : 600.0F,
 				WorldInterfaceProtocol.ANCHOR_MASK, 0L, true, 0L,
-				WorldInterfaceProtocol.GatewayState.DORMANT.wireId(), List.of(),
+				WorldInterfaceProtocol.GatewayState.DORMANT.wireId(), List.of(), anchorPositions(),
 				(complete ? WorldInterfaceProtocol.Outcome.SUCCESS
 						: WorldInterfaceProtocol.Outcome.NONE).wireId(), 0.0F);
 	}
@@ -787,9 +828,14 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 			String poem = source("src/client/java/com/xm/thefourthfrequency/client_ui/WorldInterfaceVanillaPoemClient.java");
 			String winScreenMixin = source("src/client/java/com/xm/thefourthfrequency/mixin/WinScreenPoemMixin.java");
 			String exitPortal = source("src/main/java/com/xm/thefourthfrequency/content/WorldInterfaceExitPortalBlock.java");
+			// The shutdown is queued rather than called inline - stop() tears down the window and the
+			// render system, which cannot happen partway through the tick that asked for it - so this
+			// looks for the queued form. The literal "client.stop()" it used to look for stopped
+			// existing when that queueing went in.
 			require(ending.contains("FailureMenuLockState.lock")
 					&& ending.contains("WorldInterfaceResourcePackLease.restoreAsync")
-					&& ending.contains("disconnectWithSavingScreen") && ending.contains("client.stop()"),
+					&& ending.contains("disconnectWithSavingScreen")
+					&& ending.contains("client.execute(client::stop)"),
 					"The failure lock, resource restoration, or normal shutdown wiring disappeared");
 			require(!ending.contains("System.exit"), "The ending client introduced a hard process exit");
 			require(lock.contains("StandardCopyOption.ATOMIC_MOVE")
@@ -868,7 +914,7 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 		}
 		List<WorldInterfaceState.Anchor> anchors = arena.anchors().stream()
 				.map(anchor -> new WorldInterfaceState.Anchor(anchor.index(), anchor.position(),
-						Optional.of(anchor.crystalUuid()), false)).toList();
+						Optional.of(anchor.anchorEntityUuid()), false)).toList();
 		return new WorldInterfaceState.ArenaLayout(1, Level.END.identifier().toString(), arena.center(),
 				arena.altar(), arena.safeSpawn(), gates, anchors);
 	}
@@ -877,10 +923,16 @@ public final class WorldInterfaceClientGameTest implements FabricClientGameTest 
 		if (!condition) throw new AssertionError(message);
 	}
 
+	private static List<BlockPos> anchorPositions() {
+		return java.util.stream.IntStream.range(0, WorldInterfaceProtocol.MAX_ANCHORS)
+				.mapToObj(index -> new BlockPos(index * 12, 80, index * 7)).toList();
+	}
+
 	private record Fixture(BlockPos center, UUID bodyId, UUID encounterId, List<BlockPos> gateways,
-			AtomicLong sequences) {
+			List<BlockPos> anchors, AtomicLong sequences) {
 		private Fixture {
 			gateways = List.copyOf(gateways);
+			anchors = List.copyOf(anchors);
 		}
 
 		long nextSequence() {

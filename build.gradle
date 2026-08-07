@@ -182,13 +182,47 @@ tasks.named("check") {
 	dependsOn unitTest
 }
 
+// A successful full build is also the local playtest hand-off. Keep this on `build` rather than
+// `remapJar`: compile/test failures must never replace the last known-good mod in the instance.
+//
+// The destination is this workspace's own launcher, so it is only a default. Override it with
+// -PtffDeployDir=<path>, or disable the step entirely with an empty -PtffDeployDir=. A missing
+// drive or parent directory skips the copy with a notice instead of failing the build, so `build`
+// still works on a fresh clone.
+def deployDirProperty = providers.gradleProperty("tffDeployDir")
+		.orElse("E:/PCL2/.minecraft/versions/1.21.11-Fabric 0.19.3/mods")
+def remappedModJar = tasks.named("remapJar").flatMap { it.archiveFile }
+tasks.named("build") {
+	doLast {
+		String configured = deployDirProperty.get().trim()
+		if (configured.isEmpty()) {
+			logger.lifecycle("Local deployment disabled (-PtffDeployDir is empty).")
+			return
+		}
+		File source = remappedModJar.get().asFile
+		if (!source.isFile()) throw new GradleException("Remapped mod JAR was not produced: ${source}")
+		File modsDirectory = file(configured)
+		File root = modsDirectory.toPath().getRoot()?.toFile()
+		if (root != null && !root.exists()) {
+			logger.lifecycle("Skipping local deployment: ${root} is not available. " +
+					"Set -PtffDeployDir=<path> to deploy elsewhere.")
+			return
+		}
+		java.nio.file.Files.createDirectories(modsDirectory.toPath())
+		File target = new File(modsDirectory, source.name)
+		java.nio.file.Files.copy(source.toPath(), target.toPath(),
+				java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+		logger.lifecycle("Deployed remapped mod JAR to ${target}")
+	}
+}
+
 def clientTestSuite = providers.gradleProperty("tffClientTestSuite").orElse("all")
 def clientAnomaly = providers.gradleProperty("tffAnomaly").orElse("")
 
 tasks.named("runClientGameTest") {
 	doFirst {
 		def suite = clientTestSuite.get().trim().toLowerCase(Locale.ROOT)
-		def allowed = ["all", "default", "mainline", "tools-ui", "notice-entry", "alpha-relaunch", "anomalies", "anomaly-meta-smoke", "rework-forms", "watcher-model", "world-interface"]
+		def allowed = ["all", "default", "mainline", "tools-ui", "notice-entry", "alpha-relaunch", "anomalies", "anomaly-meta-smoke", "rework-forms", "watcher-model", "world-interface", "terminal-3d", "screen-filters"]
 		if (!allowed.contains(suite)) throw new GradleException("Unknown -PtffClientTestSuite=${suite}")
 		def anomaly = clientAnomaly.get().trim()
 		if (!anomaly.isEmpty() && suite != "anomalies")
@@ -210,7 +244,16 @@ tasks.named("runClientGameTest") {
 			"-Dthefourthfrequency.clientTestSuite=${clientTestSuite.get()}",
 			"-Dthefourthfrequency.anomaly=${clientAnomaly.get()}",
 			"-Dthefourthfrequency.projectDir=${project.projectDir.absolutePath}"
-	if (["rework-forms", "watcher-model", "world-interface"].contains(clientTestSuite.get().trim().toLowerCase(Locale.ROOT))) {
+	// "all" and "default" both resolve to Suite.ALL, which runs the rework-forms, watcher-model and
+	// world-interface tests as well - and those are exactly the ones that touch packets at a level
+	// the synchronizer refuses. Listing only their own suite names meant the full run could never
+	// finish: it died on the synchronizer the moment it reached them, no matter what it had proved
+	// up to that point.
+	// terminal-3d joins them because it stages the shell by writing the player's inventory from the
+	// client - six forms and an off-hand torch - which is exactly the kind of write the
+	// synchronizer refuses.
+	if (["all", "default", "rework-forms", "watcher-model", "world-interface", "terminal-3d"]
+			.contains(clientTestSuite.get().trim().toLowerCase(Locale.ROOT))) {
 		jvmArgs "-Dfabric.client.gametest.disableNetworkSynchronizer=true"
 	}
 }

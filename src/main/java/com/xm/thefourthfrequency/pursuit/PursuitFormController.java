@@ -58,14 +58,20 @@ public final class PursuitFormController {
 		});
 	}
 
-	/** Best-effort removal of a session's mirror-dimension mob; the lease may already be gone. */
-	private static void discardMirrorEntity(MinecraftServer server, Runtime runtime) {
-		PursuitSlotManager.lease(runtime.playerId).ifPresent(lease -> {
-			ServerLevel level = server.getLevel(lease.dimension());
-			if (level == null) return;
-			Entity entity = level.getEntity(runtime.entityId);
-			if (entity != null) entity.discard();
-		});
+	/**
+	 * Best-effort removal of a session's mirror-dimension mob; the lease may already be gone.
+	 *
+	 * @return whether the mirror level was resolved at all, so a caller holding another level can
+	 *         fall back to it rather than assume the mob is handled
+	 */
+	private static boolean discardMirrorEntity(MinecraftServer server, Runtime runtime) {
+		ServerLevel level = PursuitSlotManager.lease(runtime.playerId)
+				.map(lease -> server.getLevel(lease.dimension()))
+				.orElse(null);
+		if (level == null) return false;
+		Entity entity = level.getEntity(runtime.entityId);
+		if (entity != null) entity.discard();
+		return true;
 	}
 
 	public static boolean begin(ServerPlayer player, String sessionId, int form, boolean debugSession) {
@@ -88,6 +94,16 @@ public final class PursuitFormController {
 		if (runtime == null) return;
 		PursuitVisionService.clear(player);
 		DEFEATED.remove(new DefeatKey(runtime.playerId, runtime.sessionId));
+		// The mob lives in the mirror, which is not necessarily where the player is standing by the
+		// time this runs: a mirror death that outran the capture threshold respawns them in the
+		// source world first, and an operator teleport lands them anywhere. Resolving the level
+		// through the slot lease finds the mob in either case, where player.level() only ever found
+		// it while the player was still inside the mirror and otherwise left a
+		// setPersistenceRequired() mob behind to be written into the mirror's region file. The lease
+		// outlives this call on every path (release() runs after it), so the fallback below is only
+		// for a caller that released first.
+		MinecraftServer server = player.level().getServer();
+		if (server != null && discardMirrorEntity(server, runtime)) return;
 		if (player.level() instanceof ServerLevel level) {
 			Entity entity = level.getEntity(runtime.entityId);
 			if (entity != null) entity.discard();
@@ -124,7 +140,16 @@ public final class PursuitFormController {
 				continue;
 			}
 			if (!(player.level() instanceof ServerLevel level) || !PursuitDimensions.isMirror(level)) {
-				interrupt(player);
+				// The player left the mirror without going through returnToSource - a death in the
+				// mirror that outran the capture threshold below and respawned them in the source
+				// world, or an operator teleport. They are already where they belong, so the session
+				// is booked closed where they stand instead of being returned; abandonSession is the
+				// no-teleport close for exactly this. Dropping the runtime is not enough on its own:
+				// the slot lease is one of only MAX_ACTIVE_PURSUITS=2 server-wide and would be held
+				// until they next disconnect, and a record left with PURSUIT_ACTIVE set makes
+				// PursuitDirector.update skip that player for good, so they would never get another
+				// chase either.
+				PursuitSessionService.abandonSession(player, "mirror_exit");
 				continue;
 			}
 			// Tops up ahead of the resolution branch as well: the capture freeze holds the client on

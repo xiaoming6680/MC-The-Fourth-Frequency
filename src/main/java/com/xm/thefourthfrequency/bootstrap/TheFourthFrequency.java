@@ -11,6 +11,7 @@ import com.xm.thefourthfrequency.correction.EmptySegmentService;
 import com.xm.thefourthfrequency.ending.EndBossEncounterService;
 import com.xm.thefourthfrequency.ending.EndBossArenaService;
 import com.xm.thefourthfrequency.ending.WorldInterfaceAttackService;
+import com.xm.thefourthfrequency.ending.WorldInterfaceBlastService;
 import com.xm.thefourthfrequency.ending.WorldInterfaceRitualService;
 import com.xm.thefourthfrequency.world.PlayerPatternService;
 import com.xm.thefourthfrequency.world.ZeroStationService;
@@ -100,6 +101,10 @@ public final class TheFourthFrequency implements ModInitializer {
 		PortalContinuityService.initialize();
 		PlayerPatternService.initialize();
 		EndBossArenaService.initialize();
+		// Before the attack service and the encounter service: both gate audio and camera events on
+		// its per-source cooldowns, and a cooldown map whose lifecycle hook was never registered
+		// outlives the server it belongs to.
+		WorldInterfaceBlastService.initialize();
 		WorldInterfaceAttackService.initialize();
 		WorldInterfaceRitualService.initialize();
 		EndBossEncounterService.initialize();

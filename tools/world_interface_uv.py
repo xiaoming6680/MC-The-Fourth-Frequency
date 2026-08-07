@@ -29,7 +29,8 @@ SCALE = 4
 PNG_WIDTH = UV_WIDTH * SCALE
 PNG_HEIGHT = UV_HEIGHT * SCALE
 
-CORE_Y = -13.0
+# The kernel recess the model keeps clear of plating; mirrors insideKernelWell.
+KERNEL_Y = -13.0
 
 
 def hash_scatter(seed: int) -> float:
@@ -43,8 +44,8 @@ def centred(seed: int) -> float:
     return hash_scatter(seed) - 0.5
 
 
-def inside_core_socket(x: float, y: float, z: float, half_width: float, half_height: float) -> bool:
-    return z < 0.0 and abs(x) < half_width and abs(y - CORE_Y) < half_height
+def inside_kernel_well(x: float, y: float, z: float) -> bool:
+    return z < 0.0 and abs(x) < KERNEL_HALF * 1.9 and abs(y - KERNEL_Y) < KERNEL_HALF * 1.9
 
 
 # --------------------------------------------------------------------------------------------
@@ -63,75 +64,75 @@ class Cuboid:
     key: float
 
 
-# addMass(count, top, step, base, swell, depth, drift, seed)
-MASS_FORMS = [
+# ============================================================================================
+# Cuboid inventory, re-derived from WorldInterfaceModel's generators.
+#
+# The model no longer bakes three independent form trees. `shell_base` is drawn for the whole
+# fight and each morph reveals one more accretion layer over it, so what is enumerated here is
+# three shell layers rather than three whole bodies - and the heads and limbs appear once each,
+# because they are one shared bone chain scaled per form rather than three baked copies.
+# ============================================================================================
+
+# addMass(count, top, step, base, swell, depth, drift, seed), one entry per shell layer.
+MASS_LAYERS = [
     (14, -21.0, 2.3, 2.6, 5.0, 0.82, 1.6, 11),
-    (20, -24.0, 1.8, 3.4, 7.4, 0.80, 2.5, 41),
-    (26, -26.0, 1.5, 4.2, 9.4, 0.78, 3.4, 97),
+    (8, -24.0, 2.6, 6.2, 4.4, 0.80, 2.5, 41),
+    (8, -27.0, 3.0, 9.4, 3.6, 0.78, 3.4, 97),
 ]
-# addPlating(count, top, span, radius, minSize, maxSize, socketWidth, socketHeight, seed)
-PLATING_FORMS = [
-    (42, -22.0, 28.0, 6.2, 0.55, 1.5, 7.0, 6.5, 61),
-    (96, -26.0, 34.0, 9.0, 0.75, 2.4, 9.5, 8.0, 101),
-    (168, -29.0, 40.0, 11.5, 0.95, 3.2, 12.5, 10.5, 181),
-]
-# addDebris(count, top, span, radius, minSize, maxSize, socketWidth, socketHeight, seed)
-DEBRIS_FORMS = [
-    (16, -19.0, 23.0, 7.8, 0.85, 1.8, 7.0, 6.5, 31),
-    (34, -23.0, 29.0, 11.4, 1.2, 3.0, 9.5, 8.0, 67),
-    (56, -27.0, 35.0, 14.0, 1.5, 4.2, 12.5, 10.5, 127),
+# addPlating(count, top, span, radius, minSize, maxSize, seed). Counts are what accretionBudget
+# lets through rather than what the call site asks for: the budget is enforced now, so mirroring
+# the requested count would enumerate islands for plates the model is never allowed to build.
+# Fixed parts per form: 34 / 100 / 148. Budget: 160 / 224 / 320.
+PLATING_LAYERS = [
+    (min(52, 160 - 34), -22.0, 28.0, 6.2, 0.55, 1.5, 61),
+    (min(24, 224 - 100), -26.0, 34.0, 9.6, 0.75, 2.4, 101),
+    (min(30, 320 - 148), -29.0, 40.0, 12.2, 0.95, 3.2, 181),
 ]
 # addRibs(count, top, step, radius, length, seed)
-RIB_FORMS = [
+RIB_LAYERS = [
     (10, -17.0, 2.9, 7.4, 7.0, 23),
-    (22, -21.0, 2.7, 11.0, 10.0, 53),
-    (32, -25.0, 2.3, 13.6, 13.0, 109),
+    (6, -21.0, 3.4, 11.0, 10.0, 53),
 ]
-# addRoots(count, radius, length, seed)
-ROOT_FORMS = [
-    (9, 4.0, 6.5, 47),
-    (16, 5.2, 9.5, 83),
-    (28, 6.4, 12.5, 149),
+# addRoots(count, radius, length, seed) - only the base shell trails roots.
+ROOT_LAYERS = [
+    (10, 4.0, 6.5, 47),
 ]
-# addSkulls(scale, neckSegments, horns) per form; the two flanking skulls run at 0.84 of centre.
-SKULL_FORMS = [
-    (0.62, 3, False),
-    (0.88, 2, True),
-    (1.35, 1, True),
+# addStormKnot(x, y, z, radius, seed) - the two subordinate masses at terminal form.
+STORM_KNOTS = [
+    (15.5, -26.0, 4.0, 5.2, 211),
+    (-15.5, -23.0, 6.5, 4.6, 233),
 ]
-# addRingSegments(count, radius, width, length) per ring band.
-RING_BANDS = [
-    ("ring_fragment", 8, 1.4, 1.8),
-    ("ring_segment", 16, 1.9, 2.4),
-    ("ring_outer", 24, 2.6, 3.2),
-    ("ring_inner", 16, 1.5, 1.9),
-]
-# addTentacle(thick, length) per form; length varies by row, thickness does not.
-TENDRIL_FORMS = [(0.85, 9.0, 4), (1.25, 11.5, 5), (1.75, 14.0, 6)]
-# addCoreSocket(frontZ, backZ, outerWidth, outerHeight, innerWidth, innerHeight) per form.
-CORE_SOCKET_FORMS = [
-    (-6.7, -11.7, 7.0, 6.5, 5.0, 5.0),
-    (-11.9, -15.2, 9.5, 8.0, 7.0, 5.4),
-    (-12.4, -17.0, 12.5, 10.5, 9.2, 7.4),
-]
-CORE_SOCKET_RINGS = 3
-CORE_SOCKET_BAR = 1.6
+# The head chain, built once at two scales: centre head at 1.0, the two flanks at 0.78.
+HEAD_SCALES = [1.0, 0.78]
+NECK_SEGMENT = 6.4
+TEETH_PER_JAW = 4
+# addTentacle(thick, length): one chain, ten limbs, rows 0..4 with two limbs each.
+TENDRIL_THICK = 1.45
+TENDRIL_BASE_LENGTH = 11.0
+# buildKernel: the recessed lattice that replaced the body's central eye.
+KERNEL_HALF = 4.4
+KERNEL_FRAME_RINGS = 3
+KERNEL_BAR = 0.9
 
 
 def mass_cuboids() -> list[Cuboid]:
     out = []
-    for count, _top, step, base, swell, depth, _drift, seed in MASS_FORMS:
+    for count, _top, step, base, swell, depth, _drift, seed in MASS_LAYERS:
         for index in range(count):
             span = min(1.0, (index + 0.5) / count * 1.22)
             half_width = base + swell * math.sin(span * math.pi) * (0.70 + hash_scatter(seed + index) * 0.55)
             half_depth = half_width * depth * (0.72 + hash_scatter(seed + index * 9) * 0.58)
             out.append(Cuboid("mass", half_width * 2.0, step * 1.24, half_depth * 2.0, half_width))
+    for _x, _y, _z, radius, seed in STORM_KNOTS:
+        for index in range(4):
+            size = radius * (0.42 + hash_scatter(seed + index * 3) * 0.36)
+            out.append(Cuboid("mass", size * 2.0, size * 1.56, size * 1.72, size))
     return out
 
 
 def plating_cuboids() -> list[Cuboid]:
     out = []
-    for count, top, span, radius, min_size, max_size, sw, sh, seed in PLATING_FORMS:
+    for count, top, span, radius, min_size, max_size, seed in PLATING_LAYERS:
         for index in range(count):
             height = hash_scatter(seed + index * 5)
             shell = radius * (0.62 + math.sin(min(1.0, height * 1.22) * math.pi) * 0.68)
@@ -141,31 +142,15 @@ def plating_cuboids() -> list[Cuboid]:
             px = math.cos(angle) * shell * lift
             py = top + span * height
             pz = math.sin(angle) * shell * 0.78 * lift
-            if inside_core_socket(px, py, pz, sw, sh):
+            if inside_kernel_well(px, py, pz):
                 continue
             out.append(Cuboid("plate", size * 2.0, size * 0.84, size * 1.44, size))
     return out
 
 
-def debris_cuboids() -> list[Cuboid]:
-    out = []
-    for count, top, span, radius, min_size, max_size, sw, sh, seed in DEBRIS_FORMS:
-        for index in range(count):
-            angle = hash_scatter(seed + index * 3) * math.tau
-            distance = radius * (0.62 + hash_scatter(seed + index * 3 + 1) * 0.58)
-            size = min_size + hash_scatter(seed + index * 3 + 2) * (max_size - min_size)
-            px = math.cos(angle) * distance
-            py = top + span * hash_scatter(seed + index * 7)
-            pz = math.sin(angle) * distance * 0.74
-            if inside_core_socket(px, py, pz, sw, sh):
-                continue
-            out.append(Cuboid("debris", size * 2.0, size * 2.0, size * 2.0, size))
-    return out
-
-
 def rib_cuboids() -> list[Cuboid]:
     out = []
-    for count, _top, _step, _radius, length, seed in RIB_FORMS:
+    for count, _top, _step, _radius, length, seed in RIB_LAYERS:
         rows = max(1, count // 2)
         for index in range(count):
             row = index // 2
@@ -177,97 +162,67 @@ def rib_cuboids() -> list[Cuboid]:
 
 def root_cuboids() -> list[Cuboid]:
     out = []
-    for count, _radius, length, seed in ROOT_FORMS:
+    for count, _radius, length, seed in ROOT_LAYERS:
         for index in range(count):
             grade = 0.66 + hash_scatter(seed + index * 3) * 0.72
             out.append(Cuboid("root", 1.7 * grade, length * grade, 1.7 * grade, grade))
     return out
 
 
-def skull_cuboids() -> list[Cuboid]:
-    """Six part types at six distinct scales: three forms times centre/flank."""
+def head_cuboids() -> list[Cuboid]:
+    """The shared head chain at its two scales. Seven part types, no per-form duplication."""
     out = []
-    for scale, neck_segments, horns in SKULL_FORMS:
-        for factor in (1.0, 0.84):
-            s = scale * factor
-            out.append(Cuboid("cranium", 8.0 * s, 7.2 * s, 8.0 * s, s))
-            out.append(Cuboid("brow", 8.6 * s, 2.4 * s, 1.2 * s, s))
-            out.append(Cuboid("maw", 6.8 * s, 2.6 * s, 5.0 * s, s))
-            out.append(Cuboid("socket", 2.3 * s, 2.3 * s, 1.1 * s, s))
-            if horns:
-                out.append(Cuboid("horn", 1.4 * s, 5.8 * s, 1.4 * s, s))
-            for index in range(neck_segments):
-                thick = s * (2.4 - index * 0.28)
-                out.append(Cuboid("vertebra", thick * 2.0, thick * 2.2, thick * 2.0, thick))
-    return out
-
-
-def ring_cuboids() -> list[Cuboid]:
-    """Each band gets its own island; the grade spread inside a band is only 2.4x."""
-    out = []
-    for name, count, width, length in RING_BANDS:
-        for index in range(count):
-            grade = 0.62 + hash_scatter(index * 13 + count) * 0.86
-            out.append(Cuboid(name, width * grade, length * grade, width * grade, grade))
+    for scale in HEAD_SCALES:
+        thick = 2.5 * scale
+        out.append(Cuboid("vertebra", thick * 2.0, NECK_SEGMENT * scale, thick * 2.0, thick))
+        mid_thick = thick * 0.84
+        out.append(Cuboid("vertebra", mid_thick * 2.0, NECK_SEGMENT * scale, mid_thick * 2.0, mid_thick))
+        out.append(Cuboid("cranium", 9.2 * scale, 8.0 * scale, 9.2 * scale, scale))
+        out.append(Cuboid("brow", 9.8 * scale, 2.6 * scale, 1.3 * scale, scale))
+        out.append(Cuboid("eye", 5.2 * scale, 5.2 * scale, 1.8 * scale, scale))
+        out.append(Cuboid("jaw", 7.8 * scale, 2.8 * scale, 5.6 * scale, scale))
+        out.append(Cuboid("tooth", 1.0 * scale, 2.2 * scale, 1.2 * scale, scale))
+        if scale == HEAD_SCALES[0]:  # horns only on the centre head
+            out.append(Cuboid("horn", 1.4 * scale, 6.2 * scale, 1.4 * scale, scale))
     return out
 
 
 def tendril_cuboids() -> list[Cuboid]:
-    """Three links per limb plus the glow nodes, which must land on their own emissive island."""
+    """One limb chain, five row lengths, plus the glow nodes on their own emissive island."""
     out = []
-    for form, (thick, base_length, _count) in enumerate(TENDRIL_FORMS, start=1):
-        for row in range(5):
-            length = base_length + row * (1.0 if form == 1 else 1.1 if form == 2 else 1.4)
-            out.append(Cuboid(f"tendril_{form}", thick * 2.0, length, thick * 2.0, thick))
-            mid_thick = thick * 0.72
-            mid_length = length * 0.88
-            out.append(Cuboid(f"tendril_{form}", mid_thick * 2.0, mid_length, mid_thick * 2.0, mid_thick))
-            tip_thick = thick * 0.44
-            out.append(Cuboid(f"tendril_{form}", tip_thick * 2.0, length * 0.76, tip_thick * 2.0, tip_thick))
-        node = thick * 0.62
-        for factor in (1.0, 0.86, 0.72):
-            out.append(Cuboid("tendril_glow", node * 2.0 * factor, node * 2.0 * factor,
-                              node * 2.0 * factor, node * factor))
+    thick = TENDRIL_THICK
+    for row in range(5):
+        length = TENDRIL_BASE_LENGTH + row * 1.2
+        out.append(Cuboid("tendril", thick * 2.0, length, thick * 2.0, thick))
+        mid_thick = thick * 0.72
+        out.append(Cuboid("tendril", mid_thick * 2.0, length * 0.88, mid_thick * 2.0, mid_thick))
+        tip_thick = thick * 0.44
+        out.append(Cuboid("tendril", tip_thick * 2.0, length * 0.76, tip_thick * 2.0, tip_thick))
+    node = thick * 0.44 * 1.25
+    for factor in (1.0, 0.8):
+        out.append(Cuboid("tendril_glow", node * 2.0 * factor, node * 2.0 * factor,
+                          node * 2.0 * factor, node * factor))
     return out
 
 
-def core_socket_cuboids() -> list[Cuboid]:
-    """The funnel seating the core. Rails and posts are split: one island sized to both would be
-    mostly empty for whichever of the two it did not match."""
+def kernel_cuboids() -> list[Cuboid]:
+    """The recessed frame and the lattice inside it."""
     out = []
-    for front_z, back_z, outer_w, outer_h, inner_w, inner_h in CORE_SOCKET_FORMS:
-        depth = abs(back_z - front_z) / (CORE_SOCKET_RINGS - 1) + 0.8
-        for index in range(CORE_SOCKET_RINGS):
-            progress = index / (CORE_SOCKET_RINGS - 1)
-            half_width = outer_w + (inner_w - outer_w) * progress
-            half_height = outer_h + (inner_h - outer_h) * progress
-            key = max(half_width, half_height)
-            for _ in range(2):  # top and bottom
-                out.append(Cuboid("core_collar_rail",
-                                  (half_width + CORE_SOCKET_BAR) * 2.0, CORE_SOCKET_BAR, depth, key))
-            for _ in range(2):  # left and right
-                out.append(Cuboid("core_collar_post",
-                                  CORE_SOCKET_BAR, half_height * 2.0, depth, key))
+    for index in range(KERNEL_FRAME_RINGS):
+        half = KERNEL_HALF * (1.0 - index * 0.22)
+        for _ in range(2):  # top and bottom
+            out.append(Cuboid("kernel_frame", (half + KERNEL_BAR) * 2.0, KERNEL_BAR, 1.0, KERNEL_HALF))
+        for _ in range(2):  # left and right
+            out.append(Cuboid("kernel_frame", KERNEL_BAR, half * 2.0, 1.0, KERNEL_HALF))
+    out.append(Cuboid("kernel_glow", KERNEL_HALF * 1.24, KERNEL_HALF * 1.24, 0.6, KERNEL_HALF))
+    for _ in range(4):
+        out.append(Cuboid("kernel_glow", 0.7, KERNEL_HALF, 0.4, KERNEL_HALF))
     return out
 
 
 def fixed_cuboids() -> list[Cuboid]:
-    """Parts the model already gives a single texOffs and a single size: one island each."""
+    """Parts the model gives a single texOffs and a single size: one island each."""
     return [
-        Cuboid("eye_1_ball", 8.4, 8.4, 2.0, 1.0),
-        Cuboid("eye_1_pupil", 3.6, 3.6, 1.0, 1.0),
-        Cuboid("eye_1_shutter", 1.8, 5.2, 1.4, 1.0),
-        Cuboid("eye_2_ball", 12.4, 9.2, 2.2, 1.0),
-        Cuboid("eye_2_pupil", 4.8, 4.8, 1.2, 1.0),
-        Cuboid("eye_2_aperture", 2.0, 6.4, 1.6, 1.0),
-        Cuboid("eye_3_ball", 16.8, 13.2, 2.8, 1.0),
-        Cuboid("eye_3_pupil", 6.8, 6.8, 1.5, 1.0),
-        Cuboid("eye_3_slit", 1.8, 6.4, 0.8, 1.0),
-        Cuboid("eye_3_cage", 2.2, 9.2, 1.8, 1.0),
-        Cuboid("jaw_1", 8.8, 2.4, 5.6, 1.0),
-        Cuboid("jaw_2", 6.0, 3.4, 7.6, 1.0),
-        Cuboid("jaw_3", 16.8, 4.4, 9.8, 1.0),
-        Cuboid("tooth", 0.9, 3.7, 1.1, 1.0),
         Cuboid("weapon_haft", 1.5, 16.0, 1.5, 1.0),
         Cuboid("weapon_guard", 6.0, 2.0, 1.0, 1.0),
         Cuboid("weapon_blade", 3.0, 12.0, 1.0, 1.0),
@@ -284,21 +239,16 @@ def fixed_cuboids() -> list[Cuboid]:
 BUCKETS: dict[str, list[float]] = {
     "mass": [4.0, 6.5, 9.5],
     "plate": [1.2, 2.0],
-    "debris": [1.9, 3.0],
-    "rib": [9.0, 13.0],
+    "rib": [9.0],
     "root": [1.0],
-    "cranium": [0.75, 1.0],
-    "brow": [0.75, 1.0],
-    "maw": [0.75, 1.0],
-    "socket": [0.75, 1.0],
-    "horn": [1.0],
-    "vertebra": [1.2, 1.9],
-    "tendril_1": [0.5],
-    "tendril_2": [0.7],
-    "tendril_3": [1.0],
-    "tendril_glow": [0.5, 0.8],
-    "core_collar_rail": [6.6, 9.0],
-    "core_collar_post": [6.6, 9.0],
+    "cranium": [0.9],
+    "brow": [0.9],
+    "eye": [0.9],
+    "jaw": [0.9],
+    "tooth": [0.9],
+    "vertebra": [1.8, 2.2],
+    "tendril": [0.8, 1.2],
+    "tendril_glow": [0.7],
 }
 
 
@@ -318,39 +268,21 @@ def bucket_of(part: str, key: float) -> int:
 MATERIAL = {
     "mass": ("swallowed", True),
     "plate": ("plating", False),
-    "debris": ("swallowed", False),
     "rib": ("bone", True),
     "root": ("root", True),
     "cranium": ("bone", True),
     "brow": ("bone", True),
-    "maw": ("bone", True),
-    "socket": ("socket", True),
     "horn": ("bone", True),
     "vertebra": ("bone", True),
-    "ring_fragment": ("plating", False),
-    "ring_segment": ("plating", False),
-    "ring_outer": ("plating", False),
-    "ring_inner": ("core", False),
-    "tendril_1": ("flesh", True),
-    "tendril_2": ("flesh", True),
-    "tendril_3": ("flesh", True),
-    "tendril_glow": ("core", False),
-    "core_collar_rail": ("plating", True),
-    "core_collar_post": ("plating", True),
-    "eye_1_ball": ("sclera", True),
-    "eye_2_ball": ("sclera", True),
-    "eye_3_ball": ("sclera", True),
-    "eye_1_pupil": ("core", True),
-    "eye_2_pupil": ("core", True),
-    "eye_3_pupil": ("core", True),
-    "eye_1_shutter": ("plating", True),
-    "eye_2_aperture": ("plating", True),
-    "eye_3_cage": ("plating", True),
-    "eye_3_slit": ("core", True),
-    "jaw_1": ("bone", True),
-    "jaw_2": ("bone", True),
-    "jaw_3": ("bone", True),
+    "jaw": ("bone", True),
     "tooth": ("bone", True),
+    # The six eyes are the whole face of this thing, so they get their own material rather than
+    # sharing the generic core one with the kernel behind them.
+    "eye": ("eye", True),
+    "tendril": ("flesh", True),
+    "tendril_glow": ("core", False),
+    "kernel_frame": ("plating", True),
+    "kernel_glow": ("core", True),
     "weapon_haft": ("plating", True),
     "weapon_guard": ("plating", True),
     "weapon_blade": ("plating", True),
@@ -360,8 +292,9 @@ MATERIAL = {
 # Only these islands may carry emissive pixels. Everything else is hard-failed by validate(),
 # which is what stops the scattered glow specks the old generator sprayed across the whole sheet.
 EMISSIVE_ISLANDS = {
-    "eye_1_pupil", "eye_2_pupil", "eye_3_pupil", "eye_3_slit",
-    "socket", "tendril_glow", "ring_inner",
+    # The eyes, the limb nodes, the buried kernel, and the shell itself - the fracture network
+    # painted onto mass and plate is what makes the body read as splitting open under pressure.
+    "eye", "tendril_glow", "kernel_glow", "mass", "plate",
 }
 
 
@@ -391,9 +324,8 @@ class Island:
 
 def build_islands() -> list[Island]:
     """One island per (part, bucket), sized to the largest member so nothing samples past its own."""
-    cuboids = (mass_cuboids() + plating_cuboids() + debris_cuboids() + rib_cuboids()
-               + root_cuboids() + skull_cuboids() + ring_cuboids() + tendril_cuboids()
-               + core_socket_cuboids() + fixed_cuboids())
+    cuboids = (mass_cuboids() + plating_cuboids() + rib_cuboids() + root_cuboids()
+               + head_cuboids() + tendril_cuboids() + kernel_cuboids() + fixed_cuboids())
     grouped: dict[tuple[str, int], list[Cuboid]] = {}
     for cuboid in cuboids:
         grouped.setdefault((cuboid.part, bucket_of(cuboid.part, cuboid.key)), []).append(cuboid)

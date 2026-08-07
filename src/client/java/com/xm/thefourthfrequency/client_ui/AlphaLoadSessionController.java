@@ -33,11 +33,21 @@ public final class AlphaLoadSessionController {
 	private static final String VANILLA_VERSION_PREFIX = "Minecraft ";
 	private static final String MENU_VERSION_TEXT = "Minecraft 1.0.0";
 	/**
-	 * The window bar names the era, the in-game version stamp names the build. They are deliberately
-	 * different strings: the title screen draws what a 1.0.0 client would have drawn, while the
-	 * chrome around it is what the launcher of that era would have called it.
+	 * The window bar, once the downgrade has happened. Identical to the in-game version stamp.
+	 *
+	 * <p>These used to be deliberately different - "Minecraft Alpha 1.0.0" on the chrome and
+	 * "Minecraft 1.0.0" on the screen - on the reasoning that a launcher of that era named the era
+	 * while the client named the build. Two strings for one identity is a difference the player has
+	 * to account for, and the thing they are being told is that this client <em>is</em> 1.0.0. It
+	 * now says exactly that, in both places and in every session.
+	 *
+	 * <p>It also carries no world-context suffix. See {@link #titleForStage}: every stage before the
+	 * last is still a Minecraft that knows which world it is showing, and the last one is the
+	 * identity this client keeps from then on - on the menu, in singleplayer and in multiplayer
+	 * alike. A title that read "Minecraft 1.0.0 - Singleplayer World" in a world and "Minecraft
+	 * 1.0.0" on the menu would be two states rather than one permanent one.
 	 */
-	private static final String MENU_WINDOW_TITLE = "Minecraft Alpha 1.0.0";
+	private static final String MENU_WINDOW_TITLE = MENU_VERSION_TEXT;
 	private static boolean initialized;
 	private static boolean active;
 	private static boolean corruptionEverPlayed;
@@ -206,6 +216,24 @@ public final class AlphaLoadSessionController {
 		lastViewportFlooded = currentViewportFlooded || viewportFlooded;
 		corruptionInProgress = false;
 		applyVersionTitle(Minecraft.getInstance(), AlphaLoadTimeline.finalVersionStage());
+	}
+
+	/**
+	 * The title this client should be wearing, whatever was asked for.
+	 *
+	 * <p>Read from {@code WindowTitleMixin} on every {@code Window#setTitle}, so it covers the routes
+	 * that do not go through {@code updateTitle} and, more to the point, the ones that go through it
+	 * at a moment {@link #retainFinalWindowTitle} declines to act on.
+	 *
+	 * <p>Requests pass through untouched while the downgrade sequence is running: those are its own
+	 * version stamps walking 1.21.11 back to 1.0.0, and overriding them would erase the performance.
+	 *
+	 * @param requested what the caller wanted
+	 * @return the title to actually use
+	 */
+	public static String overrideWindowTitle(String requested) {
+		if (presentationRetired || !corruptionEverPlayed || corruptionInProgress) return requested;
+		return MENU_WINDOW_TITLE;
 	}
 
 	public static void retainFinalWindowTitle(Minecraft client) {

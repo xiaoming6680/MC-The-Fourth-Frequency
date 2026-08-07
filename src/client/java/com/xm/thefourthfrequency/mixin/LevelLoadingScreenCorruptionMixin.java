@@ -36,8 +36,8 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 	 */
 	@Unique private static final int INTRUSION_COLOR = 0xFFFF5C57;
 	/** Off the centre line, below and right of it: near enough to catch, far enough to miss. */
-	@Unique private static final float INTRUSION_CENTER_X = 0.66F;
-	@Unique private static final float INTRUSION_CENTER_Y = 0.66F;
+	@Unique private static final float INTRUSION_ROW_FRACTION = 0.62F;
+	@Unique private static final float INTRUSION_SLOT_FRACTION = 0.55F;
 	@Shadow private LevelLoadTracker loadTracker;
 	@Shadow private float smoothedProgress;
 	@Unique private int thefourthfrequency$screenTicks;
@@ -260,8 +260,7 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 				: "screen.thefourthfrequency.alpha_loading.failed").getString();
 		String failedLine = thefourthfrequency$failedLine();
 		if (AlphaLoadTimeline.fullScreenFailureWall(thefourthfrequency$screenTicks)) {
-			thefourthfrequency$renderFullScreenFailureWall(graphics, font, failedLine,
-					AlphaLoadTimeline.floodWipeProgress(thefourthfrequency$screenTicks));
+			thefourthfrequency$renderFullScreenFailureWall(graphics, font, failedLine);
 			AlphaCorruptionRenderer.drawMediumLayers(graphics, thefourthfrequency$screenTicks);
 			if (AlphaLoadTimeline.frozenObserverVisible(thefourthfrequency$screenTicks)) {
 				// Drawn without the tremor every other line carries: on a frame where nothing is
@@ -312,11 +311,14 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 		}
 
 		int copies = AlphaLoadTimeline.copiedFailureLines(thefourthfrequency$screenTicks);
+		int y = labelY + 8;
 		for (int copy = 0; copy < copies; copy++) {
-			int y = labelY + 8 + copy * 6;
 			if (y >= graphics.guiHeight() - 8) break;
-			// Placement is seeded by the copy index alone, so each line keeps the offset it was
-			// born with instead of dancing sideways every few frames. Only the colour breathes.
+			// Placement is seeded by the copy index alone, so each line keeps the offset, the
+			// spacing and the truncation it was born with instead of rearranging itself every few
+			// frames. Only the colour breathes. A perfectly even stack of identical lines reads
+			// as a list something is printing on purpose; uneven spacing and the occasional line
+			// that gives out partway reads as a system losing the ability to finish a sentence.
 			int placement = thefourthfrequency$chaos(copy * 31);
 			int shimmer = thefourthfrequency$chaos(copy * 31 + motionTick / 4);
 			int jitter = Math.floorMod(placement, 5) - 2;
@@ -325,7 +327,13 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 			int green = 22 + Math.floorMod(shimmer >>> 14, 16);
 			int blue = 24 + Math.floorMod(shimmer >>> 19, 13);
 			int color = alpha << 24 | red << 16 | green << 8 | blue;
-			graphics.drawCenteredString(font, failedLine, centerX + jitter, y, color);
+			String line = failedLine;
+			if (Math.floorMod(placement >>> 7, 6) == 0 && failedLine.length() > 2) {
+				line = failedLine.substring(0,
+						2 + Math.floorMod(placement >>> 11, failedLine.length() - 2));
+			}
+			graphics.drawCenteredString(font, line, centerX + jitter, y, color);
+			y += 5 + Math.floorMod(placement >>> 3, 4);
 		}
 		thefourthfrequency$renderSignalDropouts(graphics, motionTick, failed);
 		AlphaCorruptionRenderer.drawMediumLayers(graphics, thefourthfrequency$screenTicks);
@@ -338,23 +346,19 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 	}
 
 	/**
-	 * @param wipeProgress 0 to 1; the wall opens outward from the middle of the screen rather
-	 *                     than replacing the picture on a single frame. Six ticks is fast enough
-	 *                     to still land as a shock and slow enough that the eye reads it as the
-	 *                     picture being overtaken rather than as a cut to another image.
+	 * The wall, whole, on the frame it starts.
+	 *
+	 * <p>It used to open outward from the middle of the screen over six ticks. That reads as a
+	 * transition - as something the software decided to play - and a transition is exactly what a
+	 * failing signal does not do. Arriving complete on one frame is a cut, and a cut is what makes
+	 * the player unsure whether they saw it start.
 	 */
 	@Unique
 	private static void thefourthfrequency$renderFullScreenFailureWall(GuiGraphics graphics,
-			Font font, String failedLine, float wipeProgress) {
+			Font font, String failedLine) {
 		int width = graphics.guiWidth();
 		int height = graphics.guiHeight();
-		float opening = Math.clamp(wipeProgress, 0.0F, 1.0F);
-		int halfOpening = Math.round(height * 0.5F * opening);
-		int wipeTop = height / 2 - halfOpening;
-		int wipeBottom = height / 2 + halfOpening;
-		if (wipeBottom <= wipeTop) return;
-		graphics.enableScissor(0, wipeTop, width, wipeBottom);
-		graphics.fill(0, wipeTop, width, wipeBottom, 0xD00B0000);
+		graphics.fill(0, 0, width, height, 0xD00B0000);
 
 		float scale = 2.85F;
 		int logicalWidth = (int) Math.ceil(width / scale);
@@ -364,43 +368,46 @@ public abstract class LevelLoadingScreenCorruptionMixin {
 		int repetitions = Math.max(1, logicalWidth / wordWidth + 6);
 		String wallLine = word.repeat(repetitions);
 
+		// One line in the wall does not agree with the wall, and it is woven into the wall rather
+		// than laid on top of it: same glyph size, same baseline, standing in the flow of repeated
+		// text where one repetition of the word should have been. Nothing frames it. Twenty-eight
+		// ticks of the same word is parsed by the eye in ten and then costs attention without
+		// paying any back; a single line that contradicts every other line spends the rest of that
+		// time well - and it has to be *found* to do that, which a floating label can never be.
+		// What it says reframes the failure entirely: nothing failed to load. Something connected.
+		String intrusion = Component.translatable(
+				"screen.thefourthfrequency.alpha_loading.wall_intrusion").getString();
+		int intrusionRow = Math.round(logicalHeight * INTRUSION_ROW_FRACTION / font.lineHeight);
+		int intrusionSlot = Math.max(1, Math.round(repetitions * INTRUSION_SLOT_FRACTION));
+		String intrusionHead = word.repeat(intrusionSlot);
+		int intrusionOffsetX = font.width(intrusionHead);
+		String intrusionLine = intrusionHead + intrusion + " "
+				+ word.repeat(Math.max(1, repetitions - intrusionSlot));
+
 		graphics.pose().pushMatrix();
 		graphics.pose().scale(scale, scale);
 		int row = -2;
 		for (int y = -font.lineHeight * 2; y < logicalHeight + font.lineHeight * 2;
 				y += font.lineHeight, row++) {
+			boolean carriesIntrusion = row == intrusionRow;
+			String line = carriesIntrusion ? intrusionLine : wallLine;
 			int stagger = (row & 1) == 0 ? 0 : -(wordWidth / 2);
 			int x = -wordWidth * 2 + stagger;
 			int red = 206 + Math.floorMod(row * 17, 42);
 			int green = 8 + Math.floorMod(row * 11, 17);
 			int blue = 9 + Math.floorMod(row * 7, 13);
-			graphics.drawString(font, wallLine, x + 1, y + 1,
+			graphics.drawString(font, line, x + 1, y + 1,
 					0xB8000000 | red << 16, false);
-			graphics.drawString(font, wallLine, x, y,
+			graphics.drawString(font, line, x, y,
 					0xFF000000 | red << 16 | green << 8 | blue, false);
+			if (carriesIntrusion) {
+				// Overdrawn in place. Minecraft's font is not antialiased, so repainting the same
+				// glyphs at the same position in a different colour leaves no seam behind.
+				graphics.drawString(font, intrusion, x + intrusionOffsetX, y,
+						INTRUSION_COLOR, false);
+			}
 		}
 		graphics.pose().popMatrix();
-
-		// One line in the wall does not agree with the wall. Twenty-eight ticks of the same word
-		// is parsed by the eye in ten and then costs attention without paying any back; a single
-		// line that contradicts every other line spends the rest of that time well. At normal
-		// size against text nearly three times its height it reads as a status the machine is
-		// reporting rather than as part of the failure it is reporting - and it reframes that
-		// failure entirely: nothing failed to load. Something finished connecting.
-		//
-		// Placed off the centre line, below and right of it. Dead centre is where a player looks
-		// first and would read it as the point of the frame; out here it has to be found, and
-		// something found is trusted more than something presented.
-		String intrusion = Component.translatable(
-				"screen.thefourthfrequency.alpha_loading.wall_intrusion").getString();
-		int intrusionWidth = font.width(intrusion);
-		int intrusionX = Math.round(width * INTRUSION_CENTER_X) - intrusionWidth / 2;
-		int intrusionY = Math.round(height * INTRUSION_CENTER_Y);
-		graphics.fill(intrusionX - 4, intrusionY - 2, intrusionX + intrusionWidth + 4,
-				intrusionY + font.lineHeight, 0xD9060000);
-		graphics.drawString(font, intrusion, intrusionX, intrusionY, INTRUSION_COLOR, false);
-
-		graphics.disableScissor();
 	}
 
 	@Unique

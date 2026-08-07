@@ -3,22 +3,80 @@ package com.xm.thefourthfrequency.config;
 public record ModConfig(
 		Meta meta,
 		Pacing pacing,
-		ClientState clientState
+		ClientState clientState,
+		Presentation presentation
 ) {
 	public static ModConfig defaults() {
-		return new ModConfig(Meta.defaults(), Pacing.defaults(), ClientState.defaults());
+		return new ModConfig(Meta.defaults(), Pacing.defaults(), ClientState.defaults(),
+				Presentation.defaults());
 	}
 
 	public ModConfig validated() {
 		return new ModConfig(
 				meta == null ? Meta.defaults() : meta.validated(),
 				pacing == null ? Pacing.defaults() : pacing,
-				clientState == null ? ClientState.defaults() : clientState
+				clientState == null ? ClientState.defaults() : clientState,
+				presentation == null ? Presentation.defaults() : presentation.validated()
 		);
 	}
 
 	public ModConfig withClientState(ClientState updatedClientState) {
-		return new ModConfig(meta, pacing, updatedClientState).validated();
+		return new ModConfig(meta, pacing, updatedClientState, presentation).validated();
+	}
+
+	public ModConfig withPresentation(Presentation updatedPresentation) {
+		return new ModConfig(meta, pacing, clientState, updatedPresentation).validated();
+	}
+
+	/**
+	 * The three impact effects, each switchable on its own.
+	 *
+	 * <p>Deliberately three independent settings rather than one "screen effects" toggle. They fail
+	 * differently for different people: shake is the one that causes motion sickness, hit-stop is
+	 * the one that feels like a stutter if you are not expecting it, and the flash is the one that
+	 * matters if you are photosensitive. Bundling them would mean a player who needs one off loses
+	 * the other two.
+	 *
+	 * <p>All three are boxed, for exactly the reason {@code Meta.bedVolume} is: Gson fills an absent
+	 * primitive with 0/false, so shipping these unboxed would silently switch all three off for
+	 * every player whose config file predates the field. Null means "not configured" and resolves to
+	 * the default; an explicit 0 or false still means off.
+	 */
+	public record Presentation(
+			Double cameraShake,
+			Boolean hitStop,
+			Boolean impactFlash
+	) {
+		private static final double DEFAULT_CAMERA_SHAKE = 1.0D;
+
+		private static Presentation defaults() {
+			return new Presentation(DEFAULT_CAMERA_SHAKE, true, true);
+		}
+
+		private Presentation validated() {
+			return new Presentation(
+					clamp(cameraShake == null ? DEFAULT_CAMERA_SHAKE : cameraShake, 0.0D, 1.0D),
+					hitStop == null || hitStop,
+					impactFlash == null || impactFlash);
+		}
+
+		/**
+		 * Shake strength as a 0..1 scale rather than a boolean.
+		 *
+		 * <p>A player who finds the shake nauseating usually wants it toned down, not removed - the
+		 * feedback is doing real work telling them a hit landed. 0.0 is still a full off switch.
+		 */
+		public double effectiveCameraShake() {
+			return clamp(cameraShake == null ? DEFAULT_CAMERA_SHAKE : cameraShake, 0.0D, 1.0D);
+		}
+
+		public boolean hitStopEnabled() {
+			return hitStop == null || hitStop;
+		}
+
+		public boolean impactFlashEnabled() {
+			return impactFlash == null || impactFlash;
+		}
 	}
 
 	public record Meta(

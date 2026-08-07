@@ -6,60 +6,201 @@ public final class WorldInterfacePolicy {
 	public static final int MAX_ROSTER_SIZE = 8;
 	public static final int TOTAL_ANCHORS = 10;
 	/**
-	 * Six minutes, and the only clock the fight runs on.
+	 * Ten minutes, and the only clock the fight runs on.
 	 *
 	 * <p>Cutting an anchor used to spend a slice of this, which made the one action the encounter
 	 * is built around read as a cost: the reward for opening the interface up was less time to use
 	 * it in, and a roster that cut all ten had halved the fight before landing a hit. The deadline
 	 * is now fixed, and what an anchor buys is stated in the one place the player is already
 	 * looking - the gauge flares when the interface stops resisting damage as hard.</p>
+	 *
+	 * <p>{@code WorldInterfaceProtocol} carries the same figure to the client for the HUD clock, and
+	 * the two must not drift - {@code WorldInterfacePolicyTest} pins them equal.</p>
 	 */
-	public static final int COLLAPSE_DURATION_TICKS = 7_200;
+	public static final int COLLAPSE_DURATION_TICKS = 12_000;
 	public static final int MAX_PERMANENT_TERRAIN_EDITS = 8_192;
 	public static final int MAX_TERRAIN_EDITS_PER_TICK = 32;
 
-	private static final double HEALTH_PER_PLAYER = 600.0D;
+	/** The one-player pool, and the base every larger roster scales up from. */
+	private static final double BASE_HEALTH = 600.0D;
 	/**
-	 * How much of the interface's damage resistance each fallen anchor takes with it.
+	 * What each participant past the first adds to the pool, as a fraction of {@link #BASE_HEALTH}.
 	 *
-	 * <p>At nine percent, tearing down all ten left the interface taking a tenth of every hit -
-	 * a ninety percent reduction, which made the whole board of anchors an argument nobody could
-	 * win by pulling. Five percent bottoms out at half damage: still a real wall, still worth the
-	 * trip out to break them, and no longer a number that decides the fight on its own.</p>
+	 * <p>The pool used to be a flat six hundred per head, which is the wrong shape for this fight.
+	 * A table does not scale linearly with its size - they share one boss, one set of anchors and
+	 * one six-minute clock, and every extra pair of hands is another damage source against the same
+	 * timer - so charging full price per player made the encounter get strictly harder the more
+	 * people showed up, and a four-stack was grinding twenty-four hundred points inside a deadline
+	 * built for six hundred. At half price the pool still grows with the roster, so nobody's
+	 * presence is free, but it grows slower than the damage does.</p>
 	 */
-	private static final double DAMAGE_MULTIPLIER_LOSS_PER_ANCHOR = 0.05D;
+	private static final double HEALTH_PER_EXTRA_PLAYER = 0.5D;
+	/** Anchored shell at full stability; each fallen anchor exposes another four percentage points. */
+	private static final double BASE_DAMAGE_TAKEN_MULTIPLIER = 0.60D;
+	private static final double DAMAGE_TAKEN_GAIN_PER_ANCHOR = 0.04D;
 	/**
 	 * Fraction of maximum health each surviving anchor returns per second.
 	 *
-	 * <p>Raised: at a hundredth of a percent the healing was arithmetically real and practically
-	 * invisible, so leaving the anchors up cost nothing a table could feel. It has to be a rate the
-	 * damage log argues with, or "break them or don't" is not a decision.</p>
+	 * <p>Kept large enough to register in the damage log, but below the old quarter-percent total so
+	 * the anchored shell and its safe ground carry part of the value instead of regeneration doing
+	 * all of the work.</p>
 	 */
-	private static final double HEALING_PER_SECOND_PER_ANCHOR = 0.00025D;
-	private static final double BASE_MOVEMENT_MULTIPLIER = 0.55D;
-	private static final double MOVEMENT_GAIN_PER_ANCHOR = 0.045D;
-	private static final double BASE_ATTACK_COOLDOWN_MULTIPLIER = 1.50D;
-	private static final double ATTACK_COOLDOWN_LOSS_PER_ANCHOR = 0.075D;
+	private static final double HEALING_PER_SECOND_PER_ANCHOR = 0.00020D;
+	/**
+	 * What an arrow is worth against the interface, over and above its own damage roll.
+	 *
+	 * <p>The encounter is built so that the body is out of reach on purpose - it clears the arena
+	 * floor by eight, twelve and sixteen blocks, and {@code WorldInterfaceAnatomy} says outright that
+	 * it is "a target for anything ranged and for nothing else". Everything a player on the ground can
+	 * physically swing at is a head, a neck or a limb tip: small, moving, and standing next to the
+	 * thing that is attacking them.
+	 *
+	 * <p>Ranged was nonetheless paying the melee rate. A fully drawn Power V bow lands somewhere near
+	 * nine points about once a second, and against an eight-player pool with every anchor still
+	 * standing the interface regenerates more than five points a second - so a table that chose to
+	 * fight it the way the arena is shaped was spending most of its damage undoing the regeneration
+	 * and could not tell its arrows were doing anything at all. Melee, at roughly ten points at one
+	 * and a half swings a second, was quietly the only real answer, in the one range band the fight
+	 * spends its whole design keeping players out of.
+	 *
+	 * <p>Two and a half puts a good bow at a little over twenty a shot: comfortably ahead of the
+	 * regeneration on its own, worth the arrows, and still short of trivialising a six-minute pool.
+	 * It is a flat multiplier rather than a per-form or per-part one deliberately - "where do I aim"
+	 * is already answered by the geometry, and this should not add a second, invisible answer.
+	 */
+	private static final double ARROW_DAMAGE_MULTIPLIER = 2.5D;
+	private static final double BASE_ATTACK_COOLDOWN_MULTIPLIER = 1.15D;
+	private static final double ATTACK_COOLDOWN_LOSS_PER_ANCHOR = 0.03D;
+	/** Horizontal radius of one surviving anchor's vertical stability projection. */
+	public static final double STABILITY_FIELD_RADIUS = 8.0D;
+	/** World-interface damage that remains when a player stands inside a stability field. */
+	public static final float STABILITY_FIELD_DAMAGE_MULTIPLIER = 0.80F;
+
+	/**
+	 * Blocks of a player's own climb the storm's combat station will follow upwards.
+	 *
+	 * <p>The station used to be written straight off the player's Y, which made the body a ceiling
+	 * fixed above their head: eight, fourteen or eighteen blocks up depending on form, wherever they
+	 * went. On flat ground that is invisible and correct. On the obsidian spikes it is the fight,
+	 * because the spikes are where the stability anchors are - a player climbing one to break an
+	 * anchor took the whole thirty-three-block body up with them and arrived under it, with the
+	 * anchor and their own sightline inside the mass they were trying to shoot past.
+	 *
+	 * <p>Four blocks keeps the station honest over the small rises and dips of the island - the storm
+	 * still answers a player who steps onto the altar - and stops answering well before the shortest
+	 * spike. Above that the body stays where the island is, which is the point: the climb is how a
+	 * player gets out from under it, and a ceiling that climbs too cannot be escaped by climbing.
+	 *
+	 * <p>Set to zero to pin the station to the arena floor outright.
+	 */
+	public static final double MAX_VERTICAL_FOLLOW = 4.0D;
 
 	private WorldInterfacePolicy() {
 	}
 
+	/**
+	 * World Y for the storm's combat station.
+	 *
+	 * @param arenaFloorY the arena centre's Y - the height the island itself is at
+	 * @param targetY     the hunted player's feet
+	 * @param hover       the form's own clearance, skyhold lift included
+	 * @return the station, following the player up by at most {@link #MAX_VERTICAL_FOLLOW}
+	 *
+	 * <p>The follow is clamped at both ends. The lower clamp matters as much as the upper one: a
+	 * player who falls off the island, or fights from a hole, is not somewhere the storm should
+	 * descend to - it would put the body through the ground it is hovering over.
+	 */
+	public static double combatStationY(double arenaFloorY, double targetY, double hover) {
+		return arenaFloorY + Math.clamp(targetY - arenaFloorY, 0.0D, MAX_VERTICAL_FOLLOW) + hover;
+	}
+
+	/**
+	 * The horizontal point the storm holds station over and turns to face, given where everyone is.
+	 *
+	 * <p>The chase used to be written against the single nearest player, which on a solo table is
+	 * the only thing it could mean and on any other table is a hard argmax with all the behaviour
+	 * that implies. A body up to thirty-three blocks across parks over whoever happens to be closest
+	 * and stays there: it is a ceiling on that one person's screen for the whole phase, it puts the
+	 * anchors and the core they are trying to shoot inside the silhouette, and because the lance and
+	 * the lashes are aimed at the ground under the body, standing closest quietly meant standing
+	 * where most of the fight was going to land. It also rewarded the wrong thing - the safest way to
+	 * play a four-stack was for everybody to stay far away and let one person hold the aggro they did
+	 * not ask for.
+	 *
+	 * <p>Weighting by {@code 1 / (1 + distance)} keeps the pull toward whoever is close - the storm
+	 * still comes for the people in front of it, and a lone player is still followed exactly as
+	 * before, because one position weighted by anything is that position - while letting a spread-out
+	 * table drag the body into the space between them. A sniper sixty blocks out moves the station by
+	 * a little; a second player at melee range moves it by half.
+	 *
+	 * @param fromX where the storm currently is, which is what "close" is measured from
+	 * @return the station's {@code {x, z}}
+	 */
+	public static double[] attentionCentroid(double[] xs, double[] zs, double fromX, double fromZ) {
+		if (xs == null || zs == null || xs.length != zs.length) {
+			throw new IllegalArgumentException("Participant coordinates must be paired");
+		}
+		if (xs.length == 0) throw new IllegalArgumentException("Need at least one participant");
+		if (!Double.isFinite(fromX) || !Double.isFinite(fromZ)) {
+			throw new IllegalArgumentException("Origin coordinates must be finite");
+		}
+		double totalWeight = 0.0D;
+		double x = 0.0D;
+		double z = 0.0D;
+		for (int index = 0; index < xs.length; index++) {
+			if (!Double.isFinite(xs[index]) || !Double.isFinite(zs[index])) {
+				throw new IllegalArgumentException("Participant coordinates must be finite");
+			}
+			double dx = xs[index] - fromX;
+			double dz = zs[index] - fromZ;
+			double weight = 1.0D / (1.0D + Math.sqrt(dx * dx + dz * dz));
+			totalWeight += weight;
+			x += xs[index] * weight;
+			z += zs[index] * weight;
+		}
+		return new double[]{x / totalWeight, z / totalWeight};
+	}
+
+	/**
+	 * The authoritative virtual-health pool for a frozen roster: 600, 900, 1200 ... 2700 at eight.
+	 *
+	 * <p>Every other reader of this number - the ritual commit that writes it into the save, and the
+	 * state validator that refuses a save whose pool disagrees with its roster - has to call this
+	 * method rather than restate the arithmetic, or a rule change silently turns every existing
+	 * encounter into a {@code maximum_health_roster_mismatch}.</p>
+	 */
 	public static double maxHealth(int frozenRosterSize) {
 		requireRosterSize(frozenRosterSize);
-		return HEALTH_PER_PLAYER * frozenRosterSize;
+		return BASE_HEALTH * (1.0D + HEALTH_PER_EXTRA_PLAYER * (frozenRosterSize - 1));
 	}
 
 	/** Multiplier applied to incoming boss damage after {@code destroyedAnchors} authoritative anchors fall. */
 	public static double damageTakenMultiplier(int destroyedAnchors) {
 		requireDestroyedAnchors(destroyedAnchors);
-		return 1.0D - DAMAGE_MULTIPLIER_LOSS_PER_ANCHOR * destroyedAnchors;
+		return BASE_DAMAGE_TAKEN_MULTIPLIER + DAMAGE_TAKEN_GAIN_PER_ANCHOR * destroyedAnchors;
+	}
+
+	/** What an arrow or trident is multiplied by before the anchor wall is applied. */
+	public static double arrowDamageMultiplier() {
+		return ARROW_DAMAGE_MULTIPLIER;
 	}
 
 	public static double adjustedIncomingDamage(double rawDamage, int destroyedAnchors) {
+		return adjustedIncomingDamage(rawDamage, destroyedAnchors, false);
+	}
+
+	/**
+	 * The damage one accepted hit actually removes from the pool.
+	 *
+	 * @param arrow whether the blow was delivered by an arrow or trident rather than in melee; see
+	 *              {@link #ARROW_DAMAGE_MULTIPLIER} for why the fight pays ranged more
+	 */
+	public static double adjustedIncomingDamage(double rawDamage, int destroyedAnchors, boolean arrow) {
 		if (!Double.isFinite(rawDamage) || rawDamage < 0.0D) {
 			throw new IllegalArgumentException("Raw damage must be finite and non-negative");
 		}
-		return rawDamage * damageTakenMultiplier(destroyedAnchors);
+		double weapon = arrow ? ARROW_DAMAGE_MULTIPLIER : 1.0D;
+		return rawDamage * weapon * damageTakenMultiplier(destroyedAnchors);
 	}
 
 	/** Healing per server tick; twenty invocations equal the specified per-second rule. */
@@ -71,20 +212,71 @@ public final class WorldInterfacePolicy {
 		return maximumHealth * HEALING_PER_SECOND_PER_ANCHOR * aliveAnchors / 20.0D;
 	}
 
-	public static double movementMultiplier(int destroyedAnchors) {
-		requireDestroyedAnchors(destroyedAnchors);
-		return BASE_MOVEMENT_MULTIPLIER + MOVEMENT_GAIN_PER_ANCHOR * destroyedAnchors;
-	}
-
 	public static double attackCooldownMultiplier(int destroyedAnchors) {
 		requireDestroyedAnchors(destroyedAnchors);
 		return BASE_ATTACK_COOLDOWN_MULTIPLIER - ATTACK_COOLDOWN_LOSS_PER_ANCHOR * destroyedAnchors;
+	}
+
+	/** Whether a point lies inside an anchor's cylindrical stability projection. */
+	public static boolean insideStabilityField(double x, double z, double anchorX, double anchorZ) {
+		if (!Double.isFinite(x) || !Double.isFinite(z)
+				|| !Double.isFinite(anchorX) || !Double.isFinite(anchorZ)) {
+			throw new IllegalArgumentException("Stability-field coordinates must be finite");
+		}
+		double dx = x - anchorX;
+		double dz = z - anchorZ;
+		return dx * dx + dz * dz <= STABILITY_FIELD_RADIUS * STABILITY_FIELD_RADIUS;
+	}
+
+	/** Applies the visible refuge supplied by a surviving anchor to one authored attack figure. */
+	public static float adjustedPlayerDamage(float rawDamage, boolean insideStabilityField) {
+		if (!Float.isFinite(rawDamage) || rawDamage < 0.0F) {
+			throw new IllegalArgumentException("Player damage must be finite and non-negative");
+		}
+		return insideStabilityField ? rawDamage * STABILITY_FIELD_DAMAGE_MULTIPLIER : rawDamage;
 	}
 
 	/** Returns collapse progress clamped to the HUD domain [0, 1]. */
 	public static double collapseProgress(long elapsedTicks) {
 		if (elapsedTicks < 0L) throw new IllegalArgumentException("Elapsed ticks cannot be negative");
 		return Math.min(1.0D, elapsedTicks / (double) COLLAPSE_DURATION_TICKS);
+	}
+
+	/**
+	 * How long a won encounter spends putting the island back, in ticks.
+	 *
+	 * <p>Matched to the success resolution's own length, so the repair finishes on the tick the way
+	 * out opens: the last of the corruption goes as the dragon finishes prising the exit apart. It is
+	 * deliberately slow. The heal used to sweep the whole disc in under six seconds while the HUD
+	 * still showed a frozen countdown labelled "paused", so the one thing the players had just earned
+	 * went past before anyone could look at it, and the readout said nothing about it at all.
+	 */
+	public static final int REPAIR_DURATION_TICKS = 500;
+
+	/**
+	 * How much of the repair is done, in [0, 1].
+	 *
+	 * <p>One fraction drives all three halves of it - the terrain sweep, the collapse rail running
+	 * backwards, and the material erosion lifting - so they cannot drift apart into three separate
+	 * clocks describing the same event at different speeds.
+	 *
+	 * @param resolutionAge ticks since the resolution began, or negative before it has
+	 */
+	public static double repairFraction(long resolutionAge) {
+		if (resolutionAge < 0L) return 0.0D;
+		return Math.clamp(resolutionAge / (double) REPAIR_DURATION_TICKS, 0.0D, 1.0D);
+	}
+
+	/**
+	 * The collapse clock as the winners should now read it: running backwards to zero.
+	 *
+	 * <p>Applied to the projection that goes out on the wire rather than to the authoritative timer.
+	 * The stored elapsed count is what the encounter was decided on and must not move; what the rail
+	 * is showing after the fight is over is no longer a deadline but the damage being undone.
+	 */
+	public static long repairedElapsedTicks(long elapsedAtDefeat, long resolutionAge) {
+		if (elapsedAtDefeat < 0L) throw new IllegalArgumentException("Elapsed ticks cannot be negative");
+		return Math.round(elapsedAtDefeat * (1.0D - repairFraction(resolutionAge)));
 	}
 
 	/** Collapse fraction below which combat shows no erosion at all. */
@@ -120,7 +312,16 @@ public final class WorldInterfacePolicy {
 			float completion = Math.min(age, durationTicks) / (float) durationTicks;
 			return COMBAT_EROSION_CEILING + (1.0F - COMBAT_EROSION_CEILING) * completion;
 		}
+		// A win runs the same combat curve, but on the projected clock rather than the stored one -
+		// which the caller has already wound back by the repair fraction. So the materials lift at
+		// exactly the rate the rail unwinds and the terrain sweep advances, instead of snapping to
+		// clean on the tick the interface died.
+		if (stage == WorldInterfaceStage.SUCCESS_RESOLUTION) return combatErosion(elapsedTicks);
 		if (!stage.isCombat()) return 0.0F;
+		return combatErosion(elapsedTicks);
+	}
+
+	private static float combatErosion(long elapsedTicks) {
 		double collapse = collapseProgress(Math.max(0L, elapsedTicks));
 		if (collapse <= EROSION_START_COLLAPSE) return 0.0F;
 		double advance = (collapse - EROSION_START_COLLAPSE) / (1.0D - EROSION_START_COLLAPSE);

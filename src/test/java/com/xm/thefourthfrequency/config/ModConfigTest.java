@@ -18,6 +18,11 @@ class ModConfigTest {
 		assertFalse(defaults.pacing().developerAcceleration());
 		assertFalse(defaults.clientState().alphaDowngradeComplete());
 		assertFalse(defaults.clientState().viewDistanceUnlocked());
+		// The three impact effects default on, and each is its own setting.
+		assertEquals(1.0D, defaults.presentation().cameraShake());
+		assertEquals(1.0D, defaults.presentation().effectiveCameraShake());
+		assertTrue(defaults.presentation().hitStopEnabled());
+		assertTrue(defaults.presentation().impactFlashEnabled());
 	}
 
 	@Test
@@ -25,19 +30,61 @@ class ModConfigTest {
 		ModConfig validated = new ModConfig(
 				new ModConfig.Meta(true, Double.NaN, Double.NaN),
 				new ModConfig.Pacing(true),
-				new ModConfig.ClientState(false, false)
+				new ModConfig.ClientState(false, false),
+				new ModConfig.Presentation(Double.NaN, true, true)
 		).validated();
 		assertEquals(1.0D, validated.meta().peakVolume());
 		assertEquals(1.0D, validated.meta().bedVolume());
 		assertTrue(validated.pacing().developerAcceleration());
 
+		assertEquals(1.0D, validated.presentation().effectiveCameraShake());
+
 		ModConfig muted = new ModConfig(
 				new ModConfig.Meta(true, -2.0D, -2.0D),
 				new ModConfig.Pacing(false),
-				new ModConfig.ClientState(false, false)
+				new ModConfig.ClientState(false, false),
+				new ModConfig.Presentation(-2.0D, false, false)
 		).validated();
 		assertEquals(0.0D, muted.meta().peakVolume());
 		assertEquals(0.0D, muted.meta().bedVolume());
+		assertEquals(0.0D, muted.presentation().effectiveCameraShake());
+	}
+
+	/**
+	 * The three effects are independent settings, and a config file written before they existed must
+	 * read back as "unset" rather than as all three switched off.
+	 *
+	 * <p>Same boxing argument as {@code bedVolume}: Gson fills an absent primitive with 0/false, so
+	 * unboxed fields here would have silently disabled shake, hit-stop and flash for every existing
+	 * player the moment the feature shipped - and the symptom would have been "the update did
+	 * nothing", which nobody would report as a bug.
+	 */
+	@Test
+	void presentationTogglesAreIndependentAndDefaultOnForLegacyFiles() {
+		Gson gson = new Gson();
+		ModConfig legacy = gson.fromJson("{\"meta\": {\"enabled\": true}}", ModConfig.class).validated();
+		assertEquals(1.0D, legacy.presentation().effectiveCameraShake());
+		assertTrue(legacy.presentation().hitStopEnabled());
+		assertTrue(legacy.presentation().impactFlashEnabled());
+
+		// Turning the shake off must leave the other two alone: a player with motion sickness and a
+		// player with photosensitivity need different things switched off.
+		ModConfig noShake = gson.fromJson(
+				"{\"presentation\": {\"cameraShake\": 0.0}}", ModConfig.class).validated();
+		assertEquals(0.0D, noShake.presentation().effectiveCameraShake());
+		assertTrue(noShake.presentation().hitStopEnabled());
+		assertTrue(noShake.presentation().impactFlashEnabled());
+
+		ModConfig noFlash = gson.fromJson(
+				"{\"presentation\": {\"impactFlash\": false}}", ModConfig.class).validated();
+		assertFalse(noFlash.presentation().impactFlashEnabled());
+		assertEquals(1.0D, noFlash.presentation().effectiveCameraShake());
+		assertTrue(noFlash.presentation().hitStopEnabled());
+
+		// A scale, not a switch: shake can be turned down rather than only off.
+		ModConfig half = gson.fromJson(
+				"{\"presentation\": {\"cameraShake\": 0.4}}", ModConfig.class).validated();
+		assertEquals(0.4D, half.presentation().effectiveCameraShake(), 1.0E-9D);
 	}
 
 	/**
@@ -68,6 +115,7 @@ class ModConfigTest {
 		assertTrue(encoded.contains("\"meta\":{\"enabled\":true"));
 		assertTrue(encoded.contains("\"pacing\":{"));
 		assertTrue(encoded.contains("\"clientState\":{"));
+		assertTrue(encoded.contains("\"presentation\":{"));
 		assertFalse(encoded.contains("subtitlesEnabled"));
 		assertFalse(encoded.contains("productionHours"));
 		assertFalse(encoded.contains("acceleratedMinutes"));

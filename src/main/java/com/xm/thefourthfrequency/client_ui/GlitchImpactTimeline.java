@@ -84,6 +84,31 @@ public final class GlitchImpactTimeline {
 		return 0.26F * (1.0F - (tick - LOSS_END_TICK) / (float) (GHOST_END_TICK - LOSS_END_TICK));
 	}
 
+	/**
+	 * Which of the analog-signal post chains the world picture wears on this tick, 1 to 4, or 0 for
+	 * none.
+	 *
+	 * <p>The burst used to exist entirely in the overlay, which meant it could only ever paint
+	 * <em>over</em> the world - and paint is the one thing a torn signal never does. The picture
+	 * itself has to bend, and bending it needs a shader, and a post chain's uniforms are fixed when
+	 * it loads. So the strength is quantised into four chains and this says which one.
+	 *
+	 * <p>Derived from {@link #tearStrength} rather than from the tick, so the filter follows the same
+	 * four beats the overlay does - including the second hit, where it steps back <em>up</em>. Two
+	 * treatments on independent envelopes would read as two things going wrong near each other.
+	 */
+	public static int signalStep(int tick) {
+		if (!active(tick)) return 0;
+		// The closing beat keeps the weakest step rather than dropping to nothing: the medium is
+		// still there after the picture has gone, and it is what the collapse closes on.
+		if (tick >= GHOST_END_TICK) return 1;
+		float tear = tearStrength(tick);
+		if (tear >= 0.75F) return 4;
+		if (tear >= 0.45F) return 3;
+		if (tear >= 0.20F) return 2;
+		return 1;
+	}
+
 	/** How far the red and cyan ghosts sit either side of everything the tear touches. */
 	public static float chromaOffset(int tick) {
 		if (tick < 0 || tick >= GHOST_END_TICK) return 0.0F;

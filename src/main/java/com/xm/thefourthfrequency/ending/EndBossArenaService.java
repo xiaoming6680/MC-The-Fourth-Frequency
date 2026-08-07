@@ -2,6 +2,7 @@ package com.xm.thefourthfrequency.ending;
 
 import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.content.ModBlocks;
+import com.xm.thefourthfrequency.entity.StabilityAnchorEntity;
 import com.xm.thefourthfrequency.mixin.EndDragonFightAccessor;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -66,6 +67,11 @@ public final class EndBossArenaService {
 	private static final int EDIT_FLAGS = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE
 			| Block.UPDATE_SUPPRESS_DROPS;
 	private static final int MAX_PENDING_SCARS = 8_192;
+	/**
+	 * Retained only to recognise anchors written by a build that carried them on tagged
+	 * {@link EndCrystal}s. Nothing tags a new anchor: identity now comes from the entity's own type
+	 * plus its synched slot index, so an untagged vanilla crystal is unambiguously not an anchor.
+	 */
 	private static final String ANCHOR_TAG = "thefourthfrequency.world_interface_anchor";
 	private static final String ANCHOR_INDEX_PREFIX = "thefourthfrequency.world_interface_anchor.";
 
@@ -80,7 +86,7 @@ public final class EndBossArenaService {
 	 * index exposes them. Retain only the ten bounded arena references so same-tick reconciliation
 	 * cannot try to add a second entity with the same deterministic UUID.
 	 */
-	private static final Map<ServerLevel, Map<UUID, EndCrystal>> KNOWN_ANCHORS =
+	private static final Map<ServerLevel, Map<UUID, StabilityAnchorEntity>> KNOWN_ANCHORS =
 			Collections.synchronizedMap(new WeakHashMap<>());
 	private static boolean initialized;
 
@@ -94,7 +100,7 @@ public final class EndBossArenaService {
 	}
 
 	/**
-	 * Prepares the central altar, twenty inert gateways and ten authoritative crystals. The resonance
+	 * Prepares the central altar, twenty inert gateways and ten authoritative anchors. The resonance
 	 * core is written last and acts as the durable preparation marker.
 	 */
 	public static PreparedArena prepare(ServerLevel level) {
@@ -187,7 +193,7 @@ public final class EndBossArenaService {
 		if (nearest == null || best > SPIKE_SHEAR_REACH * SPIKE_SHEAR_REACH) return 0;
 		int radius = nearest.getRadius();
 		List<BlockPos> candidates = new ArrayList<>();
-		// Only the top few courses: the pillar is chipped, never felled out from under its crystal.
+		// Only the top few courses: the pillar is chipped, never felled out from under its anchor.
 		for (int dy = 0; dy < SPIKE_SHEAR_DEPTH; dy++) {
 			int y = nearest.getHeight() - dy;
 			for (int dx = -radius; dx <= radius; dx++) {
@@ -234,6 +240,7 @@ public final class EndBossArenaService {
 	public static boolean canDestroy(ServerLevel level, BlockPos pos, BlockState state) {
 		if (!insideEditableArena(pos) || !level.isInWorldBounds(pos) || !level.hasChunkAt(pos)
 				|| state.isAir() || !state.getFluidState().isEmpty() || level.getBlockEntity(pos) != null) return false;
+		if (WorldInterfaceAnchorService.protects(level, pos)) return false;
 		ArenaRuntime runtime;
 		synchronized (RUNTIMES) {
 			runtime = RUNTIMES.get(level);
@@ -255,29 +262,35 @@ public final class EndBossArenaService {
 
 	public static void setAnchorsInvulnerable(ServerLevel level, PreparedArena arena, boolean invulnerable) {
 		for (AnchorSlot slot : arena.anchors) {
-			EndCrystal crystal = findAuthoritativeAnchor(level, slot.crystalUuid).orElse(null);
-			if (crystal != null && isAuthoritativeAnchor(crystal, slot.index)) {
-				crystal.setInvulnerable(invulnerable);
+			StabilityAnchorEntity anchor = findAuthoritativeAnchor(level, slot.anchorEntityUuid).orElse(null);
+			if (anchor != null && anchor.anchorIndex() == slot.index) {
+				anchor.setInvulnerable(invulnerable);
 			}
 		}
 	}
 
 	/** Resolves an authoritative anchor even before the vanilla visible UUID index catches up. */
-	public static Optional<EndCrystal> findAuthoritativeAnchor(ServerLevel level, UUID crystalUuid) {
-		if (level == null || crystalUuid == null || level.dimension() != Level.END) return Optional.empty();
-		Entity entity = findLoadedEntity(level, crystalUuid);
-		if (entity instanceof EndCrystal crystal && isAuthoritativeAnchor(crystal) && crystal.isAlive()) {
-			rememberAnchor(level, crystal);
-			return Optional.of(crystal);
+	public static Optional<StabilityAnchorEntity> findAuthoritativeAnchor(ServerLevel level, UUID anchorEntityUuid) {
+		if (level == null || anchorEntityUuid == null || level.dimension() != Level.END) return Optional.empty();
+		Entity entity = findLoadedEntity(level, anchorEntityUuid);
+		if (entity instanceof StabilityAnchorEntity anchor && anchor.isAlive()) {
+			rememberAnchor(level, anchor);
+			return Optional.of(anchor);
 		}
 		return Optional.empty();
 	}
 
 	/**
-	 * Reconciles the ten deterministic crystal entities from the persisted authority set.
+	 * Reconciles the ten deterministic anchor entities from the persisted authority set.
 	 * A missing live anchor is a load/restart concern and is recreated; a persisted destroyed
 	 * anchor is never resurrected. This is intentionally separate from {@link #prepare} because
 	 * the arena marker alone cannot distinguish those cases.
+	 *
+	 * <p>This is also the one place a world prepared by an older build is brought forward: an anchor
+	 * whose UUID still resolves to a tagged {@link EndCrystal} has that crystal removed and a
+	 * {@link StabilityAnchorEntity} put in its place under the same UUID and slot index. Untagged
+	 * crystals are never migrated - they are the End's own, and are only swept when they are standing
+	 * on an anchor's block, exactly as before.</p>
 	 */
 	public static void restoreAuthoritativeAnchors(ServerLevel level, WorldInterfaceState.Snapshot snapshot,
 			boolean invulnerable) {
@@ -291,67 +304,85 @@ public final class EndBossArenaService {
 		}
 		AABB bounds = new AABB(-ARENA_RADIUS, level.getMinY(), -ARENA_RADIUS,
 				ARENA_RADIUS, level.getMaxY(), ARENA_RADIUS);
-		List<EndCrystal> tagged = new ArrayList<>(level.getEntitiesOfClass(EndCrystal.class, bounds,
-				EndBossArenaService::isAuthoritativeAnchor));
+		List<Entity> claimed = new ArrayList<>(level.getEntitiesOfClass(StabilityAnchorEntity.class, bounds,
+				Entity::isAlive));
+		claimed.addAll(level.getEntitiesOfClass(EndCrystal.class, bounds, EndBossArenaService::isLegacyTaggedAnchor));
 		for (WorldInterfaceState.Anchor anchor : snapshot.anchors()) {
 			BlockPos position = anchor.position();
-			UUID uuid = anchor.crystalUuid().orElse(null);
-			for (EndCrystal candidate : tagged) {
-				if (isAuthoritativeAnchor(candidate, anchor.index())
+			UUID uuid = anchor.anchorEntityUuid().orElse(null);
+			for (Entity candidate : claimed) {
+				if (claimsAnchorSlot(candidate, anchor.index())
 						&& (anchor.destroyed() || uuid == null || !uuid.equals(candidate.getUUID()))) {
 					candidate.discard();
 				}
 			}
 			if (uuid == null) {
 				if (!anchor.destroyed()) {
-					throw new IllegalStateException("Live anchor " + anchor.index() + " has no crystal UUID");
+					throw new IllegalStateException("Live anchor " + anchor.index() + " has no entity UUID");
 				}
 				continue;
 			}
 			Entity loaded = findLoadedEntity(level, uuid);
 			if (anchor.destroyed()) {
-				if (loaded instanceof EndCrystal crystal) crystal.discard();
+				if (loaded != null) loaded.discard();
 				continue;
 			}
-			EndCrystal crystal = loaded instanceof EndCrystal value ? value : null;
-			if (loaded != null && crystal == null) {
+			// A world written before the bespoke entity existed still resolves this UUID to a tagged
+			// crystal. Take it down first: the replacement has to be added under the same UUID, and
+			// two entities cannot hold one id at the same time.
+			if (isLegacyTaggedAnchor(loaded)) {
+				loaded.discard();
+				forgetAnchor(level, uuid);
+				loaded = null;
+			}
+			StabilityAnchorEntity entity = loaded instanceof StabilityAnchorEntity value ? value : null;
+			if (loaded != null && entity == null) {
 				throw new IllegalStateException("Anchor UUID " + uuid + " belongs to " + loaded.getType());
 			}
-			if (crystal == null) {
-				crystal = new EndCrystal(level, position.getX() + 0.5D, position.getY(), position.getZ() + 0.5D);
-				crystal.setUUID(uuid);
-				if (!level.addFreshEntity(crystal)) {
+			if (entity == null) {
+				entity = StabilityAnchorEntity.create(level, anchor.index(), position.getX() + 0.5D,
+						position.getY(), position.getZ() + 0.5D);
+				entity.setUUID(uuid);
+				if (!level.addFreshEntity(entity)) {
 					throw new IllegalStateException("Unable to restore authoritative anchor " + anchor.index());
 				}
-				rememberAnchor(level, crystal);
+				rememberAnchor(level, entity);
 			}
 			// The pillar already had a crystal on it.
 			//
-			// The sweep above only discards crystals carrying this anchor's own tag, so the End's
-			// own dragon-fight crystal - which carries no tag at all - sat on the same block as the
+			// The sweep above only discards entities carrying this anchor's own slot, so the End's
+			// own dragon-fight crystal - which claims no slot at all - sat on the same block as the
 			// anchor, invisible as a duplicate and fully destructible. A player aiming at the anchor
 			// hit that instead, watched it explode, and found the anchor still standing: the "an
 			// anchor takes two or three hits" report, exactly.
 			for (EndCrystal stray : level.getEntitiesOfClass(EndCrystal.class,
-					new AABB(position).inflate(2.0D), candidate -> !isAuthoritativeAnchor(candidate))) {
+					new AABB(position).inflate(2.0D), Entity::isAlive)) {
 				stray.discard();
 			}
-			crystal.setPos(position.getX() + 0.5D, position.getY(), position.getZ() + 0.5D);
-			crystal.setShowBottom(false);
-			crystal.setInvulnerable(invulnerable);
-			for (int index = 0; index < ANCHOR_COUNT; index++) crystal.removeTag(ANCHOR_INDEX_PREFIX + index);
-			crystal.addTag(ANCHOR_TAG);
-			crystal.addTag(ANCHOR_INDEX_PREFIX + anchor.index());
+			entity.setAnchorIndex(anchor.index());
+			entity.setPos(position.getX() + 0.5D, position.getY(), position.getZ() + 0.5D);
+			entity.setInvulnerable(invulnerable);
 			restoreAnchorFooting(level, position);
 		}
 	}
 
+	/** Whether this entity currently occupies an anchor slot - either as the anchor or as a legacy crystal. */
 	public static boolean isAuthoritativeAnchor(Entity entity) {
-		return entity instanceof EndCrystal && entity.getTags().contains(ANCHOR_TAG);
+		return entity instanceof StabilityAnchorEntity || isLegacyTaggedAnchor(entity);
 	}
 
 	public static boolean isAuthoritativeAnchor(Entity entity, int index) {
-		return isAuthoritativeAnchor(entity) && entity.getTags().contains(ANCHOR_INDEX_PREFIX + index);
+		return claimsAnchorSlot(entity, index);
+	}
+
+	private static boolean claimsAnchorSlot(Entity entity, int index) {
+		if (entity instanceof StabilityAnchorEntity anchor) return anchor.anchorIndex() == index;
+		return isLegacyTaggedAnchor(entity) && entity.getTags().contains(ANCHOR_INDEX_PREFIX + index);
+	}
+
+	/** An anchor written by a build that carried the slot on a tagged vanilla crystal. */
+	private static boolean isLegacyTaggedAnchor(Entity entity) {
+		return entity instanceof EndCrystal && entity.getTags().contains(ANCHOR_TAG);
 	}
 
 	private static ArenaRuntime runtime(ServerLevel level) {
@@ -506,32 +537,36 @@ public final class EndBossArenaService {
 			level.waitForEntities(new ChunkPos(position), 0);
 			UUID uuid = deterministicAnchorUuid(level, index);
 			Entity loaded = findLoadedEntity(level, uuid);
-			if (loaded != null && !(loaded instanceof EndCrystal)) {
+			// A world prepared by an older build still has a tagged crystal under this UUID. Take it
+			// down here too, so re-preparing an existing arena migrates it rather than throwing on a
+			// UUID that belongs to the wrong entity type.
+			if (isLegacyTaggedAnchor(loaded)) {
+				loaded.discard();
+				forgetAnchor(level, uuid);
+				loaded = null;
+			}
+			if (loaded != null && !(loaded instanceof StabilityAnchorEntity)) {
 				throw new IllegalStateException("Anchor UUID " + uuid + " belongs to " + loaded.getType());
 			}
-			EndCrystal existing = loaded instanceof EndCrystal crystal ? crystal : null;
+			StabilityAnchorEntity existing = loaded instanceof StabilityAnchorEntity anchor ? anchor : null;
 			if (existing == null && !alreadyPrepared) {
 				removeCrystalsAt(level, position);
-				existing = new EndCrystal(level, position.getX() + 0.5D, position.getY(), position.getZ() + 0.5D);
+				existing = StabilityAnchorEntity.create(level, index, position.getX() + 0.5D,
+						position.getY(), position.getZ() + 0.5D);
 				existing.setUUID(uuid);
-				existing.setShowBottom(false);
 				existing.setInvulnerable(true);
-				existing.addTag(ANCHOR_TAG);
-				existing.addTag(ANCHOR_INDEX_PREFIX + index);
 				if (!level.addFreshEntity(existing)) {
 					throw new IllegalStateException("Unable to create authoritative anchor " + index);
 				}
 				rememberAnchor(level, existing);
 			} else if (existing != null) {
-				// The untagged vanilla crystal can come back after the anchor exists -- respawning the
-				// dragon re-seeds the spikes -- so the sweep has to run here too, not only where the
-				// anchor is first created. Skipped for the anchor itself, which is standing on the
-				// same block by design.
-				removeCrystalsAt(level, position, existing);
+				// The vanilla crystal can come back after the anchor exists -- respawning the dragon
+				// re-seeds the spikes -- so the sweep has to run here too, not only where the anchor
+				// is first created. The anchor is no longer an EndCrystal, so nothing has to be
+				// excluded from the sweep any more.
+				removeCrystalsAt(level, position);
 				rememberAnchor(level, existing);
-				existing.setShowBottom(false);
-				existing.addTag(ANCHOR_TAG);
-				existing.addTag(ANCHOR_INDEX_PREFIX + index);
+				existing.setAnchorIndex(index);
 			}
 			restoreAnchorFooting(level, position);
 			slots.add(new AnchorSlot(index, position, uuid));
@@ -540,31 +575,30 @@ public final class EndBossArenaService {
 	}
 
 	/**
-	 * The anchor sits bare on the spike it grew from. The cage - one block under the crystal and one
+	 * The anchor sits bare on the spike it grew from. The old cage - one block under the anchor and one
 	 * on each of the four sides - is no longer placed at all: it wrapped a band of bright custom
 	 * texture around the one thing in the arena a player is meant to be looking at.
 	 *
 	 * <p>The block is no longer registered either, so a world prepared before this change loads
 	 * those five positions as air. The four flanks were air to begin with and are left that way;
 	 * the one underneath was the spike's own bedrock cap before the cage overwrote it, so an
-	 * unsupported crystal gets its cap back rather than floating over a hole.</p>
+	 * unsupported anchor gets its cap back rather than floating over a hole.</p>
 	 */
-	private static void restoreAnchorFooting(ServerLevel level, BlockPos crystalPosition) {
-		BlockPos footing = crystalPosition.below();
+	private static void restoreAnchorFooting(ServerLevel level, BlockPos anchorPosition) {
+		BlockPos footing = anchorPosition.below();
 		if (level.getBlockState(footing).isAir()) {
 			level.setBlock(footing, Blocks.BEDROCK.defaultBlockState(), EDIT_FLAGS);
 		}
 	}
 
+	/**
+	 * Clears the spike top of end crystals. The anchor itself is a different entity type now, so
+	 * every crystal standing here is the End's own and none of them has to be spared.
+	 */
 	private static void removeCrystalsAt(ServerLevel level, BlockPos position) {
-		removeCrystalsAt(level, position, null);
-	}
-
-	/** Clears the spike top of everything except {@code keep}, which is the anchor that belongs there. */
-	private static void removeCrystalsAt(ServerLevel level, BlockPos position, EndCrystal keep) {
 		AABB bounds = new AABB(position).inflate(2.0D);
 		for (EndCrystal crystal : level.getEntitiesOfClass(EndCrystal.class, bounds, Entity::isAlive)) {
-			if (crystal != keep) crystal.discard();
+			crystal.discard();
 		}
 	}
 
@@ -576,34 +610,44 @@ public final class EndBossArenaService {
 	private static Entity findLoadedEntity(ServerLevel level, UUID uuid) {
 		Entity direct = level.getEntity(uuid);
 		if (direct != null) return direct;
-		EndCrystal known = knownAnchor(level, uuid);
+		StabilityAnchorEntity known = knownAnchor(level, uuid);
 		if (known != null) return known;
 		for (Entity entity : level.getAllEntities()) {
 			if (!entity.isRemoved() && uuid.equals(entity.getUUID())) {
-				if (entity instanceof EndCrystal crystal) rememberAnchor(level, crystal);
+				if (entity instanceof StabilityAnchorEntity anchor) rememberAnchor(level, anchor);
 				return entity;
 			}
 		}
 		return null;
 	}
 
-	private static void rememberAnchor(ServerLevel level, EndCrystal crystal) {
+	private static void rememberAnchor(ServerLevel level, StabilityAnchorEntity anchor) {
 		synchronized (KNOWN_ANCHORS) {
-			KNOWN_ANCHORS.computeIfAbsent(level, ignored -> new HashMap<>()).put(crystal.getUUID(), crystal);
+			KNOWN_ANCHORS.computeIfAbsent(level, ignored -> new HashMap<>()).put(anchor.getUUID(), anchor);
 		}
 	}
 
-	private static EndCrystal knownAnchor(ServerLevel level, UUID uuid) {
+	/** Drops a cached reference so a migrated or discarded entity cannot be handed back out. */
+	private static void forgetAnchor(ServerLevel level, UUID uuid) {
 		synchronized (KNOWN_ANCHORS) {
-			Map<UUID, EndCrystal> anchors = KNOWN_ANCHORS.get(level);
+			Map<UUID, StabilityAnchorEntity> anchors = KNOWN_ANCHORS.get(level);
+			if (anchors == null) return;
+			anchors.remove(uuid);
+			if (anchors.isEmpty()) KNOWN_ANCHORS.remove(level);
+		}
+	}
+
+	private static StabilityAnchorEntity knownAnchor(ServerLevel level, UUID uuid) {
+		synchronized (KNOWN_ANCHORS) {
+			Map<UUID, StabilityAnchorEntity> anchors = KNOWN_ANCHORS.get(level);
 			if (anchors == null) return null;
-			EndCrystal crystal = anchors.get(uuid);
-			if (crystal != null && (crystal.isRemoved() || crystal.level() != level)) {
+			StabilityAnchorEntity anchor = anchors.get(uuid);
+			if (anchor != null && (anchor.isRemoved() || anchor.level() != level)) {
 				anchors.remove(uuid);
-				crystal = null;
+				anchor = null;
 			}
 			if (anchors.isEmpty()) KNOWN_ANCHORS.remove(level);
-			return crystal;
+			return anchor;
 		}
 	}
 
@@ -703,17 +747,17 @@ public final class EndBossArenaService {
 			}
 			if (anchors.stream().map(AnchorSlot::index).distinct().count() != ANCHOR_COUNT
 					|| anchors.stream().map(AnchorSlot::position).distinct().count() != ANCHOR_COUNT
-					|| anchors.stream().map(AnchorSlot::crystalUuid).distinct().count() != ANCHOR_COUNT) {
+					|| anchors.stream().map(AnchorSlot::anchorEntityUuid).distinct().count() != ANCHOR_COUNT) {
 				throw new IllegalArgumentException("Prepared anchors must have unique indices, positions and UUIDs");
 			}
 		}
 	}
 
-	public record AnchorSlot(int index, BlockPos position, UUID crystalUuid) {
+	public record AnchorSlot(int index, BlockPos position, UUID anchorEntityUuid) {
 		public AnchorSlot {
 			if (index < 0 || index >= ANCHOR_COUNT) throw new IllegalArgumentException("Anchor index must be 0..9");
 			Objects.requireNonNull(position, "position");
-			Objects.requireNonNull(crystalUuid, "crystalUuid");
+			Objects.requireNonNull(anchorEntityUuid, "anchorEntityUuid");
 			position = position.immutable();
 		}
 	}

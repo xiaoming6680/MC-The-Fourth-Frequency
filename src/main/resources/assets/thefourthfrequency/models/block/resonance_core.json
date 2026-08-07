@@ -1,1 +1,8 @@
-{"parent":"minecraft:block/cube_bottom_top","textures":{"bottom":"minecraft:block/respawn_anchor_bottom","side":"minecraft:block/respawn_anchor_side4","top":"minecraft:block/respawn_anchor_top"}}
+{
+  "parent": "minecraft:block/cube_bottom_top",
+  "textures": {
+    "bottom": "thefourthfrequency:block/resonance_core_bottom",
+    "side": "thefourthfrequency:block/resonance_core_side",
+    "top": "thefourthfrequency:block/resonance_core_top"
+  }
+}

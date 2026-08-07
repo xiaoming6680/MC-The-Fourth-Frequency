@@ -68,8 +68,13 @@ public final class WorldInterfaceEndingClient {
 		// meant one failed run permanently turned the client back into ordinary Minecraft: every
 		// later session came up with the vanilla window title and icon instead of Alpha 1.0.0, even
 		// though the story it belongs to has not finished. A loss is "not yet", not "over".
-		if (endingWasWon() || WindowsEndingMetaTransaction.hasPendingTransaction()
-				|| WorldInterfaceResourcePackLease.presentationRetired()) {
+		//
+		// A pending Windows transaction was not a second reason to retire, it was that same loss
+		// wearing a different hat: only the failure ending writes that manifest, and it deliberately
+		// stays on disk until F8 rolls the desktop back. Testing for it here therefore retired the
+		// presentation on the next launch after every single loss - and because the Alpha pack order
+		// only ever lives in memory, that launch came up in vanilla textures.
+		if (endingWasWon() || WorldInterfaceResourcePackLease.presentationRetired()) {
 			Minecraft client = Minecraft.getInstance();
 			if (client.options != null) {
 				WorldInterfaceResourcePackLease.adoptExistingAutomaticSelection(
@@ -96,6 +101,18 @@ public final class WorldInterfaceEndingClient {
 		if (mode != Mode.IDLE || client == null || completionAck == null) return false;
 		cleanupRuntime(client);
 		if (poem.outcome() == WorldInterfaceProtocol.Outcome.SUCCESS) {
+			// Before the restore, not after it. Restoring the packs is a full resource reload, which
+			// tears the sound engine down and builds it again - and whatever the music director still
+			// wants when it comes back is started from the top. This used to be released in the
+			// completion callback, which runs once the reload has finished, so the reload found the
+			// ending track still owning the score and the victory theme played a second time over a
+			// player who had already finished reading the poem it belonged to.
+			WorldInterfaceVanillaPoemClient.releaseScore();
+			// Handed back to ordinary play here, and followed out of the world later: the run is over,
+			// so whatever is playing when this player finally quits belongs to their ending rather
+			// than to the title screen they land on. The hold waits for the world to come back before
+			// it arms, so the pack restore below is still scored as the gap it is.
+			MusicDirector.noteRunEnded();
 			AlphaLoadSessionController.retirePresentation();
 			mode = Mode.SUCCESS_RESTORING;
 			WorldInterfaceResourcePackLease.restoreAsync(client).whenComplete((restored, failure) ->
@@ -170,7 +187,14 @@ public final class WorldInterfaceEndingClient {
 			replayResetRequested = true;
 			recoveryRequested = true;
 		}, Component.translatable("screen.thefourthfrequency.ending_reset.title"),
-				Component.translatable("screen.thefourthfrequency.ending_reset.body"),
+				// A won run and a lost run reset identically, but they are not the same message. The
+				// failure copy walks through the desktop and resource-pack effects being undone,
+				// because that is what a player who just lost needs reassuring about; a player who
+				// just won is being told what happens to the save they won on.
+				Component.translatable(FailureMenuLockState.outcome()
+						== WorldInterfaceProtocol.Outcome.SUCCESS
+						? "screen.thefourthfrequency.ending_reset.body.success"
+						: "screen.thefourthfrequency.ending_reset.body"),
 				Component.translatable("screen.thefourthfrequency.ending_reset.confirm"),
 				CommonComponents.GUI_CANCEL));
 	}

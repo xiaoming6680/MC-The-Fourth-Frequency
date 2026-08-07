@@ -4,11 +4,13 @@ import com.xm.thefourthfrequency.bootstrap.RuntimeServices;
 import com.xm.thefourthfrequency.config.ConfigManager;
 import com.xm.thefourthfrequency.content.ModItems;
 import com.xm.thefourthfrequency.content.TerminalData;
+import com.xm.thefourthfrequency.pursuit.PursuitProgressPolicy;
 import com.xm.thefourthfrequency.state.NavigationState;
 import com.xm.thefourthfrequency.terminal.TerminalControlPolicy;
 import com.xm.thefourthfrequency.terminal.TerminalResource;
 import com.xm.thefourthfrequency.terminal.TerminalTool;
 import com.xm.thefourthfrequency.terminal.TerminalToolService;
+import com.xm.thefourthfrequency.terminal.TerminalUiLayout;
 import com.xm.thefourthfrequency.world.FrequencyWorldData;
 import com.xm.thefourthfrequency.world.ResourceGuidanceService;
 import com.xm.thefourthfrequency.world.SurvivalProgressService;
@@ -19,6 +21,7 @@ import com.xm.thefourthfrequency.client_ui.EmptySegmentClient;
 import com.xm.thefourthfrequency.client_ui.EmptySegmentOverlayScreen;
 import com.xm.thefourthfrequency.client_ui.PrivateAnomalyClient;
 import com.xm.thefourthfrequency.client_ui.TerminalClientAudio;
+import com.xm.thefourthfrequency.client_ui.TerminalHandheldAnimator;
 import com.xm.thefourthfrequency.client_ui.DebugPanelScreen;
 import com.xm.thefourthfrequency.client_ui.FirstRunNoticeController;
 import com.xm.thefourthfrequency.client_ui.FirstRunNoticeScreen;
@@ -27,6 +30,7 @@ import com.xm.thefourthfrequency.client_ui.AlphaLoadTimeline;
 import com.xm.thefourthfrequency.client_ui.AlphaResourcePackPlan;
 import com.xm.thefourthfrequency.client_ui.DimensionViewDistanceController;
 import com.xm.thefourthfrequency.client_ui.DimensionViewDistancePolicy;
+import com.xm.thefourthfrequency.terminal.AnomalyCatalog;
 import com.xm.thefourthfrequency.terminal.TerminalAnomalyLogService;
 import com.xm.thefourthfrequency.terminal.TerminalSignalService;
 import com.xm.thefourthfrequency.narrative.NarrativeFileCatalog;
@@ -150,6 +154,9 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			openTerminalThroughClientCallback(context);
 			context.waitForScreen(TerminalScreen.class);
 			context.waitTicks(2);
+			captureOnboardingStep(context);
+			completeFirstBootWalkthrough(context);
+			assertFirstTaskCompletionIsShown(context);
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
 				if (!"HOME".equals(terminal.pageForTesting())) {
@@ -253,6 +260,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			openTerminalThroughClientCallback(context);
 			context.waitForScreen(TerminalScreen.class);
 			context.waitTicks(2);
+			assertHandheldPerformanceRaised(context);
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
 				if (terminal.modeForTesting() != TerminalControlPolicy.Mode.SIGNAL.ordinal()
@@ -261,20 +269,38 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				}
 				terminal.onClose();
 			});
+			// Immediately, before the device has come down: the UI is gone and the terminal is still
+			// up in both hands. The one frame in the suite where the whole presentation is visible.
+			context.takeScreenshot("r-terminal-handheld-raised");
 			context.waitTicks(4);
+			assertHandheldPerformanceReturnedToRest(context);
+			// And the rigid shell as the player actually carries it. The state assertions above
+			// cannot see whether the model came out right, or whether it fits in the frame.
+			context.takeScreenshot("r-terminal-handheld-idle");
+			captureHandheldAtViewExtremes(context);
 
 			singleplayer.getServer().runOnServer(server -> {
 				var player = server.getPlayerList().getPlayers().getFirst();
 				var data = FrequencyWorldData.get(server);
 				BlockPos orePosition = player.blockPosition().below(4);
 				server.overworld().setBlockAndUpdate(orePosition, Blocks.IRON_ORE.defaultBlockState());
-				data.updateTerminalRecord(player.getUUID(), record -> {
-					record.putBoolean(TerminalData.MINERAL_SURVEY_PROXIMITY, true);
-					record.putBoolean(TerminalData.MINERAL_SURVEY_NEARBY, true);
-					record.putLong(TerminalData.MINERAL_SURVEY_POSITION, orePosition.asLong());
-					record.putString(TerminalData.MINERAL_SURVEY_DIMENSION,
-							player.level().dimension().identifier().toString());
-				});
+				// Let the real scan write the target. Hand-seeding the MINERAL_SURVEY_* episode keys
+				// used to be enough because the navigation snapshot fell back to them; it does not any
+				// more - a survey hit now writes the navigation state directly, and that is the only
+				// place the mineral target comes from. Seeding half of what production writes left
+				// this asserting against a target that no longer existed.
+				if (!ResourceGuidanceService.probeForTesting(player)) {
+					throw new AssertionError("The deterministic mineral probe was refused before it ran");
+				}
+				// Split from the client assertion below so a failure says which half broke: the survey
+				// not hearing the ore that was just placed, or the result not reaching the screen.
+				var probed = data.terminalRecord(player.getUUID()).orElseThrow();
+				if (!probed.getBooleanOr(TerminalData.TARGET_LOCATED, false)) {
+					throw new AssertionError("The survey did not locate the iron placed under the player"
+							+ " (resource=" + probed.getIntOr(TerminalData.SELECTED_RESOURCE, -1)
+							+ ", unlocked=" + TerminalToolService.availableResourcesMask(probed)
+							+ ", milestones=" + probed.getIntOr(TerminalData.SURVIVAL_MILESTONE_MASK, 0) + ")");
+				}
 			});
 			openTerminalThroughClientCallback(context);
 			context.waitForScreen(TerminalScreen.class);
@@ -284,11 +310,17 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.waitTicks(4);
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
-				if (!terminal.navigationTargetLocatedForTesting()
-						|| terminal.navigationActiveForTesting()
-						|| terminal.guidanceToolForTesting() != TerminalToolService.NO_TOOL) {
-					throw new AssertionError(
-							"Automatic survey detail must show its target without activating the compass needle");
+				// Three separate promises. Reporting them as one said the survey detail was wrong
+				// without saying which half - whether the target was missing, or the needle had been
+				// taken over - and those have nothing to do with each other.
+				if (!terminal.navigationTargetLocatedForTesting()) {
+					throw new AssertionError("Automatic survey detail must show its located target");
+				}
+				if (terminal.navigationActiveForTesting()) {
+					throw new AssertionError("Automatic survey detail must not start navigation on its own");
+				}
+				if (terminal.guidanceToolForTesting() != TerminalToolService.NO_TOOL) {
+					throw new AssertionError("Automatic survey detail must not activate the compass needle");
 				}
 			});
 			context.takeScreenshot("r-terminal-tool-minerals-auto-survey");
@@ -310,7 +342,9 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				var player = server.getPlayerList().getPlayers().getFirst();
 				var data = FrequencyWorldData.get(server);
 				BlockPos orePosition = player.blockPosition().below(4);
-				ResourceGuidanceService.probeForTesting(player);
+				if (!ResourceGuidanceService.probeForTesting(player)) {
+					throw new AssertionError("The deterministic mineral probe was refused before it ran");
+				}
 				com.xm.thefourthfrequency.terminal.TerminalToolService.startGuidance(
 						player, TerminalTool.MINERALS.slot());
 				if (!data.terminalRecord(player.getUUID()).orElseThrow()
@@ -406,7 +440,10 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				var player = server.getPlayerList().getPlayers().getFirst();
 				for (int count = 0; count < 32; count++)
 					TerminalActivityTracker.record(player, TerminalData.MINED_BLOCKS, "mined");
-				player.getInventory().add(new ItemStack(Items.RAW_IRON));
+				// The whole sample count, not one ingot: the fourth band is revealed off the IRON
+				// milestone, and that needs REQUIRED_IRON of them. Written against the constant so the
+				// next time the requirement moves, this moves with it instead of going quietly stale.
+				player.getInventory().add(new ItemStack(Items.RAW_IRON, SurvivalProgressService.REQUIRED_IRON));
 				ResourceGuidanceService.updatePlayer(player);
 			});
 			context.waitTicks(120);
@@ -420,9 +457,16 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.waitForScreen(DebugPanelScreen.class);
 			context.runOnClient(client -> {
 				DebugPanelScreen debug = (DebugPanelScreen) client.screen;
-				if (debug.sectionCountForTesting() != 4 || debug.anomalyCountForTesting() != 16
-						|| debug.fileCountForTesting() != 7 || debug.liveRefreshTicksForTesting() != 10)
-					throw new AssertionError("M debug workbench must live-refresh four sections, sixteen anomalies, and seven files");
+				// Counted against the catalogues rather than against literals. What this test is for is
+				// that the workbench lists the whole of both and refreshes on its own; how many entries
+				// they hold is pinned by AnomalyCatalogTest and TerminalFileStateTest, which is where a
+				// change to either belongs. The literal 16 here had been stale since the catalogue
+				// reached nineteen, so this assertion was failing for a reason it was not about.
+				if (debug.sectionCountForTesting() != 4
+						|| debug.anomalyCountForTesting() != AnomalyCatalog.definitions().size()
+						|| debug.fileCountForTesting() != NarrativeFileCatalog.definitions().size()
+						|| debug.liveRefreshTicksForTesting() != 10)
+					throw new AssertionError("M debug workbench must live-refresh four sections, every anomaly and every file");
 				debug.triggerAnomalyForTesting("local_rule_collapse");
 			});
 			context.waitFor(client -> client.screen == null, 100);
@@ -436,6 +480,19 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 					throw new AssertionError("Rejected anomaly request must keep the menu open and explain the active conflict");
 			});
 			context.takeScreenshot("r74-debug-panel-specific-anomaly-failure");
+			// The anomaly page is the only one with a toolbar that reflows, and HIM lives on it.
+			// Nothing here can assert that the row looks right - this is the frame a human checks.
+			context.runOnClient(client -> ((DebugPanelScreen) client.screen)
+					.selectSectionForTesting(DebugPanelScreen.anomalySectionIndexForTesting()));
+			context.waitTicks(4);
+			context.runOnClient(client -> {
+				DebugPanelScreen debug = (DebugPanelScreen) client.screen;
+				if (!debug.toolbarActionsForTesting().contains("him_spawn")) {
+					throw new AssertionError("The anomaly toolbar lost its HIM entry: "
+							+ debug.toolbarActionsForTesting());
+				}
+			});
+			context.takeScreenshot("r-debug-panel-anomaly-toolbar-him");
 			context.runOnClient(client -> client.screen.onClose());
 			context.waitTicks(4);
 			singleplayer.getServer().runOnServer(server -> {
@@ -507,9 +564,6 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				}
 			});
 			context.takeScreenshot("m4-candidate-cards-collapsed");
-			context.runOnClient(client -> ((TerminalScreen) client.screen).expandFirstSignalCardForTesting());
-			context.waitTicks(2);
-			context.takeScreenshot("m4-candidate-card-coordinates-expanded");
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
 				terminal.backFromToolForTesting();
@@ -597,8 +651,16 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.waitTicks(5);
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
-				if (Math.abs(terminal.waveformMorphTargetForTesting() - 0.42D) > 0.0001D) {
-					throw new AssertionError("Stage-two locked carrier did not mix the ECG waveform into the receiver trace");
+				// Two statements, because they fail for unrelated reasons: the server not putting the
+				// panel at stage one, and the stage-one panel not mixing the ECG into the carrier.
+				if (terminal.visualStageForTesting() != 1) {
+					throw new AssertionError("The formal fourth band did not reach the client as the stage-one panel: stage="
+							+ terminal.visualStageForTesting());
+				}
+				if (Math.abs(terminal.waveformMorphTargetForTesting()
+						- TerminalScreen.STAGE_ONE_WAVEFORM_MORPH) > 0.0001D) {
+					throw new AssertionError("Stage-one carrier did not mix the ECG waveform into the receiver trace: "
+							+ terminal.waveformMorphTargetForTesting());
 				}
 			});
 			context.takeScreenshot("m4-formal-fourth-band-cyan");
@@ -754,11 +816,20 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			context.runOnClient(client -> {
 				TerminalScreen terminal = (TerminalScreen) client.screen;
 				terminal.openLogDirectoryForTesting();
+				// Counted against the catalogue and the layout rather than against literals: the
+				// fixture above discovers every file there is, so what is being claimed is that the
+				// list shows all of them, that the highlight reaches the last one, and that the
+				// column scrolled exactly as far as it had to.
+				int files = NarrativeFileCatalog.definitions().size();
 				terminal.moveFileSelectionForTesting(1);
-				terminal.moveFileSelectionForTesting(7);
-				if (terminal.fileCountForTesting() != 7 || terminal.selectedFileForTesting() != 6
-						|| terminal.fileScrollRowForTesting() != 1) {
-					throw new AssertionError("The FILES list did not expose all 7 consolidated file records in one column");
+				terminal.moveFileSelectionForTesting(files);
+				if (terminal.fileCountForTesting() != files
+						|| terminal.selectedFileForTesting() != files - 1
+						|| terminal.fileScrollRowForTesting() != TerminalUiLayout.fileMaxScrollRow(files)) {
+					throw new AssertionError("The FILES list did not expose all " + files
+							+ " consolidated file records in one column: count=" + terminal.fileCountForTesting()
+							+ ", selected=" + terminal.selectedFileForTesting()
+							+ ", scrollRow=" + terminal.fileScrollRowForTesting());
 				}
 				int fragmentFiles = 0;
 				for (int index = 0; index < terminal.fileCountForTesting(); index++) {
@@ -782,6 +853,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 						record.getStringOr(TerminalData.WORLD_ID, ""),
 						record.getStringOr(TerminalData.TERMINAL_ID, ""),
 						record.getStringOr(TerminalData.PERSONALITY_TEMPLATE, ""),
+						record.getIntOr(TerminalData.BAND_STAGE, 0),
 						record.getIntOr(TerminalData.MINED_BLOCKS, 0),
 						record.getIntOr(TerminalData.PLACED_BLOCKS, 0),
 						record.getIntOr(TerminalData.CRAFTED_ITEMS, 0),
@@ -808,8 +880,8 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 				throw new AssertionError("Alpha resource controller stayed active on the main menu");
 			}
 			client.updateTitle();
-			if (!AlphaLoadSessionController.appliedWindowTitleForTesting().contains("Alpha 1.0.0")) {
-				throw new AssertionError("Vanilla title refresh replaced the final Alpha 1.0.0 window title");
+			if (!AlphaLoadSessionController.appliedWindowTitleForTesting().contains("Minecraft 1.0.0")) {
+				throw new AssertionError("Vanilla title refresh replaced the final Minecraft 1.0.0 window title");
 			}
 			if (!"Minecraft 1.0.0".equals(AlphaLoadSessionController
 					.menuVersionText("Minecraft 1.21.11"))) {
@@ -860,7 +932,13 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 						|| !record.getStringOr(TerminalData.TERMINAL_ID, "").equals(terminalProof.terminalId())
 						|| !record.getStringOr(TerminalData.PERSONALITY_TEMPLATE, "").equals(terminalProof.personality())
 						|| !record.getBooleanOr(TerminalData.BOUND, false)
-						|| record.getIntOr(TerminalData.BAND_STAGE, 0) != 3
+						// Read back against the stage this run actually reached, not a literal. The
+						// literal was 3, which nothing has written since the old four-phase ending was
+						// removed - the only band stage this walkthrough reaches is the one the M4
+						// fixture sets. What is under test here is that the stage survives a restart,
+						// and that survives the ladder changing shape again.
+						|| record.getIntOr(TerminalData.BAND_STAGE, 0) != terminalProof.bandStage()
+						|| terminalProof.bandStage() <= 0
 						|| !record.getBooleanOr(TerminalData.SECOND_CACHE_UNLOCKED, false)
 						|| record.getIntOr(TerminalData.MINED_BLOCKS, 0) != terminalProof.mined()
 						|| record.getIntOr(TerminalData.PLACED_BLOCKS, 0) != terminalProof.placed()
@@ -1049,11 +1127,14 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 		context.runOnClient(client -> {
 			if (client.level != null || client.player != null)
 				throw new AssertionError("Acknowledging the notice did not return to the pre-world title page");
-			if (!Files.isRegularFile(ConfigManager.configPath()))
-				throw new AssertionError("First-run acknowledgement was not persisted to the unified config");
+			// Round-trip through the disk rather than checking that some file exists. The
+			// acknowledgement is kept in its own marker beside the unified config, not inside it -
+			// ModConfig.ClientState carries no first-run field - so asserting on thefourthfrequency.json
+			// was testing an unrelated file. It only ever passed because the run directory was reused
+			// between runs and already had one; on a genuinely clean run directory it failed.
 			FirstRunNoticeController.reloadFromDiskForTesting();
 			if (!FirstRunNoticeController.acknowledgedForTesting())
-				throw new AssertionError("Persisted first-run acknowledgement could not be reloaded");
+				throw new AssertionError("First-run acknowledgement did not survive a reload from disk");
 		});
 	}
 
@@ -1090,6 +1171,174 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			else client.setScreen(null);
 		});
 		context.waitTicks(2);
+	}
+
+	/**
+	 * Walks the first-boot walkthrough to its end.
+	 *
+	 * <p>A brand new save owes it, and while it runs the terminal refuses every page change except
+	 * the one it is pointing at - so without this, every later page assertion in this file would be
+	 * looking at the home page instead. It also serves as this suite's coverage of the walkthrough:
+	 * that it hands the terminal back, and that it does so by being completed rather than by timing
+	 * out.</p>
+	 *
+	 * <p>Polls instead of waiting a fixed number of ticks, because the self test is timed in real
+	 * milliseconds and a tick count is not a reliable way to wait it out.</p>
+	 */
+	/**
+	 * Waits out the self test and captures the first step that points at a tab.
+	 *
+	 * <p>Covers the brief - the one line saying what the tab being pointed at is actually for. The
+	 * walkthrough is the only place it is ever drawn, and {@link #completeFirstBootWalkthrough}
+	 * clicks through the four steps as fast as it can poll, so without stopping here no frame of it
+	 * would ever be recorded.</p>
+	 */
+	private static void captureOnboardingStep(ClientGameTestContext context) {
+		for (int attempt = 0; attempt < 100; attempt++) {
+			boolean[] pointing = {false};
+			context.runOnClient(client -> {
+				if (client.screen instanceof TerminalScreen terminal) {
+					pointing[0] = terminal.onboardingLocksExitForTesting()
+							&& terminal.onboardingTargetPageForTesting() >= 0;
+				}
+			});
+			if (pointing[0]) {
+				context.takeScreenshot("r-terminal-onboarding-step-brief");
+				return;
+			}
+			context.waitTicks(2);
+		}
+		throw new AssertionError("The walkthrough never reached a step that points at a tab");
+	}
+
+	/**
+	 * The finished task is still on the card when the walkthrough lets go.
+	 *
+	 * <p>This is the one moment in the whole game where a task completes with the terminal already
+	 * open, and it is the moment the reward arrives without the player pressing anything. The
+	 * snapshot carrying the delivery already names the next task, so without the hold the card
+	 * showed an empty bar for an objective the player had not read while six bread appeared in their
+	 * inventory unexplained.</p>
+	 *
+	 * <p>Polled rather than checked once: the fourth visit goes to the server and the reward comes
+	 * back, so the hold starts a round trip after the walkthrough releases.</p>
+	 */
+	private static void assertFirstTaskCompletionIsShown(ClientGameTestContext context) {
+		for (int attempt = 0; attempt < 40; attempt++) {
+			boolean[] held = {false};
+			context.runOnClient(client -> {
+				if (client.screen instanceof TerminalScreen terminal) {
+					held[0] = terminal.taskCompletionHeldForTesting();
+				}
+			});
+			if (held[0]) {
+				context.takeScreenshot("r-terminal-first-task-completion-hold");
+				return;
+			}
+			context.waitTicks(1);
+		}
+		throw new AssertionError("The finished first task was never shown on the home card");
+	}
+
+	private static void completeFirstBootWalkthrough(ClientGameTestContext context) {
+		for (int attempt = 0; attempt < 80; attempt++) {
+			boolean[] held = {false};
+			context.runOnClient(client -> {
+				if (!(client.screen instanceof TerminalScreen terminal)) return;
+				held[0] = terminal.onboardingLocksExitForTesting();
+				int target = terminal.onboardingTargetPageForTesting();
+				// -1 during the self test, which takes no input at all - just wait it out.
+				if (target >= 0) terminal.selectPageForTesting(target);
+			});
+			if (!held[0]) return;
+			context.waitTicks(4);
+		}
+		throw new AssertionError("The first-boot walkthrough never released the terminal");
+	}
+
+	/**
+	 * The device is up against the lens and the camera has leaned in.
+	 *
+	 * <p>The screen being open is not evidence that the performance ran: the animator is what
+	 * creates the screen, so a broken transform or a mis-registered mixin would still produce a
+	 * terminal UI over an item that never moved. This asserts the two things the player would
+	 * actually notice going missing.</p>
+	 */
+	private static void assertHandheldPerformanceRaised(ClientGameTestContext context) {
+		context.runOnClient(client -> {
+			if (TerminalHandheldAnimator.state() != TerminalHandheldAnimator.State.OPEN) {
+				throw new AssertionError("The terminal screen opened without the device finishing its rise: "
+						+ TerminalHandheldAnimator.state());
+			}
+			if (TerminalHandheldAnimator.openness() < 1.0D) {
+				throw new AssertionError("An open terminal must be fully raised");
+			}
+			if (TerminalHandheldAnimator.fovScale() >= 1.0F) {
+				throw new AssertionError("The camera never leaned in toward the CRT");
+			}
+		});
+	}
+
+	/**
+	 * Everything the performance added is gone.
+	 *
+	 * <p>Polls rather than waiting a fixed count: the travel is timed in milliseconds, so how many
+	 * ticks it spans depends on the frame rate the runner happens to get. A stuck field of view is
+	 * the failure that matters most here - it would follow the player around the world.</p>
+	 */
+	private static void assertHandheldPerformanceReturnedToRest(ClientGameTestContext context) {
+		for (int attempt = 0; attempt < 40; attempt++) {
+			boolean[] settled = {false};
+			context.runOnClient(client -> settled[0] =
+					TerminalHandheldAnimator.state() == TerminalHandheldAnimator.State.IDLE);
+			if (settled[0]) {
+				context.runOnClient(client -> {
+					if (TerminalHandheldAnimator.fovScale() != 1.0F) {
+						throw new AssertionError("A closed terminal left the camera zoomed: "
+								+ TerminalHandheldAnimator.fovScale());
+					}
+					if (TerminalHandheldAnimator.openness() != 0.0D) {
+						throw new AssertionError("A closed terminal stayed raised");
+					}
+				});
+				return;
+			}
+			context.waitTicks(2);
+		}
+		throw new AssertionError("The terminal never came back down after its screen closed");
+	}
+
+	/**
+	 * Screenshots of the carried device at the extremes of the view angle.
+	 *
+	 * <p>Evidence for manual review, not an assertion. First-person hands are drawn in camera
+	 * space, so turning should not move the terminal - but they are also drawn against the world's
+	 * depth buffer, and this device is far larger and far more central than the item vanilla
+	 * expects there. Straight up and straight down are where that would show.</p>
+	 *
+	 * <p>Deliberately not asserted: the angles are set client-side and the server corrects them
+	 * back within a tick or two, so what these frames caught is not reliable enough to fail a
+	 * build on. They exist so a human can look.</p>
+	 */
+	private static void captureHandheldAtViewExtremes(ClientGameTestContext context) {
+		for (var view : new float[][]{{-90.0F, 0.0F}, {90.0F, 0.0F}, {0.0F, 90.0F}}) {
+			context.runOnClient(client -> {
+				client.player.setXRot(view[0]);
+				client.player.setYRot(view[1]);
+				client.player.xRotO = view[0];
+				client.player.yRotO = view[1];
+			});
+			context.waitTicks(3);
+			context.takeScreenshot("r-terminal-handheld-view-"
+					+ (int) view[0] + "-" + (int) view[1]);
+		}
+		context.runOnClient(client -> {
+			client.player.setXRot(0.0F);
+			client.player.setYRot(0.0F);
+			client.player.xRotO = 0.0F;
+			client.player.yRotO = 0.0F;
+		});
+		context.waitTicks(3);
 	}
 
 	private static void setTerminalView(ClientGameTestContext context, int mode, int tuning, int cache) {
@@ -1222,6 +1471,22 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			record.putInt(TerminalData.BAND_STAGE, Math.max(2, record.getIntOr(TerminalData.BAND_STAGE, 0)));
 			record.putInt(TerminalData.PLOT_STAGE, Math.max(3, record.getIntOr(TerminalData.PLOT_STAGE, 1)));
 			record.putBoolean(TerminalData.BOUND, true);
+			// M4 is meant to be looked at through the stage-one panel: the cyan chrome and the
+			// carrier trace with the ECG mixed in. That used to follow from PLOT_STAGE above, and
+			// PLOT_STAGE is why this line reads as it does; the panel stage moved onto the pursuit
+			// record and this fixture stayed where it was, so every M4 frame below was being taken
+			// at stage zero. Written in the key the authority actually reads, and checked against
+			// the policy right after so the next time the gate moves it fails here, at the setup,
+			// instead of two hundred lines later as an unexplained waveform number.
+			record.putInt(TerminalData.PURSUIT_RESOLVED_CHASES, 1);
+			record.putInt(TerminalData.PURSUIT_ENCOUNTERED_CHASES, 1);
+			int stage = PursuitProgressPolicy.terminalVisualStage(
+					record.getIntOr(TerminalData.PURSUIT_RESOLVED_CHASES, 0),
+					record.getIntOr(TerminalData.PURSUIT_ALLOWED_FORM, 0),
+					record.getIntOr(TerminalData.ANOMALY_TIER, 0));
+			if (stage != 1) {
+				throw new AssertionError("M4 fixture no longer produces the stage-one terminal panel: stage=" + stage);
+			}
 		});
 		BlockPos origin = player.blockPosition();
 		List<FragmentInvestigationService.Candidate> candidates = List.of(
@@ -1358,11 +1623,11 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 					|| !AlphaLoadSessionController.javaIconAppliedForTesting()) {
 				throw new AssertionError("Relaunch did not restore its hidden resource stack and Java icon");
 			}
-			if (!"Minecraft Alpha 1.0.0".equals(
+			if (!"Minecraft 1.0.0".equals(
 					AlphaLoadSessionController.appliedWindowTitleForTesting())
 					|| !"Minecraft 1.0.0".equals(AlphaLoadSessionController
 					.menuVersionText("Minecraft 1.21.11"))) {
-				throw new AssertionError("Relaunch title screen did not retain the Alpha 1.0.0 identity");
+				throw new AssertionError("Relaunch title screen did not retain the Minecraft 1.0.0 identity");
 			}
 			List<String> selected = client.getResourcePackRepository().getSelectedPacks().stream()
 					.map(net.minecraft.server.packs.repository.Pack::getId).toList();
@@ -1405,7 +1670,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 		context.waitForScreen(TitleScreen.class);
 		context.runOnClient(client -> {
 			client.updateTitle();
-			if (!"Minecraft Alpha 1.0.0".equals(
+			if (!"Minecraft 1.0.0".equals(
 					AlphaLoadSessionController.appliedWindowTitleForTesting())
 					|| AlphaLoadSessionController.corruptionPlayCountForTesting() != 0) {
 				throw new AssertionError("Leaving the relaunch world lost the persistent Alpha identity");
@@ -1472,8 +1737,8 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			}
 			if (AlphaLoadSessionController.versionStageForTesting()
 					!= AlphaLoadTimeline.finalVersionStage()
-					|| !AlphaLoadSessionController.appliedWindowTitleForTesting().contains("Alpha 1.0.0")) {
-				throw new AssertionError("Window title did not finish its visible downgrade at Alpha 1.0.0: "
+					|| !AlphaLoadSessionController.appliedWindowTitleForTesting().contains("Minecraft 1.0.0")) {
+				throw new AssertionError("Window title did not finish its visible downgrade at Minecraft 1.0.0: "
 						+ AlphaLoadSessionController.appliedWindowTitleForTesting());
 			}
 			if (AlphaLoadSessionController.lastLoadingScreenTicksForTesting()
@@ -1528,6 +1793,7 @@ public final class M0ClientGameTest implements FabricClientGameTest {
 			String worldId,
 			String terminalId,
 			String personality,
+			int bandStage,
 			int mined,
 			int placed,
 			int crafted,

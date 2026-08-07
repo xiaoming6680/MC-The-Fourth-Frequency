@@ -49,6 +49,24 @@ public final class TerminalClientAudio {
 		playContact(ModSounds.TERMINAL_DETENT, 0.98F, 0.26F);
 	}
 
+	/**
+	 * One self-test line landing.
+	 *
+	 * <p>The pitch climbs a little with each check, which is what turns six identical clicks into a
+	 * sequence going somewhere. Small steps: the point is that the machine is working through a
+	 * list, not that it is playing a tune.
+	 *
+	 * @param line zero-based index of the line that just appeared
+	 */
+	public static void bootLine(int line) {
+		playContact(ModSounds.TERMINAL_BOOT_LINE, 0.86F + 0.045F * Math.clamp(line, 0, 5), 0.40F);
+	}
+
+	/** The last check. It answers differently, because it is the one that says the device is up. */
+	public static void bootComplete() {
+		playContact(ModSounds.TERMINAL_BOOT_COMPLETE, 1.0F, 0.46F);
+	}
+
 	public static void tuningInput() {
 		Minecraft client = Minecraft.getInstance();
 		if (client.level == null) return;
@@ -86,6 +104,18 @@ public final class TerminalClientAudio {
 
 	public static void fault() {
 		play(ModSounds.TERMINAL_FAULT, 0.64F, 0.42F);
+	}
+
+	/**
+	 * The sky monitor admitting it has lost what it was measuring.
+	 *
+	 * <p>The carrier-loss cue rather than {@link #fault()} on purpose. A fault is the terminal
+	 * having a problem with itself; a lost carrier is the thing it was listening to going away.
+	 * On the weather page during a sky anomaly the second one is the true statement, and the
+	 * player has already been taught what that sample means by the anomaly system itself.</p>
+	 */
+	public static void skyCarrierLost() {
+		play(ModSounds.SIGNAL_CARRIER_LOST, 0.92F, 0.38F);
 	}
 
 	/**

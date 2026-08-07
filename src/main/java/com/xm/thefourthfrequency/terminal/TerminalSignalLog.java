@@ -143,10 +143,27 @@ public final class TerminalSignalLog {
 		}
 	}
 
+	/**
+	 * Unread entries the records page would actually list.
+	 *
+	 * <p>This used to count the raw log, which meant the tab wore its unread marker - and the
+	 * attention reminder fired - for entries that page never shows anyone: weather and dimension
+	 * telemetry, resource monitoring, fragment markers. A player who opened Records because the tab
+	 * said something was new found the same list they left, which teaches them the marker is noise.
+	 * {@link TerminalRecordPolicy#visibleInRecords} is the page's own rule, so counting through it is
+	 * what makes "there is something new" true.</p>
+	 *
+	 * <p>Marking read stays deliberately broader - {@link #markAllRead} clears the whole log - so the
+	 * count can never be left non-zero by an entry the player had no way to see.</p>
+	 */
 	private static int unreadCount(ListTag events) {
 		int count = 0;
-		for (int index = 0; index < events.size(); index++)
-			if (events.getCompoundOrEmpty(index).getBooleanOr("unread", false)) count++;
+		for (int index = 0; index < events.size(); index++) {
+			CompoundTag entry = events.getCompoundOrEmpty(index);
+			if (!entry.getBooleanOr("unread", false)) continue;
+			if (!TerminalRecordPolicy.visibleInRecords(entry.getStringOr("type", ""))) continue;
+			count++;
+		}
 		return count;
 	}
 

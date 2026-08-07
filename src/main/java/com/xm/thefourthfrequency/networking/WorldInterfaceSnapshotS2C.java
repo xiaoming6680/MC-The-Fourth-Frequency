@@ -29,12 +29,13 @@ public record WorldInterfaceSnapshotS2C(
 		long serverTick,
 		int gatewayStateId,
 		List<BlockPos> gatewayPositions,
+		List<BlockPos> anchorPositions,
 		int outcomeId,
 		float failureProgress
 ) implements CustomPacketPayload {
 	public static final int PROTOCOL_VERSION = WorldInterfaceProtocol.VERSION;
 	public static final Type<WorldInterfaceSnapshotS2C> TYPE = new Type<>(Identifier.fromNamespaceAndPath(
-			TheFourthFrequency.MOD_ID, "world_interface_snapshot_v1"));
+			TheFourthFrequency.MOD_ID, "world_interface_snapshot_v2"));
 	public static final StreamCodec<RegistryFriendlyByteBuf, WorldInterfaceSnapshotS2C> CODEC = StreamCodec.of(
 			WorldInterfaceSnapshotS2C::write, WorldInterfaceSnapshotS2C::read);
 
@@ -59,6 +60,14 @@ public record WorldInterfaceSnapshotS2C(
 		WorldInterfaceProtocol.GatewayState.fromWireId(gatewayStateId);
 		gatewayPositions = WorldInterfaceProtocol.copyBounded(gatewayPositions,
 				WorldInterfaceProtocol.MAX_GATEWAYS, "gateway positions");
+		anchorPositions = WorldInterfaceProtocol.copyBounded(anchorPositions,
+				WorldInterfaceProtocol.MAX_ANCHORS, "anchor positions");
+		if (anchorPositions.size() != WorldInterfaceProtocol.MAX_ANCHORS) {
+			throw new IllegalArgumentException("Encounter snapshots require exactly ten anchor positions");
+		}
+		if (anchorPositions.stream().distinct().count() != WorldInterfaceProtocol.MAX_ANCHORS) {
+			throw new IllegalArgumentException("Encounter snapshots require ten unique anchor positions");
+		}
 		WorldInterfaceProtocol.Outcome.fromWireId(outcomeId);
 		if (!Float.isFinite(failureProgress) || failureProgress < 0.0F || failureProgress > 1.0F) {
 			throw new IllegalArgumentException("Failure progress must be within [0, 1]");
@@ -89,6 +98,8 @@ public record WorldInterfaceSnapshotS2C(
 		buffer.writeVarInt(value.gatewayStateId);
 		buffer.writeVarInt(value.gatewayPositions.size());
 		for (BlockPos gatewayPosition : value.gatewayPositions) buffer.writeBlockPos(gatewayPosition);
+		buffer.writeVarInt(value.anchorPositions.size());
+		for (BlockPos anchorPosition : value.anchorPositions) buffer.writeBlockPos(anchorPosition);
 		buffer.writeVarInt(value.outcomeId);
 		buffer.writeFloat(value.failureProgress);
 	}
@@ -112,9 +123,14 @@ public record WorldInterfaceSnapshotS2C(
 				WorldInterfaceProtocol.MAX_GATEWAYS, "gateway positions");
 		List<BlockPos> gatewayPositions = new ArrayList<>(gatewayCount);
 		for (int index = 0; index < gatewayCount; index++) gatewayPositions.add(buffer.readBlockPos());
+		int anchorCount = WorldInterfaceProtocol.readBoundedSize(buffer,
+				WorldInterfaceProtocol.MAX_ANCHORS, "anchor positions");
+		List<BlockPos> anchorPositions = new ArrayList<>(anchorCount);
+		for (int index = 0; index < anchorCount; index++) anchorPositions.add(buffer.readBlockPos());
 		return new WorldInterfaceSnapshotS2C(protocolVersion, encounterId, sequence, stageId, formId,
 				bossId, center, maxHealth, currentHealth, anchorAliveMask, elapsedTicks,
-				timerPaused, serverTick, gatewayStateId, gatewayPositions, buffer.readVarInt(), buffer.readFloat());
+				timerPaused, serverTick, gatewayStateId, gatewayPositions, anchorPositions,
+				buffer.readVarInt(), buffer.readFloat());
 	}
 
 	@Override

@@ -149,6 +149,19 @@ public record TerminalToolSnapshot(TerminalToolSnapshotPayload payload) {
 	}
 
 	public Component weatherLine() {
+		return weatherLine(false);
+	}
+
+	/**
+	 * The tool's own reading, or dashes while a sky anomaly is drowning the instrument.
+	 *
+	 * <p>{@code lost} collapses the whole line rather than skewing the minutes inside it. The
+	 * countdown to nightfall is something players walk home on; a plausible wrong number is a lie
+	 * they can act on, while a line that visibly refuses to resolve is the instrument admitting it
+	 * cannot see. Only the second one is honest, and it comes back correct on its own.</p>
+	 */
+	public Component weatherLine(boolean lost) {
+		if (lost) return Component.translatable("terminal.thefourthfrequency.tool.weather.lost");
 		String weather = switch (Math.clamp(payload.weather(), 0, 2)) {
 			case 1 -> "rain";
 			case 2 -> "thunder";

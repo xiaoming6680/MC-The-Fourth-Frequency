@@ -5,13 +5,15 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import java.util.List;
 import java.util.Objects;
 
-/** Stable wire identifiers and shared bounds for the v1 world-interface protocol. */
+/** Stable wire identifiers and shared bounds for the v2 world-interface protocol. */
 public final class WorldInterfaceProtocol {
-	public static final int VERSION = 1;
+	public static final int VERSION = 2;
 	public static final int MAX_PARTICIPANTS = 8;
 	public static final int MAX_GATEWAYS = 20;
+	public static final int MAX_ANCHORS = 10;
 	public static final int ANCHOR_MASK = 0x03FF;
-	public static final long COLLAPSE_DURATION_TICKS = 7_200L;
+	/** Must equal {@code WorldInterfacePolicy.COLLAPSE_DURATION_TICKS}; the HUD clock reads this one. */
+	public static final long COLLAPSE_DURATION_TICKS = 12_000L;
 	/**
 	 * Ticks the laser spends locked on a player before the sweep starts. Shared so the client beam
 	 * can widen against the exact same clock the server damages on, instead of guessing from the
@@ -24,7 +26,7 @@ public final class WorldInterfaceProtocol {
 	 * was a sub-third-of-a-second flash that players read as the telegraph simply vanishing. The
 	 * beam now holds before it decays; see WorldInterfaceBeamBatchRenderer#extractLaser.
 	 */
-	public static final int LASER_AFTERGLOW_TICKS = 16;
+	public static final int LASER_AFTERGLOW_TICKS = 24;
 	/** Ticks the laser keeps sweeping after the lock resolves. */
 	public static final int LASER_SWEEP_TICKS = 40;
 	/**
@@ -68,7 +70,7 @@ public final class WorldInterfaceProtocol {
 	 * carries it; the fall is the hit, and a hit that takes a quarter of a second has weight the
 	 * same distance stretched over six times as long does not.</p>
 	 */
-	public static final int SKY_LANCE_FALL_TICKS = 5;
+	public static final int SKY_LANCE_FALL_TICKS = 3;
 	/** Ticks the tendrils rear up before the first lash lands. */
 	public static final int TENDRIL_WARNING_TICKS = 45;
 	/**
@@ -257,6 +259,22 @@ public final class WorldInterfaceProtocol {
 		public static BossAction fromWireId(int wireId) { return decode(values(), wireId, "boss action"); }
 	}
 
+	/**
+	 * How hard a detonation hits the camera. Mirrors {@code ScreenShakePolicy.Grade} one for one, and
+	 * exists separately only so the wire has stable ids that a policy rename cannot change.
+	 */
+	public enum BlastGrade implements WireValue {
+		LIGHT(0),
+		MEDIUM(1),
+		HEAVY(2),
+		CATACLYSM(3);
+
+		private final int wireId;
+		BlastGrade(int wireId) { this.wireId = wireId; }
+		@Override public int wireId() { return wireId; }
+		public static BlastGrade fromWireId(int wireId) { return decode(values(), wireId, "blast grade"); }
+	}
+
 	public enum PoemCompletion implements WireValue {
 		READ(1),
 		SKIPPED(2);
@@ -272,6 +290,37 @@ public final class WorldInterfaceProtocol {
 	 * do not lock. Shared so the screen treatment, the HUD warning and the server's own particle and
 	 * audio tell all count down the same window instead of three separate literals drifting apart.
 	 */
+	/**
+	 * Fraction of a lock window after which the lock reads as committed rather than as searching.
+	 *
+	 * <p>Lives beside {@link #lockWarningTicks} for the same reason that does: the lock tone going
+	 * solid and the mark on the countdown bar are two ways of saying one thing, and the instant they
+	 * are two literals they start describing different instants. A player who has learned that the
+	 * buzz means "now" has to be able to see "now" on the bar.</p>
+	 */
+	public static final float LOCK_COMMIT_FRACTION = 0.7F;
+
+	/**
+	 * Whether a telegraphed action is a targeting lock rather than a windup on a dispossession.
+	 *
+	 * <p>Both kinds count down on {@link #lockWarningTicks}, and to the HUD they look alike, but
+	 * they are not asking the player for the same thing. A laser, an orb, a lance, a grab and a
+	 * lash are all ordnance with the player's position in them: the window exists so they can stop
+	 * being where it is going, and every one of their HUD labels is an instruction to move. The
+	 * weapon charge and the hotbar purge take something instead - there is nowhere to move to, the
+	 * window is only notice, and their labels say what is about to be gone rather than where to go.
+	 *
+	 * <p>So they must not share a warning. The missile-lock cadence promises "you can still get out
+	 * of this", and spending it on something nobody can get out of teaches the player to stop
+	 * believing it on the occasions that matter.</p>
+	 */
+	public static boolean isTargetingLock(BossAction action) {
+		return action != null && switch (action) {
+			case LASER_SWEEP, ENERGY_ORB, SKY_LANCE, GRAB_THROW, TENDRIL_LASH -> true;
+			default -> false;
+		};
+	}
+
 	public static int lockWarningTicks(BossAction action) {
 		return action == null ? 0 : switch (action) {
 			case LASER_SWEEP -> LASER_WARNING_TICKS;

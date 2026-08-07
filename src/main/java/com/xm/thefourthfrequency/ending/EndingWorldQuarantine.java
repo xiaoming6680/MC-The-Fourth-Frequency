@@ -4,6 +4,7 @@ import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -46,6 +47,29 @@ public final class EndingWorldQuarantine {
 
 	public static boolean isQuarantined(String levelId) {
 		return markerPath(levelId).map(Files::isRegularFile).orElse(false);
+	}
+
+	/**
+	 * The {@code Outcome} name recorded when the save was quarantined, if it can still be read.
+	 *
+	 * <p>The world list has to name a quarantined save differently depending on how it ended - a run
+	 * that was lost is presented as damaged, a run that was won is presented as sealed - and by the
+	 * time that list is drawn the encounter is long over and the client-side lock may belong to a
+	 * different save entirely. The marker is the only thing that still knows, so it is the thing
+	 * asked. A marker written by an older build has no outcome and simply reads as absent, which
+	 * leaves those saves on the damaged wording they already had.</p>
+	 */
+	public static Optional<String> outcome(String levelId) {
+		Optional<Path> marker = markerPath(levelId).filter(Files::isRegularFile);
+		if (marker.isEmpty()) return Optional.empty();
+		Properties properties = new Properties();
+		try (InputStream input = Files.newInputStream(marker.get())) {
+			properties.load(input);
+		} catch (IOException | IllegalArgumentException exception) {
+			return Optional.empty();
+		}
+		String recorded = properties.getProperty("outcome", "");
+		return recorded.isBlank() ? Optional.empty() : Optional.of(recorded);
 	}
 
 	public static Optional<Path> markerPath(String levelId) {

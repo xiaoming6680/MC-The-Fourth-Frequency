@@ -139,6 +139,20 @@ public final class SurvivalReworkGameTests implements CustomTestMethodInvoker {
 				TerminalTaskService.ClaimResult.STALE, "A repeated packet cannot claim the next task");
 		helper.assertValueEqual(player.getInventory().countItem(Items.BREAD) - breadBefore, 6,
 				"The repeated claim never duplicates the reward");
+
+		// A claim packet from an older client delivers nothing of its own. While it did, one press
+		// paid the named task and then ran the catch-up loop over every other finished task, so a
+		// player who had quietly completed several came back to a burst of rewards at once.
+		int axeBefore = player.getInventory().countItem(Items.STONE_AXE);
+		data.updateTerminalRecord(player.getUUID(), record ->
+				record.putInt(TerminalData.WOOD_MINED_COUNT, SurvivalProgressService.REQUIRED_WOOD));
+		helper.assertValueEqual(TerminalTaskService.claim(player, ready.index()),
+				TerminalTaskService.ClaimResult.STALE,
+				"A stale claim stays stale even with a later task finished");
+		helper.assertValueEqual(player.getInventory().countItem(Items.STONE_AXE) - axeBefore, 1,
+				"The catch-up pass delivers each finished task exactly once");
+		helper.assertValueEqual(player.getInventory().countItem(Items.BREAD) - breadBefore, 6,
+				"Catching up on a later task never re-pays an earlier one");
 		helper.succeed();
 	}
 

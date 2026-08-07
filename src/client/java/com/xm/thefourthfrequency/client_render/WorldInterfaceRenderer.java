@@ -4,7 +4,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.xm.thefourthfrequency.bootstrap.TheFourthFrequency;
 import com.xm.thefourthfrequency.client_ui.WorldInterfaceClientState;
 import com.xm.thefourthfrequency.client_ui.WorldInterfacePresentationController;
-import com.xm.thefourthfrequency.entity.WorldInterfaceAnatomy;
+import com.xm.thefourthfrequency.entity.WorldInterfaceRig;
 import com.xm.thefourthfrequency.entity.WorldInterfaceEntity;
 import com.xm.thefourthfrequency.networking.WorldInterfaceSnapshotS2C;
 import net.minecraft.client.model.geom.ModelLayerLocation;
@@ -25,15 +25,6 @@ public final class WorldInterfaceRenderer extends MobRenderer<WorldInterfaceEnti
 	public static final int MAX_RENDER_LAYERS = 6;
 	public static final ModelLayerLocation MODEL_LAYER = new ModelLayerLocation(
 			Identifier.fromNamespaceAndPath(TheFourthFrequency.MOD_ID, "world_interface"), "main");
-	/** Shared with the server so beam origins and damage geometry cannot drift apart. */
-	private static final float[] FORM_SCALE = WorldInterfaceAnatomy.FORM_SCALE;
-	/** WorldInterfaceProtocol.BossAction MORPH_TO_SECOND / MORPH_TO_THIRD, and their 60-tick window. */
-	private static final int MORPH_TO_SECOND_ACTION = 11;
-	private static final int MORPH_TO_THIRD_ACTION = 12;
-	private static final long MORPH_ACTION_MILLIS = 3_000L;
-	private static final float MORPH_PINCH = 0.72F;
-	/** Every action clip telegraphs inside its first two seconds; the glow tracks that window. */
-	private static final long ACTION_CHARGE_MILLIS = 2_000L;
 	private static final Identifier[] BASE = textures("");
 	private static final Identifier[] EMISSIVE = textures("_emissive");
 	private static final Identifier[] HIT = textures("_hit");
@@ -71,36 +62,31 @@ public final class WorldInterfaceRenderer extends MobRenderer<WorldInterfaceEnti
 		state.hasRedOverlay |= WorldInterfacePresentationController.isDamageFlashActive(entity.getUUID(), now);
 		WorldInterfaceSnapshotS2C encounter = WorldInterfaceClientState.snapshot().encounter();
 		state.paletteBand = WorldInterfacePalette.band(encounter == null ? null : encounter.stage());
-		state.healthFraction = encounter == null || encounter.maxHealth() <= 0.0F ? 1.0F
-				: Math.clamp(encounter.currentHealth() / encounter.maxHealth(), 0.0F, 1.0F);
-		state.actionCharge = state.actionId > 0 && state.actionAgeMillis <= ACTION_CHARGE_MILLIS
-				? Math.clamp(state.actionAgeMillis / (float) ACTION_CHARGE_MILLIS, 0.0F, 1.0F)
-				: -1.0F;
+		// Off the entity, not the HUD snapshot. The pose the hit boxes stand on is driven by this
+		// number, and the HUD snapshot arrives on its own cadence - two clocks would mean the sag a
+		// player can see and the sag they can hit were computed from different health.
+		state.healthFraction = entity.healthFraction();
+		state.actionCharge = WorldInterfaceRig.actionCharge(state.actionId, state.actionAgeMillis);
+		// Same rule as the health fraction: the server poses the head boxes from these, so they are
+		// read off the entity rather than aimed at the local camera. Taken through the interpolating
+		// accessors, because a synchronised value drawn raw steps once a tick - which on a skull this
+		// size reads as the head blinking rather than turning.
+		state.gazeYaw = entity.renderGazeYaw(partialTick);
+		state.gazePitch = entity.renderGazePitch(partialTick);
 	}
 
+	/**
+	 * The form scale, with the morph pinch that hides the one-tick form swap.
+	 *
+	 * <p>Read off {@link WorldInterfaceRig} rather than computed here. The pinch takes up to
+	 * seventy-two percent off the drawn body for four seconds, and the hit boxes have to shrink with
+	 * it or they stand in air around a body no longer filling them - which they can only do if the
+	 * scale is one function rather than two.
+	 */
 	@Override
 	protected void scale(WorldInterfaceRenderState state, PoseStack poseStack) {
-		float scale = FORM_SCALE[Math.clamp(state.form, 0, FORM_SCALE.length - 1)];
-		float morph = morphProgress(state);
-		if (morph >= 0.0F) {
-			// The server flips the form on one tick, so the silhouette used to jump between two
-			// frames. Pinching the body shut at the midpoint and drawing the new one back out of
-			// it means the swap happens where there is almost nothing on screen to see swap.
-			float previous = FORM_SCALE[Math.clamp(state.form - 1, 0, FORM_SCALE.length - 1)];
-			float pinch = 1.0F - MORPH_PINCH * (float) Math.sin(morph * Math.PI);
-			float eased = morph * morph * (3.0F - 2.0F * morph);
-			scale = (previous + (scale - previous) * eased) * pinch;
-		}
+		float scale = WorldInterfaceRig.renderScale(state.form, state.actionId, state.actionAgeMillis);
 		poseStack.scale(scale, scale, scale);
-	}
-
-	/** Progress through a morph action, or -1 when the boss is not currently changing form. */
-	private static float morphProgress(WorldInterfaceRenderState state) {
-		if (state.actionId != MORPH_TO_SECOND_ACTION && state.actionId != MORPH_TO_THIRD_ACTION) {
-			return -1.0F;
-		}
-		float progress = state.actionAgeMillis / (float) MORPH_ACTION_MILLIS;
-		return progress < 0.0F || progress > 1.0F ? -1.0F : progress;
 	}
 
 	@Override

@@ -17,9 +17,10 @@ import java.util.function.Function;
  *
  * <p>It used to own two more: a cage ringing every stability anchor and a core for each of the
  * twenty warp gates. The gate structures stopped being built long before this, and the cage was a
- * bright band of custom texture wrapped around the one thing in the arena a player is supposed to
- * look at. Both are gone rather than retextured, and the blocks that remain borrow vanilla
- * surfaces instead of shipping their own.</p>
+ * bright band wrapped around the one thing in the arena a player is supposed to look at. Both are
+ * gone rather than retextured. The resonance core alone owns a restrained custom surface: its top
+ * identifies the terminal socket, while the altar around it remains built from familiar vanilla
+ * materials.</p>
  */
 public final class ModBlocks {
 	public static final ResonanceCoreBlock RESONANCE_CORE = registerCustom("resonance_core",

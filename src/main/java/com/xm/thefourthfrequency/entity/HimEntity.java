@@ -3,6 +3,7 @@ package com.xm.thefourthfrequency.entity;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
@@ -30,9 +31,12 @@ import java.util.UUID;
  *       nothing. A sound is confirmation, and confirmation is the one thing it must not give.</li>
  *   <li><b>It cannot be interacted with.</b> Not pickable, not pushable, immune, and a swing at it
  *       simply removes it. There is no encounter here to have.</li>
- *   <li><b>It never moves.</b> No pathfinding, no head tracking. The watcher turns its head to
- *       follow you, which is a performance; this one is a still frame that happens to be in the
- *       world, and any motion at all would read as an entity rather than as a mistake.</li>
+ *   <li><b>It never travels.</b> No pathfinding, no wandering, no velocity. It does keep itself
+ *       square on to the player - see {@link #faceWatchedPlayer} - which is a reversal of what this
+ *       list used to say. The reasoning it replaces was that any motion at all reads as an entity;
+ *       what that produced in play was a figure showing its shoulder to wherever the player had
+ *       walked to, which reads as a statue rather than as something aware of them. Turning is the
+ *       one motion that makes it <em>more</em> like a thing that was already watching, not less.</li>
  * </ul>
  */
 public final class HimEntity extends Monster {
@@ -89,6 +93,32 @@ public final class HimEntity extends Monster {
 		return playerId.equals(watchedPlayer);
 	}
 
+	/**
+	 * Keeps the figure square on to the player, every tick, for as long as it stands there.
+	 *
+	 * <p>It used to be aimed once at spawn and then left. That is fine while the player holds still,
+	 * and wrong the moment they circle it: the thing that is supposed to have been watching them ends
+	 * up presenting its shoulder to wherever they walked to, which reads as a statue someone left out
+	 * rather than as something aware of them.
+	 *
+	 * <p>Only the facing moves. Position, gravity and velocity are all still pinned above - this is a
+	 * head turning, not a mob tracking. The body is turned with the head deliberately: a head rotated
+	 * away from its own torso is vanilla's look-at pose, and the whole point here is that the figure
+	 * is not doing anything as ordinary as looking around.
+	 */
+	private void faceWatchedPlayer(ServerPlayer player) {
+		double dx = player.getX() - getX();
+		double dz = player.getZ() - getZ();
+		if (dx * dx + dz * dz < 1.0E-6D) return;
+		float yaw = (float) (Mth.atan2(dz, dx) * Mth.RAD_TO_DEG) - 90.0F;
+		setYRot(yaw);
+		setYBodyRot(yaw);
+		setYHeadRot(yaw);
+		yRotO = yaw;
+		yBodyRotO = yaw;
+		yHeadRotO = yaw;
+	}
+
 	@Override
 	protected void registerGoals() {
 		// It stands there. Anything else would make it a mob.
@@ -121,6 +151,7 @@ public final class HimEntity extends Monster {
 		getNavigation().stop();
 		setNoGravity(true);
 		setDeltaMovement(Vec3.ZERO);
+		faceWatchedPlayer(player);
 
 		if (distanceToSqr(player) < VANISH_RANGE_SQR) {
 			discard();

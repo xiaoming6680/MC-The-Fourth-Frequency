@@ -21,9 +21,14 @@ public abstract class WorldOpenFlowsEndingQuarantineMixin {
 	private void thefourthfrequency$blockQuarantinedWorld(String levelId, Runnable returnAction,
 			CallbackInfo ci) {
 		if (!EndingWorldQuarantine.isQuarantined(levelId)) return;
+		// Same success/failure wording split as the world list, so a save cannot be called sealed in
+		// one place and damaged in the other depending on which route the player took to open it.
+		String prefix = EndingWorldQuarantine.outcome(levelId).filter("SUCCESS"::equals).isPresent()
+				? "selectWorld.thefourthfrequency.sealed"
+				: "selectWorld.thefourthfrequency.corrupted";
 		minecraft.setScreen(new AlertScreen(returnAction,
-				Component.translatable("selectWorld.thefourthfrequency.corrupted"),
-				Component.translatable("selectWorld.thefourthfrequency.corrupted.details")));
+				Component.translatable(prefix),
+				Component.translatable(prefix + ".details")));
 		ci.cancel();
 	}
 }

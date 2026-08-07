@@ -48,7 +48,24 @@ public final class HimService {
 	 * enclosed anyway. See {@link #standingOnOpenFlat}.
 	 */
 	private static final int RELIEF_SAMPLE_RADIUS = 7;
-	private static final int RELIEF_MINIMUM_RANGE = 3;
+	/**
+	 * Height range the surrounding surface must span before a spot counts as broken ground.
+	 *
+	 * <p>Raised from three. Three blocks of relief over a fourteen-block span is a gentle slope, and
+	 * a figure standing on a gentle slope in the open is as legible as one standing on a plain - the
+	 * player sees the whole silhouette against the sky and knows exactly what they saw. Five needs
+	 * something the eye can actually lose a shape against.
+	 */
+	private static final int RELIEF_MINIMUM_RANGE = 5;
+	/**
+	 * How much further out it stands in daylight.
+	 *
+	 * <p>At night the dark does the work: twenty-two blocks is a shape you are not sure about. In
+	 * full daylight the same twenty-two blocks is a clearly rendered humanoid, close enough to read
+	 * as a mob that spawned rather than as something that was already there. Pushing it out keeps
+	 * the sighting at the edge of what the light will resolve.
+	 */
+	private static final double DAYLIGHT_DISTANCE_SCALE = 1.6D;
 	/** Time between attempts per player, before the random spread below is added. */
 	private static final long BASE_INTERVAL_TICKS = 6000L;
 	private static final int INTERVAL_SPREAD_TICKS = 9000;
@@ -123,8 +140,9 @@ public final class HimService {
 					+ level.getRandom().nextDouble() * (MAXIMUM_VIEW_OFFSET - MINIMUM_VIEW_OFFSET);
 			double offset = level.getRandom().nextBoolean() ? spread : -spread;
 			double angle = Math.toRadians(player.getYRot() + offset);
-			double distance = MINIMUM_DISTANCE
-					+ level.getRandom().nextDouble() * (MAXIMUM_DISTANCE - MINIMUM_DISTANCE);
+			double distance = (MINIMUM_DISTANCE
+					+ level.getRandom().nextDouble() * (MAXIMUM_DISTANCE - MINIMUM_DISTANCE))
+					* (level.isBrightOutside() ? DAYLIGHT_DISTANCE_SCALE : 1.0D);
 			int x = Mth.floor(player.getX() - Math.sin(angle) * distance);
 			int z = Mth.floor(player.getZ() + Math.cos(angle) * distance);
 			if (!level.hasChunkAt(new BlockPos(x, player.blockPosition().getY(), z))) continue;

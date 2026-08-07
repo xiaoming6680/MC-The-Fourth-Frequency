@@ -206,8 +206,15 @@ public final class AlphaLoadTimeline {
 
 	/** How long a layer takes to reach full strength once its event fires. */
 	public static final int LAYER_FADE_TICKS = 10;
-	/** The wall does not appear, it wipes outward from the middle of the screen. */
-	public static final int FLOOD_WIPE_TICKS = 6;
+	/**
+	 * How long the noise floor takes to come up under the wall.
+	 *
+	 * <p>Audio only. The wall itself used to wipe outward from the middle of the screen over these
+	 * same six ticks, and it does not any more: it is simply there, on one frame, whole. A wipe is a
+	 * transition, and a transition is something a piece of software chose to play - the wall lands
+	 * harder as a cut because a cut is what a signal actually does.
+	 */
+	public static final int FLOOD_STATIC_RISE_TICKS = 6;
 	/** Old sets collapsed the picture to a bright line before losing it altogether. */
 	public static final int BLACKOUT_COLLAPSE_TICKS = 5;
 	/** After dead air the picture does not simply exist again; it has to find its lock. */
@@ -216,6 +223,8 @@ public final class AlphaLoadTimeline {
 	private static final int PEAK_SCANLINE_ALPHA = 66;
 	private static final int GLITCH_SCANLINE_ALPHA = 28;
 	private static final int RESIDUAL_SCANLINE_ALPHA = 16;
+	/** Like the scanlines, the edges never come all the way back. */
+	private static final float RESIDUAL_VIGNETTE = 0.3F;
 	private static final float PEAK_CHROMA_OFFSET = 3.0F;
 	private static final int TRACKING_BAND_SPEED = 3;
 	private static final int TRACKING_BAND_MIN_HEIGHT = 5;
@@ -255,6 +264,55 @@ public final class AlphaLoadTimeline {
 		float escalation = ramp(screenTicks, FAILURE_TICK, FLOOD_START_TICK - FAILURE_TICK);
 		return Math.round(GLITCH_SCANLINE_ALPHA * arrival
 				+ (PEAK_SCANLINE_ALPHA - GLITCH_SCANLINE_ALPHA) * escalation);
+	}
+
+	/**
+	 * Which of the four analog-signal post chains the finished frame is filtered through, or 0.
+	 *
+	 * <p>The medium used to be drawn: scanlines were one-pixel rectangles, the vignette was sixteen
+	 * nested ones per side, and snow was three hundred specks scattered over a viewport with a
+	 * hundred thousand pixels in it. All three are the same limitation - a rectangle cannot bend,
+	 * smear or resample what is under it, only cover it - and it is why the sequence read as damage
+	 * drawn onto a screen rather than as a screen failing. The whole frame goes through
+	 * {@code analog_signal.fsh} instead, including the failure text, which is where a recording of a
+	 * failure belongs.
+	 *
+	 * <p>Quantised off {@link #scanlineAlpha} rather than given its own envelope, because the
+	 * scanline ramp <em>is</em> the escalation of the medium: it arrives with the glitch, climbs
+	 * through the failure, collapses into dead air, and settles onto a floor it never leaves. Deriving
+	 * from it keeps the filter and the rest of the sequence on one clock, and keeps the residual
+	 * step - the recovery is real, but it is a recovery to a worse baseline.
+	 */
+	public static int signalStep(int screenTicks) {
+		int alpha = scanlineAlpha(screenTicks);
+		if (alpha <= 0) return 0;
+		if (alpha <= GLITCH_SCANLINE_ALPHA) return 1;
+		if (alpha <= (GLITCH_SCANLINE_ALPHA + PEAK_SCANLINE_ALPHA) / 2) return 2;
+		if (alpha < PEAK_SCANLINE_ALPHA) return 3;
+		return 4;
+	}
+
+	/**
+	 * Edge falloff, 0 to 1.
+	 *
+	 * <p>The layer that makes the other layers agree with each other. Scanlines, chroma bleed and
+	 * a tracking band are each individually convincing and collectively read as three effects
+	 * stacked on a game; darkening the edges asserts that all of them are happening to one
+	 * surface, and that the surface is being looked at rather than looked through.</p>
+	 *
+	 * <p>Unlike every other layer this one survives dead air. A powered screen receiving nothing
+	 * still has edges - it is the picture that was lost, not the tube - and cutting the vignette
+	 * with the picture would quietly admit the whole thing was drawn.</p>
+	 */
+	public static float vignetteStrength(int screenTicks) {
+		if (screenTicks < GLITCH_START_TICK) return 0.0F;
+		if (screenTicks >= LEGACY_RECOVERY_START_TICK) {
+			float settled = ramp(screenTicks, LEGACY_RECOVERY_START_TICK, RECOVERY_LOCK_TICKS);
+			return lerp(1.0F, RESIDUAL_VIGNETTE, settled);
+		}
+		float arrival = ramp(screenTicks, GLITCH_START_TICK, LAYER_FADE_TICKS);
+		float escalation = ramp(screenTicks, FAILURE_TICK, FLOOD_START_TICK - FAILURE_TICK);
+		return Math.clamp(0.38F * arrival + 0.62F * escalation, 0.0F, 1.0F);
 	}
 
 	/** Horizontal separation, in pixels, between the red and cyan ghosts of any drawn text. */
@@ -323,11 +381,6 @@ public final class AlphaLoadTimeline {
 	public static boolean timecodeCorrupted(int screenTicks) {
 		return screenTicks >= FLOOD_START_TICK
 				&& Math.floorMod(noise(failureMotionTick(screenTicks) / 2), 5) == 0;
-	}
-
-	/** 0 while the wall is still wiping outward from the middle, 1 once it covers the viewport. */
-	public static float floodWipeProgress(int screenTicks) {
-		return ramp(screenTicks, FLOOD_START_TICK, FLOOD_WIPE_TICKS);
 	}
 
 	/** 1 while the picture is still collapsing toward a line, 0 once it is gone. */

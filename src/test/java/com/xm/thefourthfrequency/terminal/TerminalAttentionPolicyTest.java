@@ -37,4 +37,25 @@ final class TerminalAttentionPolicyTest {
 		assertFalse(TerminalAttentionPolicy.unreadReminderDue(0, started,
 				started + TerminalAttentionPolicy.UNREAD_REMINDER_DELAY_TICKS, false));
 	}
+
+	/**
+	 * The lamp lights for any of the four sources on its own, and goes dark only when all four are
+	 * clear.
+	 *
+	 * <p>Each source is checked in isolation rather than in combination, because the failure this
+	 * guards against is a source being dropped from the rule - and a dropped source is invisible in
+	 * any case where some other source is also active.</p>
+	 */
+	@Test
+	void attentionLightsForEachSourceAloneAndClearsOnlyWhenAllFourAre() {
+		assertFalse(TerminalAttentionPolicy.attentionActive(0, 0, false, false));
+		assertTrue(TerminalAttentionPolicy.attentionActive(1, 0, false, false), "unread signal");
+		assertTrue(TerminalAttentionPolicy.attentionActive(0, 1, false, false), "unread file");
+		assertTrue(TerminalAttentionPolicy.attentionActive(0, 0, true, false), "navigation completion");
+		assertTrue(TerminalAttentionPolicy.attentionActive(0, 0, false, true), "claimable reward");
+		assertTrue(TerminalAttentionPolicy.attentionActive(4, 2, true, true));
+		// A negative count is not attention. Counts arrive from records that migrations have touched,
+		// and "fewer than nothing unread" must not read as something waiting.
+		assertFalse(TerminalAttentionPolicy.attentionActive(-1, -3, false, false));
+	}
 }

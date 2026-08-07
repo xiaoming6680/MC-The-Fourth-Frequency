@@ -60,7 +60,7 @@ class WorldInterfaceStateSchemaTest {
 						.map(WorldInterfaceGatewayState::serializedName).toList());
 		WorldInterfaceState.Anchor alive = anchors().getFirst();
 		assertFalse(alive.destroyed());
-		assertEquals(Optional.of(alive.crystalUuid().orElseThrow()), alive.crystalUuid());
+		assertEquals(Optional.of(alive.anchorEntityUuid().orElseThrow()), alive.anchorEntityUuid());
 	}
 
 	private static List<WorldInterfaceState.Gate> gates() {

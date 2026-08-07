@@ -28,6 +28,7 @@ public final class AltarShape {
 	private static final int PILLAR_EDGE = 3;
 	private static final int PLATFORM_EDGE = 1;
 	private static final int STEP_EDGE = 3;
+	private static final int EXIT_FRAME_EDGE = 2;
 
 	private AltarShape() {
 	}
@@ -40,6 +41,26 @@ public final class AltarShape {
 	/** The altar floor centre, given where the resonance core sits. */
 	public static BlockPos centerFromCore(BlockPos corePosition) {
 		return corePosition.below(CORE_OFFSET);
+	}
+
+	/**
+	 * Centre of the final three-by-three exit, flush with the altar's existing top platform.
+	 *
+	 * <p>The encounter ledger stores the resonance-core position. The ending replaces the platform
+	 * directly below that core instead of constructing another terrace above the altar.</p>
+	 */
+	public static BlockPos exitPortalCenter(BlockPos corePosition) {
+		return centerFromCore(corePosition).above(topOffset(0, 0));
+	}
+
+	/** Whether this offset is the one-block frame hiding the exit portal's otherwise bare sides. */
+	public static boolean isExitFrame(int dx, int dz) {
+		return Math.max(Math.abs(dx), Math.abs(dz)) == EXIT_FRAME_EDGE;
+	}
+
+	/** The frame continues the material of the altar's original top platform. */
+	public static BlockState exitFrameState() {
+		return Blocks.CRYING_OBSIDIAN.defaultBlockState();
 	}
 
 	/**

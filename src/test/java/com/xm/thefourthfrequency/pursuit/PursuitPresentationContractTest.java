@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -39,9 +41,15 @@ final class PursuitPresentationContractTest {
 		var effect = JsonParser.parseString(Files.readString(effectPath, StandardCharsets.UTF_8))
 				.getAsJsonObject();
 		String serialized = effect.toString();
-		assertTrue(serialized.contains("minecraft:post/color_convolve"));
-		assertTrue(serialized.contains("minecraft:post/bits"));
-		assertTrue(serialized.contains("\"MosaicSize\""));
+		// The chain this replaced was vanilla's color_convolve into vanilla's bits - a flat
+		// greyscale and a flat mosaic, applied evenly to every pixel of every frame. Evenness is
+		// what made it read as a filter having been switched on rather than as a picture failing,
+		// and it is the one thing the mod's own shader is written not to do.
+		assertTrue(serialized.contains("thefourthfrequency:post/digital_corrupt"),
+				"the pursuit runs the mod's own corruption filter");
+		assertFalse(serialized.contains("minecraft:post/bits"),
+				"vanilla's flat mosaic must not come back");
+		assertTrue(serialized.contains("\"CorruptConfig\""));
 
 		String mixins = Files.readString(Path.of(
 				"src/main/resources/thefourthfrequency.mixins.json"), StandardCharsets.UTF_8);
@@ -52,41 +60,69 @@ final class PursuitPresentationContractTest {
 
 	@Test
 	void proximityBandsDegradeMonotonicallyTowardContact() throws Exception {
-		// One chain per ProximityGrade, ordered farthest to nearest. The picture must get coarser
-		// (fewer colour steps, larger mosaic) with every step inward; getting this backwards would
-		// hand the player *better* vision the closer the corrector gets, which is the whole point
-		// inverted, and nothing else in the build would catch it.
+		// One chain per ProximityGrade, ordered farthest to nearest. The picture must get worse with
+		// every step inward; getting this backwards would hand the player *better* vision the closer
+		// the corrector gets, which is the whole point inverted, and nothing else in the build would
+		// catch it.
 		String[] bands = {"pursuit_low_res_distant", "pursuit_low_res",
 				"pursuit_low_res_close", "pursuit_low_res_contact"};
-		float previousResolution = Float.MAX_VALUE;
-		float previousMosaic = 0.0F;
+		float previousLevels = Float.MAX_VALUE;
+		float previousBlock = 0.0F;
+		float previousLoss = -1.0F;
+		float previousSplit = -1.0F;
 		for (String band : bands) {
-			Path path = Path.of("src/main/resources/assets/thefourthfrequency/post_effect/"
-					+ band + ".json");
-			assertTrue(Files.exists(path), band + " must exist for its proximity grade");
-			var chain = JsonParser.parseString(Files.readString(path, StandardCharsets.UTF_8))
-					.getAsJsonObject();
-			float resolution = Float.NaN;
-			float mosaic = Float.NaN;
-			for (var pass : chain.getAsJsonArray("passes")) {
-				var uniforms = pass.getAsJsonObject().getAsJsonObject("uniforms");
-				if (uniforms == null || !uniforms.has("BitsConfig")) continue;
-				for (var uniform : uniforms.getAsJsonArray("BitsConfig")) {
-					var entry = uniform.getAsJsonObject();
-					if ("Resolution".equals(entry.get("name").getAsString())) {
-						resolution = entry.get("value").getAsFloat();
-					} else if ("MosaicSize".equals(entry.get("name").getAsString())) {
-						mosaic = entry.get("value").getAsFloat();
-					}
-				}
-			}
-			assertTrue(resolution < previousResolution,
+			Map<String, Float> config = corruptConfig(band);
+			assertTrue(config.get("Levels") < previousLevels,
 					band + " must drop colour resolution relative to the band before it");
-			assertTrue(mosaic > previousMosaic,
-					band + " must enlarge the mosaic relative to the band before it");
-			previousResolution = resolution;
-			previousMosaic = mosaic;
+			assertTrue(config.get("BlockSize") > previousBlock,
+					band + " must enlarge the failing block relative to the band before it");
+			assertTrue(config.get("BandLoss") > previousLoss,
+					band + " must lose more of the picture than the band before it");
+			assertTrue(config.get("ChannelSplit") > previousSplit,
+					band + " must part its colour channels further than the band before it");
+			previousLevels = config.get("Levels");
+			previousBlock = config.get("BlockSize");
+			previousLoss = config.get("BandLoss");
+			previousSplit = config.get("ChannelSplit");
 		}
+	}
+
+	/**
+	 * The corruption never re-rolls faster than the world bible's flicker ceiling.
+	 *
+	 * <p>{@code HoldTicks} is the period of every coherent thing the filter does - the bands that
+	 * move, the blocks that give out, the channels that part. Three hertz is 6.67 ticks, so seven is
+	 * the floor. Asserted rather than commented because the pursuit's treatment is worn continuously
+	 * for minutes at a time, which is the exact shape of exposure the limit exists for.
+	 */
+	@Test
+	void theCorruptionHoldsLongEnoughToStayUnderTheFlickerCeiling() throws Exception {
+		for (String band : new String[]{"pursuit_low_res_distant", "pursuit_low_res",
+				"pursuit_low_res_close", "pursuit_low_res_contact"}) {
+			float hold = corruptConfig(band).get("HoldTicks");
+			assertTrue(hold >= 7.0F,
+					band + " re-rolls every " + hold + " ticks, which is faster than 3 Hz");
+		}
+	}
+
+	private static Map<String, Float> corruptConfig(String chainName) throws Exception {
+		Path path = Path.of("src/main/resources/assets/thefourthfrequency/post_effect/"
+				+ chainName + ".json");
+		assertTrue(Files.exists(path), chainName + " must exist for its proximity grade");
+		var chain = JsonParser.parseString(Files.readString(path, StandardCharsets.UTF_8))
+				.getAsJsonObject();
+		Map<String, Float> values = new LinkedHashMap<>();
+		for (var pass : chain.getAsJsonArray("passes")) {
+			var uniforms = pass.getAsJsonObject().getAsJsonObject("uniforms");
+			if (uniforms == null || !uniforms.has("CorruptConfig")) continue;
+			for (var uniform : uniforms.getAsJsonArray("CorruptConfig")) {
+				var entry = uniform.getAsJsonObject();
+				if (!entry.get("value").isJsonPrimitive()) continue;
+				values.put(entry.get("name").getAsString(), entry.get("value").getAsFloat());
+			}
+		}
+		assertFalse(values.isEmpty(), chainName + " declares no CorruptConfig");
+		return values;
 	}
 
 	@Test

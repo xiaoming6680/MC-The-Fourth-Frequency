@@ -28,8 +28,9 @@ final class TerminalUiLayoutTest {
 				TerminalUiLayout.TOOL_ACTION_SECONDARY, TerminalUiLayout.TOOL_ACTION_FULL)) {
 			assertTrue(TerminalUiLayout.TOOL_DETAIL.contains(bounds));
 		}
-		for (var hardware : List.of(TerminalUiLayout.SCOPE, TerminalUiLayout.COMPASS,
-				TerminalUiLayout.RECEIVER_SLIDER, TerminalUiLayout.RECEIVER_LCD, TerminalUiLayout.CLOSE_HINT)) {
+		for (var hardware : List.of(TerminalUiLayout.SCOPE, TerminalUiLayout.UNREAD_LAMP,
+				TerminalUiLayout.COMPASS, TerminalUiLayout.RECEIVER_SLIDER,
+				TerminalUiLayout.RECEIVER_LCD, TerminalUiLayout.CLOSE_HINT)) {
 			assertTrue(TerminalUiLayout.HARDWARE_SAFE.contains(hardware),
 					() -> hardware + " escaped " + TerminalUiLayout.HARDWARE_SAFE);
 			assertFalse(display.contains(hardware));
@@ -39,14 +40,126 @@ final class TerminalUiLayoutTest {
 	}
 
 	@Test
+	void statusStripSitsBelowThePageAndSplitsIntoFourDisjointCells() {
+		var bar = TerminalUiLayout.STATUS_BAR;
+		assertTrue(TerminalUiLayout.DISPLAY.contains(bar));
+		assertEquals(bar, TerminalUiLayout.FOOTER, "the old name must keep pointing at the same band");
+		assertTrue(bar.top() >= TerminalUiLayout.PAGE_BODY.bottom(),
+				() -> "status strip " + bar + " overlapped the page body " + TerminalUiLayout.PAGE_BODY);
+
+		var cells = List.of(TerminalUiLayout.STATUS_HOLDER, TerminalUiLayout.STATUS_CLOCK,
+				TerminalUiLayout.STATUS_LINK, TerminalUiLayout.STATUS_PROTOCOL);
+		for (var cell : cells) {
+			assertTrue(bar.contains(cell), () -> cell + " escaped the status strip " + bar);
+		}
+		for (int first = 0; first < cells.size(); first++) {
+			for (int second = first + 1; second < cells.size(); second++) {
+				var left = cells.get(first);
+				var right = cells.get(second);
+				assertTrue(disjoint(left, right), () -> left + " overlapped " + right);
+			}
+		}
+	}
+
+	/**
+	 * The three horizontal bands the display is divided into may never share a pixel. Nothing
+	 * asserted this before, so the status strip could have been placed on top of the page body and
+	 * only a screenshot would have caught it.
+	 */
+	@Test
+	void tabStripPageBodyAndStatusStripNeverOverlap() {
+		var tabs = new TerminalUiLayout.Bounds(TerminalUiLayout.HOME_TAB.left(),
+				TerminalUiLayout.HOME_TAB.top(), TerminalUiLayout.FILES_TAB.right(),
+				TerminalUiLayout.FILES_TAB.bottom());
+		var layers = List.of(tabs, TerminalUiLayout.PAGE_BODY, TerminalUiLayout.STATUS_BAR);
+		for (int first = 0; first < layers.size(); first++) {
+			for (int second = first + 1; second < layers.size(); second++) {
+				var upper = layers.get(first);
+				var lower = layers.get(second);
+				assertTrue(disjoint(upper, lower), () -> upper + " overlapped " + lower);
+			}
+		}
+		for (var layer : layers) assertTrue(TerminalUiLayout.DISPLAY.contains(layer));
+	}
+
+	private static boolean disjoint(TerminalUiLayout.Bounds first, TerminalUiLayout.Bounds second) {
+		return first.right() <= second.left() || second.right() <= first.left()
+				|| first.bottom() <= second.top() || second.bottom() <= first.top();
+	}
+
+	@Test
 	void expandedCompassRemainsCenteredAndSeparatedFromAdjacentHardware() {
 		var compass = TerminalUiLayout.COMPASS;
 		assertEquals(42, compass.width());
 		assertEquals(42, compass.height());
-		assertEquals((TerminalUiLayout.SCOPE.left() + TerminalUiLayout.SCOPE.right()) / 2,
+		// Centred on the instruments it sits between rather than on the scope alone. The scope gave
+		// up its right-hand strip to the unread lamp and is no longer the widest thing on the column.
+		assertEquals((TerminalUiLayout.RECEIVER_SLIDER.left() + TerminalUiLayout.RECEIVER_SLIDER.right()) / 2,
+				(compass.left() + compass.right()) / 2);
+		assertEquals((TerminalUiLayout.RECEIVER_LCD.left() + TerminalUiLayout.RECEIVER_LCD.right()) / 2,
 				(compass.left() + compass.right()) / 2);
 		assertTrue(compass.top() - TerminalUiLayout.SCOPE.bottom() >= 5);
 		assertTrue(TerminalUiLayout.RECEIVER_SLIDER.top() - compass.bottom() >= 5);
+	}
+
+	/**
+	 * The unread lamp gets its own pixels.
+	 *
+	 * <p>The four instruments and the close hint each already answer a question of their own, and a
+	 * lamp overlaid on any of them would make that instrument ambiguous exactly when the player
+	 * most needs to trust it. So this asserts the strong form: the lamp shares no pixel with any of
+	 * them, and it lives in the strip the oscilloscope gave up rather than outside the column.</p>
+	 */
+	@Test
+	void unreadLampOwnsItsOwnRegionBesideTheScopeAndOverlapsNoInstrument() {
+		var lamp = TerminalUiLayout.UNREAD_LAMP;
+		assertTrue(TerminalUiLayout.HARDWARE_SAFE.contains(lamp),
+				() -> lamp + " escaped " + TerminalUiLayout.HARDWARE_SAFE);
+		for (var instrument : List.of(TerminalUiLayout.SCOPE, TerminalUiLayout.COMPASS,
+				TerminalUiLayout.RECEIVER_SLIDER, TerminalUiLayout.RECEIVER_LCD,
+				TerminalUiLayout.LCD_LINE_ONE, TerminalUiLayout.LCD_LINE_TWO,
+				TerminalUiLayout.CLOSE_HINT)) {
+			assertTrue(disjoint(lamp, instrument), () -> lamp + " overlapped " + instrument);
+		}
+		assertTrue(lamp.left() >= TerminalUiLayout.SCOPE.right(),
+				"the lamp belongs to the right of the scope, not on top of it");
+		assertTrue(lamp.width() >= 12 && lamp.height() >= 12,
+				() -> "an indicator this small cannot be seen at panel scale: " + lamp);
+	}
+
+	/**
+	 * The lamp breathes; it does not blink.
+	 *
+	 * <p>It can be lit for an entire session, so it is held to a stricter standard than the
+	 * transient alert flash: continuous, well under 3 Hz, and never fully dark while active.</p>
+	 */
+	@Test
+	void unreadLampBreathesFarBelowTheFlickerCeilingAndNeverGoesFullyDark() {
+		double period = TerminalUiLayout.UNREAD_LAMP_PERIOD_TICKS / 20.0D;
+		assertTrue(1.0D / period <= 3.0D / 7.0D,
+				() -> "lamp frequency " + 1.0D / period + " Hz is not comfortably under the ceiling");
+
+		assertEquals(TerminalUiLayout.UNREAD_LAMP_MIN_INTENSITY,
+				TerminalUiLayout.unreadLampIntensity(0.0D), 1.0E-9D);
+		assertEquals(1.0D, TerminalUiLayout.unreadLampIntensity(
+				TerminalUiLayout.UNREAD_LAMP_PERIOD_TICKS / 2.0D), 1.0E-9D);
+		assertEquals(TerminalUiLayout.unreadLampIntensity(3.5D),
+				TerminalUiLayout.unreadLampIntensity(3.5D + TerminalUiLayout.UNREAD_LAMP_PERIOD_TICKS),
+				1.0E-9D);
+
+		// Sampled at render rates, not tick rates: the callers pass a fractional render age, and a
+		// version that floored to whole ticks would be a staircase wearing a sine's name.
+		double previous = TerminalUiLayout.unreadLampIntensity(0.0D);
+		for (int step = 0; step <= 4000; step++) {
+			final double age = step * 0.05D;
+			final double value = TerminalUiLayout.unreadLampIntensity(age);
+			final double last = previous;
+			assertTrue(value >= TerminalUiLayout.UNREAD_LAMP_MIN_INTENSITY - 1.0E-9D && value <= 1.0D,
+					() -> "lamp intensity left its band at " + age + ": " + value);
+			assertTrue(Math.abs(value - last) < 0.02D,
+					() -> "lamp stepped rather than breathed at " + age);
+			previous = value;
+		}
 	}
 
 	@Test
@@ -106,6 +219,27 @@ final class TerminalUiLayoutTest {
 		assertEquals(TerminalControlPolicy.Mode.FILES.ordinal(), TerminalPage.FILES.wireMode());
 		assertEquals(TerminalPage.HOME, TerminalPage.initialPage(TerminalControlPolicy.Mode.SIGNAL.ordinal()));
 		assertEquals(TerminalPage.FILES, TerminalPage.initialPage(TerminalControlPolicy.Mode.FILES.ordinal()));
+	}
+
+	@Test
+	void navigationOptionHitRowTracksTheButtonsItGates() {
+		assertEquals(3, TerminalUiLayout.TOOL_OPTION_SLOTS);
+		var row = TerminalUiLayout.TOOL_OPTION_ROW;
+		for (int index = 0; index < TerminalUiLayout.TOOL_OPTION_SLOTS; index++) {
+			var option = TerminalUiLayout.navigationOptionBounds(index);
+			assertTrue(row.contains(option), () -> option + " escaped the click row " + row);
+			assertTrue(TerminalUiLayout.TOOL_LIST_AREA.contains(option));
+		}
+		assertEquals(TerminalUiLayout.TOOL_OPTION_ONE, TerminalUiLayout.navigationOptionBounds(0));
+		assertEquals(TerminalUiLayout.TOOL_OPTION_THREE, TerminalUiLayout.navigationOptionBounds(2));
+		assertEquals(TerminalUiLayout.TOOL_OPTION_THREE, TerminalUiLayout.navigationOptionBounds(99));
+		// The row is the union of the buttons, so a click just inside either end still counts and a
+		// click past them does not - that is the property a hand-written copy of these numbers lost.
+		assertEquals(TerminalUiLayout.TOOL_OPTION_ONE.left(), row.left());
+		assertEquals(TerminalUiLayout.TOOL_OPTION_THREE.right(), row.right());
+		assertFalse(row.contains(row.left() - 1, row.top() + 1));
+		assertFalse(row.contains(row.right(), row.top() + 1));
+		assertTrue(TerminalUiLayout.TOOL_DETAIL.contains(TerminalUiLayout.TOOL_LIST_AREA));
 	}
 
 	@Test

@@ -48,6 +48,10 @@ public final class WatcherService {
 
 	public static WatcherEntity spawnAnomaly(ServerPlayer player, int lifetimeTicks) {
 		if (!(player.level() instanceof ServerLevel level) || !player.isAlive() || player.isSpectator()) return null;
+		// A pair of eyes in the dark needs the dark. The natural sighting has always required this
+		// and the anomaly did not, so in daylight it produced a plainly lit humanoid standing in a
+		// field - which is the same figure, minus the only thing that made it work.
+		if (!inDarkness(level, player)) return null;
 		AABB search = player.getBoundingBox().inflate(32.0);
 		if (!level.getEntitiesOfClass(WatcherEntity.class, search,
 				watcher -> watcher.observes(player.getUUID())).isEmpty()) return null;
@@ -61,6 +65,19 @@ public final class WatcherService {
 		return level.addFreshEntity(watcher) ? watcher : null;
 	}
 
+	/**
+	 * Night outside, or unlit underground. Shared by the natural sighting and the anomaly.
+	 *
+	 * <p>Both need it for the same reason, so it is one test rather than two that can drift apart -
+	 * which is exactly what had happened: the anomaly had no darkness condition at all.
+	 */
+	private static boolean inDarkness(ServerLevel level, ServerPlayer player) {
+		long day = Math.floorMod(level.getDayTime(), 24_000L);
+		if (day >= 12_500L || day <= 1_000L) return true;
+		BlockPos at = player.blockPosition();
+		return !level.canSeeSky(at) && level.getMaxLocalRawBrightness(at) <= 7;
+	}
+
 	private static boolean trySpawn(ServerPlayer player, FrequencyWorldData data, boolean forced) {
 		if (!(player.level() instanceof ServerLevel level) || !player.isAlive() || player.isSpectator()) return false;
 		CompoundTag record = data.terminalRecord(player.getUUID()).orElse(null);
@@ -69,10 +86,7 @@ public final class WatcherService {
 		if (!forced) {
 			if (now < NEXT_ATTEMPT.getOrDefault(player.getUUID(), record.getLongOr(TerminalData.ISSUED_GAME_TIME, now) + 2400L)) return false;
 			NEXT_ATTEMPT.put(player.getUUID(), now + 2800L + level.getRandom().nextInt(3600));
-			long day = Math.floorMod(level.getDayTime(), 24_000L);
-			boolean darkTime = day >= 12_500L || day <= 1_000L;
-			boolean underground = !level.canSeeSky(player.blockPosition()) && level.getMaxLocalRawBrightness(player.blockPosition()) <= 7;
-			if (!darkTime && !underground) return false;
+			if (!inDarkness(level, player)) return false;
 		}
 		AABB search = player.getBoundingBox().inflate(64.0);
 		if (level.getEntitiesOfClass(WatcherEntity.class, search, watcher -> watcher.observes(player.getUUID())).size() > 0) return false;
